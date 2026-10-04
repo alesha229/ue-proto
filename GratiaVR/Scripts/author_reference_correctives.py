@@ -103,9 +103,9 @@ def set_clip(clip):
             if key.name.startswith(("Game_HandRef_", "Game_CheerRef_")):
                 key.value = 0
         if original.data.shape_keys:
-            prefix = "Reference_" + clip["clip"] + "_SourceShapes_" + original.name
-            action = bpy.data.actions.get(prefix)
-            assert action, prefix
+            action_name = clip["source_shape_actions"][original.name]
+            action = bpy.data.actions.get(action_name)
+            assert action, action_name
             original.data.shape_keys.animation_data.action = action
 
 
@@ -276,6 +276,7 @@ for clip in data["clips"]:
     set_clip(clip)
     errors, drift = validate(clip)
     assert max(errors.values()) <= 0.001 and drift <= 0.001, ("Final clip failed", clip["clip"], errors, drift)
+    assert clip["max_bone_angle_error_degrees"] <= 0.1, ("Bone interpolation failed", clip["clip"], clip["max_bone_angle_error_degrees"])
     clip.update(max_vertex_error_metres=errors, root_foot_drift_metres=drift, passed=True)
 
 assert [bone.name for bone in game.data.bones] == bone_names

@@ -109,7 +109,12 @@ def solve_arm(side, target, pole):
     rest_wrist = wrist.bone.matrix_local.to_quaternion()
     rest_axis = (wrist.bone.tail_local - wrist.bone.head_local).normalized()
     wanted_axis = Vector((0.12 if side == "L" else -0.12, -0.25, 0.96)).normalized()
-    palm_rotation = rest_axis.rotation_difference(wanted_axis) @ rest_wrist
+    # Transport the forearm's roll to the wrist before aligning the fingers.
+    # Aligning from the world rest wrist introduced a 180-degree Rigify twist
+    # branch crossing between frames 19 and 20 (77 degrees of half-frame error).
+    inherited = lower.matrix.to_quaternion() @ lower.bone.matrix_local.to_quaternion().inverted() @ rest_wrist
+    inherited_axis = inherited @ (rest_wrist.inverted() @ rest_axis)
+    palm_rotation = inherited_axis.rotation_difference(wanted_axis) @ inherited
     wrist.matrix = Matrix.LocRotScale(Vector(target), palm_rotation, Vector((1, 1, 1)))
     bpy.context.view_layer.update()
     return {"target": list(target), "elbow": list(elbow),
@@ -191,6 +196,7 @@ if PHASE == "author":
         source.animation_data.action = source_action
         game.animation_data.action = game_action
         corrective_actions = {}
+        source_shape_actions = {}
         for original, candidate in pairs:
             candidate.data.shape_keys.animation_data_create()
             corrective = bpy.data.actions.new("Reference_" + clip + "_Shapes_" + candidate.name)
@@ -199,6 +205,7 @@ if PHASE == "author":
             if original.data.shape_keys:
                 original.data.shape_keys.animation_data_create()
                 original.data.shape_keys.animation_data.action = bpy.data.actions.new("Reference_" + clip + "_SourceShapes_" + original.name)
+                source_shape_actions[original.name] = original.data.shape_keys.animation_data.action.name
         end = int(round(duration * 30)) + 1
         scene.frame_start, scene.frame_end = 1, end
         last_quat = {}
@@ -290,6 +297,7 @@ if PHASE == "author":
         reports.append({"clip": clip, "duration_seconds": duration, "frames": end, "samples": samples,
                         "source_action": source_action.name, "game_action": game_action.name,
                         "corrective_actions": corrective_actions,
+                        "source_shape_actions": source_shape_actions,
                         "max_vertex_error_metres": max_errors, "max_bone_angle_error_degrees": max_angle,
                         "root_foot_drift_metres": foot_drift, "neutral_return_error_metres": return_error,
                         "midpoint_positions_metres": midpoint,

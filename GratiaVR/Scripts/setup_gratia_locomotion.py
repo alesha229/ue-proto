@@ -27,6 +27,7 @@ bindings = []
 def mapping(action, key, y=False, negative=False):
     input_key = unreal.Key()
     input_key.set_editor_property('key_name', key)
+    assert unreal.InputLibrary.key_is_valid(input_key), 'Unregistered input key: ' + key
     result = context.map_key(action, input_key)
     modifiers = []
     if negative:
@@ -86,10 +87,15 @@ for source_mapping in template_mappings:
         removed_template_bindings.append({'action': source_name, 'key': key})
         template.unmap_key(source_action, input_key)
 assert library.save_loaded_asset(template, only_if_is_dirty=False)
+skipped_menu_keys = []
 for source_mapping in template_mappings:
     source_action = source_mapping.get_editor_property('action')
     if source_action and str(source_action.get_name()).startswith('IA_Menu_Toggle'):
-        key = str(source_mapping.get_editor_property('key').get_editor_property('key_name'))
+        input_key = source_mapping.get_editor_property('key')
+        key = str(input_key.get_editor_property('key_name'))
+        if not unreal.InputLibrary.key_is_valid(input_key):
+            skipped_menu_keys.append(key)
+            continue
         mapping(toggle, key)
 mapping(toggle, 'F4')
 movement_context = context
@@ -152,5 +158,6 @@ manifest_path.write_text(
                 'openxr_vector_binding_contract':'Axis2D -> thumbstick/trackpad parent, no XR swizzle',
                 'template_action_names_before':template_action_names,
                 'removed_template_locomotion':removed_template_bindings,
+                'skipped_unregistered_template_menu_keys':skipped_menu_keys,
                 'hardware_input_verified':False}, indent=2), encoding='utf-8')
 unreal.log('GRATIA_LOCOMOTION_INPUT_CREATED')

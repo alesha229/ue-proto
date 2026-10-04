@@ -1,5 +1,14 @@
 # Передача GratiaVR новому чату
 
+## Продолжение после checkpoint f5377fb
+
+Сначала читать свежий верхний блок STATUS.md. Исправлен wrist-roll разрыв исходного
+Rigify предплечья, новые три реакции прошли MCP QA и импортированы (67 морфов).
+Старый PASS FBX не использовался. Добавлен физический sweep/pressure рук в
+SecondaryMotion, см. HAND_PHYSICS.md. Проверка шлема отложена: пользователь спит.
+Ночная задача включает versioned package и доступную desktop-регрессию; итог ниже
+будет обновлён после проверок. Старые незавершённые шаги описаны исторически.
+
 Дата: 4 октября 2026. Папка `E:\coding\ue proto`. **MVP не завершён.**
 Прочитать AGENTS.md, STATUS.md, ARCHITECTURE.md, CHARACTER_PROFILE.md,
 INPUT_DIAGNOSTICS.md и GratiaVR/Scripts/README.md. Не начинать проект заново.
