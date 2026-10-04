@@ -5,22 +5,19 @@
 #include "GratiaInteraction.h"
 #include "GratiaMenu.h"
 #include "GratiaSecondaryMotion.h"
+#include "GratiaBuildInfo.h"
 
 #include "Camera/CameraComponent.h"
-#include "Camera/CameraActor.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SphereComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/TextRenderComponent.h"
-#include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "HeadMountedDisplayFunctionLibrary.h"
 #include "InputCoreTypes.h"
 #include "Kismet/GameplayStatics.h"
 #include "MotionControllerComponent.h"
-#include "Misc/CommandLine.h"
-#include "Misc/Parse.h"
 #include "RenderTimer.h"
 #include "DynamicRHI.h"
 #include "GratiaStage1HUD.h"
@@ -78,6 +75,8 @@ void AGratiaStage1Runtime::BeginPlay()
     Super::BeginPlay();
     Verification->ConfigureFromCommandLine();
     BindPlayer();
+    SetTargetCharacter(TargetCharacter.Get());
+    UE_LOG(LogGratiaStage1, Display, TEXT("BUILD id=%s commit=%s"), TEXT(GRATIA_BUILD_ID), TEXT(GRATIA_BUILD_COMMIT));
     UE_LOG(LogGratiaStage1, Display, TEXT("Stage 1 runtime started. R=recenter, PgUp/PgDn=height, Home=reset height, F1=debug, F8/F9=toggle forced left/right tracking loss."));
 }
 
@@ -90,6 +89,24 @@ void AGratiaStage1Runtime::EndPlay(const EEndPlayReason::Type EndPlayReason)
         Camera->SetRelativeTransform(OriginalCameraRelative);
     }
     Super::EndPlay(EndPlayReason);
+}
+
+void AGratiaStage1Runtime::SetTargetCharacter(AGratiaPreviewCharacter* Character)
+{
+    if (TargetCharacter.IsValid() && TargetCharacter.Get() != Character)
+    {
+        TargetCharacter->Interaction->RemoveTickPrerequisiteActor(this);
+        TargetCharacter->Interaction->SetSceneContactActor(nullptr);
+        TargetCharacter->Interaction->ResetState();
+    }
+    TargetCharacter = Character;
+    if (Menu) Menu->SetCharacter(Character);
+    if (Character && Character->Interaction)
+    {
+        Character->Interaction->AddTickPrerequisiteActor(this);
+        Character->Interaction->SetSceneContactActor(SceneContactActor);
+        Verification->ConfigureCaptureView();
+    }
 }
 
 void AGratiaStage1Runtime::Tick(float DeltaSeconds)
@@ -117,32 +134,7 @@ void AGratiaStage1Runtime::Tick(float DeltaSeconds)
         if (PC->WasInputKeyJustPressed(EKeys::F9)) SetForcedTrackingLoss(false, !RightHand.bForceLoss);
     }
 
-    if (!TestCharacter.IsValid())
-    {
-        for (TActorIterator<AGratiaPreviewCharacter> It(GetWorld()); It; ++It)
-        {
-            TestCharacter = *It;
-            It->Interaction->AddTickPrerequisiteActor(this);
-            FString View;
-            if (!bXRActive && FParse::Value(FCommandLine::Get(), TEXT("GratiaViewTest="), View) && PlayerController.IsValid())
-            {
-                // Centre the subject in this isolated QA process: the normal
-                // placed position leaves too little room for a rear camera.
-                It->SetActorLocation(FVector(0, 0, It->GetActorLocation().Z), false, nullptr, ETeleportType::TeleportPhysics);
-                PlayerPawn->SetActorHiddenInGame(true);
-                FVector Eye(-250, 0, 125), Target(0, 0, 110);
-                if (View == TEXT("Back")) Eye = FVector(250, 0, 125);
-                if (View == TEXT("Left")) Eye = FVector(0, -250, 125);
-                if (View == TEXT("Right")) Eye = FVector(0, 250, 125);
-                if (View == TEXT("Face")) { Eye = FVector(-100, 0, 170); Target = FVector(0, 0, 169); }
-                ACameraActor* CaptureView = GetWorld()->SpawnActor<ACameraActor>(Eye, (Target - Eye).Rotation());
-                CaptureView->GetCameraComponent()->FieldOfView = View == TEXT("Face") ? 35.0f : 80.0f;
-                PlayerController->SetViewTarget(CaptureView);
-            }
-            break;
-        }
-    }
-
+    // Character and scene target are serialized on the runtime actor or set explicitly.
     UpdateHand(LeftHand, true, DeltaSeconds);
     UpdateHand(RightHand, false, DeltaSeconds);
     LeftHandState = LeftHand.Gate.State;
@@ -362,8 +354,8 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
     FTransform VisualWorld = Hand.LastWorld;
     if (Hand.Gate.State == EGratiaHandState::Tracked)
     {
-        const FTransform ContactTarget = TestCharacter.IsValid() && TestCharacter->Interaction
-            ? TestCharacter->Interaction->ConstrainHand(Hand.LastWorld, Target) : Target;
+        const FTransform ContactTarget = TargetCharacter.IsValid() && TargetCharacter->Interaction
+            ? TargetCharacter->Interaction->ConstrainHand(Hand.LastWorld, Target, bLeft) : Target;
         const bool bBlocked = !ContactTarget.GetLocation().Equals(Target.GetLocation(), 0.1);
         // Exact original local transform retains the template's late controller update and hand alignment.
         if (bBlocked)
@@ -397,8 +389,8 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
         }
     }
     if (IsFiniteTransform(VisualWorld)) Hand.LastWorld = VisualWorld;
-    if (TestCharacter.IsValid() && TestCharacter->Interaction)
-        TestCharacter->Interaction->SetHandSample(bLeft, Target, VisualWorld, Hand.Gate.CanInteract());
+    if (TargetCharacter.IsValid() && TargetCharacter->Interaction)
+        TargetCharacter->Interaction->SetHandSample(bLeft, Target, VisualWorld, Hand.Gate.CanInteract());
     if (Before != Hand.Gate.State)
     {
         UE_LOG(LogGratiaStage1, Display, TEXT("%s hand: %s (forced loss=%s)"), bLeft ? TEXT("Left") : TEXT("Right"),
@@ -492,11 +484,13 @@ void AGratiaStage1Runtime::SetForcedTrackingLoss(bool bLeftHand, bool bForceLoss
 
 FString AGratiaStage1Runtime::GetStatusText() const
 {
-    const int32 Bodies = TestCharacter.IsValid() && TestCharacter->SecondaryMotion ? TestCharacter->SecondaryMotion->GetActiveBodyCount() : 0;
-    return FString::Printf(TEXT("GRATIA VR | %s | %s\nR: recenter | PgUp/PgDn: height | Home: reset\nF1: debug | F4 / Y/B: settings | F8/F9: tracking loss\nFrame ~%.1f ms / ~%.0f FPS | GT %.1f / RT %.1f / GPU %.1f ms\nL: %s | R: %s | Physics: %d\nHeight: %+.0f cm | Pawn: %s\nEngine timings; SteamVR delivery measured separately"),
+    const int32 Bodies = TargetCharacter.IsValid() && TargetCharacter->SecondaryMotion ? TargetCharacter->SecondaryMotion->GetActiveBodyCount() : 0;
+    return FString::Printf(TEXT("GRATIA VR | %s | %s\nR: recenter | PgUp/PgDn: height | Home: reset\nF1: debug | F4 / Y/B: settings | F8/F9: tracking loss\nFrame ~%.1f ms / ~%.0f FPS | GT %.1f / RT %.1f / GPU %.1f ms\nL: %s | R: %s | Physics: %d\nHeight: %+.0f cm | Pawn: %s\nEngine timings; SteamVR delivery measured separately\n%s\n%s\nBuild: %s"),
         bXRActive ? TEXT("XR") : TEXT("DESKTOP"), Menu ? *Menu->QualityLabel() : TEXT("Medium"),
         EstimatedFrameMs, EstimatedFPS, GameThreadMs, RenderThreadMs, GPUFrameMs,
-        HandStateLabel(LeftHandState), HandStateLabel(RightHandState), Bodies, HeightOffsetCm, bPawnReady ? TEXT("READY") : TEXT("MISSING COMPONENTS"));
+        HandStateLabel(LeftHandState), HandStateLabel(RightHandState), Bodies, HeightOffsetCm, bPawnReady ? TEXT("READY") : TEXT("MISSING COMPONENTS"),
+        Locomotion ? *Locomotion->GetDiagnosticText() : TEXT("Movement missing"),
+        TargetCharacter.IsValid() ? *TargetCharacter->Interaction->GetContactDiagnostics() : TEXT("Character target missing"), TEXT(GRATIA_BUILD_ID));
 }
 
 void AGratiaStage1Runtime::RunRequestedTests(float DeltaSeconds)

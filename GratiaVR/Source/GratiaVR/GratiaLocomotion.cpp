@@ -4,6 +4,9 @@
 #include "Engine/World.h"
 #include "EnhancedInputSubsystems.h"
 #include "EnhancedPlayerInput.h"
+#include "EnhancedInputComponent.h"
+#include "InputCoreTypes.h"
+#include "HeadMountedDisplayFunctionLibrary.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "InputAction.h"
@@ -35,31 +38,56 @@ void UGratiaLocomotion::BindPlayer()
 {
     APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0);
     APawn* NewPawn = PC ? PC->GetPawn() : nullptr;
+    if (PC != Controller.Get())
+    {
+        if (ActionInput)
+        {
+            if (Controller.IsValid()) Controller->PopInputComponent(ActionInput);
+            ActionInput->DestroyComponent(); ActionInput = nullptr;
+        }
+        Controller = PC;
+        if (PC && WalkAction && TurnAction)
+        {
+            ActionInput = NewObject<UEnhancedInputComponent>(PC, TEXT("GratiaLocomotionActions"));
+            ActionInput->Priority = 60; ActionInput->bBlockInput = false;
+            ActionInput->BindActionValue(WalkAction); ActionInput->BindActionValue(TurnAction);
+            ActionInput->RegisterComponent(); PC->PushInputComponent(ActionInput);
+        }
+    }
     if (NewPawn != Pawn.Get())
     {
         Pawn = NewPawn;
         Camera = NewPawn ? NewPawn->FindComponentByClass<UCameraComponent>() : nullptr;
-        Controller = PC;
         bTurnArmed = true;
     }
+    bMappingReady = false;
     if (PC && PC->GetLocalPlayer() && Mapping)
     {
         UEnhancedInputLocalPlayerSubsystem* Input = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer());
         if (Input && !Input->HasMappingContext(Mapping)) Input->AddMappingContext(Mapping, 50);
+        bMappingReady = Input && Input->HasMappingContext(Mapping);
     }
+}
+
+void UGratiaLocomotion::EndPlay(const EEndPlayReason::Type Reason)
+{
+    if (ActionInput && Controller.IsValid()) Controller->PopInputComponent(ActionInput);
+    if (ActionInput) ActionInput->DestroyComponent();
+    ActionInput = nullptr;
+    Super::EndPlay(Reason);
 }
 
 bool UGratiaLocomotion::IsReady() const
 {
     return Pawn.IsValid() && Camera.IsValid() && Controller.IsValid() && WalkAction && TurnAction && Mapping
-        && Cast<UEnhancedPlayerInput>(Controller->PlayerInput);
+        && ActionInput && bMappingReady && Cast<UEnhancedPlayerInput>(Controller->PlayerInput);
 }
 
-FVector2D UGratiaLocomotion::FilterStick(FVector2D Stick)
+FVector2D UGratiaLocomotion::FilterStick(FVector2D Stick, float DeadZone)
 {
     if (Stick.ContainsNaN()) return FVector2D::ZeroVector;
     const double Length = Stick.Size();
-    constexpr double DeadZone = 0.18;
+    DeadZone = FMath::Clamp(DeadZone, 0.0f, 0.9f);
     if (Length <= DeadZone) return FVector2D::ZeroVector;
     return Stick / Length * FMath::Clamp((Length - DeadZone) / (1.0 - DeadZone), 0.0, 1.0);
 }
@@ -68,8 +96,8 @@ FVector UGratiaLocomotion::SweepBody(FVector Delta) const
 {
     if (!Pawn.IsValid() || !Camera.IsValid() || !GetWorld() || Delta.ContainsNaN()) return FVector::ZeroVector;
     // A pawn with a scene root cannot sweep its children. Sweep an upright body capsule explicitly.
-    constexpr float Radius = 22.0f;
-    constexpr float HalfHeight = 70.0f;
+    const float Radius = FMath::Max(1.0f, BodyRadiusCm);
+    const float HalfHeight = FMath::Max(Radius, BodyHalfHeightCm);
     FVector Start = Camera->GetComponentLocation();
     Start.Z = Pawn->GetActorLocation().Z + HalfHeight + 2.0;
     FCollisionQueryParams Params(SCENE_QUERY_STAT(GratiaWalking), false, Pawn.Get());
@@ -93,7 +121,7 @@ FVector UGratiaLocomotion::SweepBody(FVector Delta) const
 void UGratiaLocomotion::Walk(FVector2D Stick, float Seconds)
 {
     if (!IsReady() || !FMath::IsFinite(Seconds) || Seconds <= 0.0f) return;
-    const FVector2D Input = FilterStick(Stick);
+    const FVector2D Input = FilterStick(Stick, StickDeadZone);
     if (Input.IsNearlyZero()) return;
     const FRotator Heading(0.0, Camera->GetComponentRotation().Yaw, 0.0);
     const FVector Forward = Heading.Vector();
@@ -115,22 +143,59 @@ void UGratiaLocomotion::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 {
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
     BindPlayer();
-    if (!IsReady() || !bEnabled) return;
-    UEnhancedPlayerInput* Input = Cast<UEnhancedPlayerInput>(Controller->PlayerInput);
-    const FVector2D Stick = Input->GetActionValue(WalkAction).Get<FVector2D>();
-    const float Turn = Input->GetActionValue(TurnAction).Get<float>();
-    Walk(Stick, DeltaTime);
-    if (FMath::Abs(Turn) < 0.25f) bTurnArmed = true;
-    else if (bTurnArmed && FMath::Abs(Turn) >= 0.7f)
+    MappedStick = ActionInput && WalkAction ? ActionInput->GetBoundActionValue(WalkAction).Get<FVector2D>() : FVector2D::ZeroVector;
+    const float Turn = ActionInput && TurnAction ? ActionInput->GetBoundActionValue(TurnAction).Get<float>() : 0.0f;
+    RawStick = FVector2D::ZeroVector;
+    // OpenXR's Enhanced Input path injects action values directly, without legacy key state.
+    bRawKeyChannelAvailable = !UHeadMountedDisplayFunctionLibrary::IsHeadMountedDisplayEnabled();
+    if (Controller.IsValid())
     {
-        SnapTurn(Turn > 0.0f ? 30.0f : -30.0f);
-        bTurnArmed = false;
+        for (const TCHAR* Prefix : {TEXT("OculusTouch_Left_Thumbstick"), TEXT("ValveIndex_Left_Thumbstick"), TEXT("MixedReality_Left_Thumbstick"), TEXT("Vive_Left_Trackpad"), TEXT("Gamepad_Left")})
+        {
+            const bool Gamepad = FString(Prefix).StartsWith(TEXT("Gamepad"));
+            const FString KeyPrefix(Prefix);
+            const FVector2D Candidate(Controller->GetInputAnalogKeyState(FKey(*(KeyPrefix + (Gamepad ? TEXT("X") : TEXT("_X"))))),
+                Controller->GetInputAnalogKeyState(FKey(*(KeyPrefix + (Gamepad ? TEXT("Y") : TEXT("_Y"))))));
+            if (Candidate.SizeSquared() > RawStick.SizeSquared()) RawStick = Candidate;
+        }
     }
-    if (!bReportedInput && (!FilterStick(Stick).IsNearlyZero() || FMath::Abs(Turn) > 0.1f))
+    LastPawnDelta = FVector::ZeroVector;
+    if (!Controller.IsValid() || !Pawn.IsValid() || !Camera.IsValid()) MovementReason = TEXT("missing player/camera");
+    else if (!WalkAction || !TurnAction || !Mapping || !ActionInput) MovementReason = TEXT("missing action/binding");
+    else if (!bMappingReady) MovementReason = TEXT("missing mapping context");
+    else if (!Cast<UEnhancedPlayerInput>(Controller->PlayerInput)) MovementReason = TEXT("wrong PlayerInput class");
+    else if (!bEnabled) MovementReason = TEXT("menu blocked");
+    else if (FilterStick(MappedStick, StickDeadZone).IsNearlyZero())
+        MovementReason = bRawKeyChannelAvailable && RawStick.Size() > StickDeadZone ? TEXT("raw keys present, mapped zero") : TEXT("zero action input / dead zone");
+    else
     {
-        bReportedInput = true;
-        UE_LOG(LogGratiaMovement, Display, TEXT("Live enhanced locomotion input received: walk=(%.2f,%.2f) turn=%.2f"), Stick.X, Stick.Y, Turn);
+        const FVector Before = Pawn->GetActorLocation();
+        Walk(MappedStick, DeltaTime);
+        LastPawnDelta = Pawn->GetActorLocation() - Before;
+        MovementReason = LastPawnDelta.IsNearlyZero(0.001) ? TEXT("collision blocked") : TEXT("moving");
     }
+    if (IsReady() && bEnabled)
+    {
+        if (FMath::Abs(Turn) < 0.25f) bTurnArmed = true;
+        else if (bTurnArmed && FMath::Abs(Turn) >= 0.7f)
+        {
+            SnapTurn(Turn > 0.0f ? SnapDegrees : -SnapDegrees);
+            bTurnArmed = false;
+        }
+    }
+    DiagnosticSeconds += FMath::Clamp(DeltaTime, 0.0f, 0.1f);
+    if (DiagnosticSeconds >= 1.0f && (MovementReason != LastReportedReason || !MappedStick.IsNearlyZero() || !RawStick.IsNearlyZero() || FMath::Abs(Turn) > 0.1f))
+    {
+        DiagnosticSeconds = 0.0f; LastReportedReason = MovementReason;
+        UE_LOG(LogGratiaMovement, Display, TEXT("MOVEMENT raw_keys=(%.2f,%.2f) raw_key_channel=%s mapped=(%.2f,%.2f) turn=%.2f ready=%d context=%d enabled=%d pawn_delta_cm=%.3f reason=%s"),
+            RawStick.X, RawStick.Y, bRawKeyChannelAvailable ? TEXT("available") : TEXT("unavailable_OpenXR_direct_actions"), MappedStick.X, MappedStick.Y, Turn, IsReady(), bMappingReady, bEnabled, LastPawnDelta.Size(), *MovementReason);
+    }
+}
+
+FString UGratiaLocomotion::GetDiagnosticText() const
+{
+    return FString::Printf(TEXT("Walk %s mapped %.2f/%.2f delta %.2fcm: %s"),
+        bRawKeyChannelAvailable ? *FString::Printf(TEXT("raw keys %.2f/%.2f"),RawStick.X,RawStick.Y) : TEXT("OpenXR direct actions"), MappedStick.X, MappedStick.Y, LastPawnDelta.Size(), *MovementReason);
 }
 
 bool UGratiaLocomotion::RunChecks(FString& Failure)
@@ -144,7 +209,7 @@ bool UGratiaLocomotion::RunChecks(FString& Failure)
     const FVector Start = Pawn->GetActorLocation();
     for (int32 Index = 0; Index < 20; ++Index) Walk(FVector2D(0.0, 1.0), 0.05f);
     const FVector End = Pawn->GetActorLocation();
-    Passed &= FMath::IsNearlyEqual((End - Start).Size2D(), 120.0, 0.1) && FMath::IsNearlyEqual(End.Z, Start.Z, 0.001);
+    Passed &= FMath::IsNearlyEqual((End - Start).Size2D(), static_cast<double>(SpeedCmPerSecond), 0.1) && FMath::IsNearlyEqual(End.Z, Start.Z, 0.001);
     Walk(FVector2D::ZeroVector, 0.05f);
     Passed &= Pawn->GetActorLocation().Equals(End, 0.001);
     for (int32 Index = 0; Index < 100; ++Index) Walk(FVector2D(0.0, 1.0), 0.05f);

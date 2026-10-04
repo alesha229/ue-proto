@@ -63,4 +63,7 @@ namespace GratiaContactSolver
 
     /** Maximum depth inside the unskinned obstacles, in centimetres. Invalid shapes are ignored. */
     GRATIAVR_API double MaxPenetration(const FVector& Point, TConstArrayView<FGratiaContactShape> Shapes);
+
+    /** World-independent geometric regressions shared by automation and packaged verification. */
+    GRATIAVR_API bool RunRegressionChecks(FString& Report);
 }

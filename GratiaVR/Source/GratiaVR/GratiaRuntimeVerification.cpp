@@ -4,10 +4,16 @@
 #include "GratiaPreviewCharacter.h"
 #include "GratiaLocomotion.h"
 #include "GratiaInteraction.h"
+#include "GratiaReactionPresentation.h"
 #include "GratiaMenu.h"
 #include "GratiaSecondaryMotion.h"
+#include "GratiaCharacterProfile.h"
+#include "GratiaContactSolver.h"
+#include "GratiaAnimInstance.h"
 #include "Animation/AnimSequence.h"
 #include "Animation/AnimSingleNodeInstance.h"
+#include "Animation/MorphTarget.h"
+#include "Animation/Skeleton.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Components/SphereComponent.h"
@@ -20,21 +26,26 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "MotionControllerComponent.h"
+#include "PhysicsEngine/PhysicsAsset.h"
+#include "InputKeyEventArgs.h"
+#include "InputAction.h"
+#include "InputMappingContext.h"
+#include "EnhancedInputDeveloperSettings.h"
 #include "Misc/App.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
 #include "Misc/FileHelper.h"
+#include "HAL/FileManager.h"
 #include "UnrealClient.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogGratiaVerification, Log, All);
 
 namespace
 {
-    // Fixture-specific names belong to the verification harness, not player tracking.
-    const FName CharacterTestBones[] = {
-        TEXT("DEF-spine_006"), TEXT("DEF-hand_L"), TEXT("DEF-hand_R"),
-        TEXT("DEF-foot_L"), TEXT("DEF-foot_R"), TEXT("root")
+    const FName CharacterTestSemantics[] = {
+        TEXT("Head"), TEXT("LeftHand"), TEXT("RightHand"),
+        TEXT("LeftFoot"), TEXT("RightFoot"), TEXT("Root")
     };
 
     bool IsFiniteTransform(const FTransform& Transform)
@@ -58,6 +69,9 @@ void UGratiaRuntimeVerification::ConfigureFromCommandLine()
 {
     bSmokeTest = FParse::Param(FCommandLine::Get(), TEXT("GratiaSmokeTest"));
     bSelfTest = FParse::Param(FCommandLine::Get(), TEXT("GratiaSelfTest"));
+    bReactionQAEnabled = FParse::Value(FCommandLine::Get(), TEXT("GratiaReactionZone="), ReactionQAZone);
+    FParse::Value(FCommandLine::Get(), TEXT("GratiaExpectedReactionClip="), ReactionQAExpectedClip);
+    FParse::Value(FCommandLine::Get(), TEXT("GratiaCorrectivePrefix="), ReactionQACorrectivePrefix);
     FParse::Value(FCommandLine::Get(), TEXT("GratiaSoakSeconds="), SoakDuration);
     FParse::Value(FCommandLine::Get(), TEXT("GratiaPerfSeconds="), PerfDuration);
     SoakDuration = FMath::Clamp(SoakDuration, 0.0f, 3600.0f);
@@ -71,9 +85,9 @@ void UGratiaRuntimeVerification::ConfigureCaptureView()
     AGratiaStage1Runtime& Runtime = GetRuntime();
     FString View;
     if (Runtime.bXRActive || !FParse::Value(FCommandLine::Get(), TEXT("GratiaViewTest="), View)
-        || !Runtime.PlayerController.IsValid() || !Runtime.PlayerPawn.IsValid() || !Runtime.TestCharacter.IsValid()) return;
+        || !Runtime.PlayerController.IsValid() || !Runtime.PlayerPawn.IsValid() || !Runtime.TargetCharacter.IsValid()) return;
     // This camera belongs only to an explicit desktop QA invocation.
-    AGratiaPreviewCharacter* Character = Runtime.TestCharacter.Get();
+    AGratiaPreviewCharacter* Character = Runtime.TargetCharacter.Get();
     Character->SetActorLocation(FVector(0, 0, Character->GetActorLocation().Z), false, nullptr, ETeleportType::TeleportPhysics);
     Runtime.PlayerPawn->SetActorHiddenInGame(true);
     FVector Eye(-250, 0, 125), Target(0, 0, 110);
@@ -100,6 +114,31 @@ void UGratiaRuntimeVerification::TestCheck(bool bPassed, const TCHAR* Descriptio
         bTestFailed = true;
         UE_LOG(LogGratiaVerification, Error, TEXT("TEST FAIL: %s"), Description);
     }
+}
+
+void UGratiaRuntimeVerification::EndPlay(const EEndPlayReason::Type Reason)
+{
+    if (bReactionQAStarted && GetRuntime().TargetCharacter.IsValid() && GetRuntime().TargetCharacter->Interaction)
+    {
+        UGratiaInteraction* Interaction = GetRuntime().TargetCharacter->Interaction;
+        Interaction->OnContactReaction.RemoveDynamic(this, &UGratiaRuntimeVerification::OnReactionQAContact);
+        Interaction->SetHandSample(true, FTransform::Identity, FTransform::Identity, false);
+        Interaction->SetHandSample(false, FTransform::Identity, FTransform::Identity, false);
+    }
+    if (bInputIntegrationStarted && !bInputIntegrationDone)
+    {
+        AGratiaStage1Runtime& Runtime = GetRuntime();
+        if (Runtime.PlayerController.IsValid())
+            Runtime.PlayerController->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W, IE_Released, 0.0f));
+        if (Runtime.PlayerPawn.IsValid())
+            Runtime.PlayerPawn->SetActorTransform(InputOriginalPawn, false, nullptr, ETeleportType::TeleportPhysics);
+    }
+    Super::EndPlay(Reason);
+}
+
+void UGratiaRuntimeVerification::TestSkip(const TCHAR* Description) const
+{
+    UE_LOG(LogGratiaVerification, Display, TEXT("TEST SKIP: %s"), Description);
 }
 
 void UGratiaRuntimeVerification::RunWorldChecks()
@@ -149,67 +188,122 @@ void UGratiaRuntimeVerification::RunCharacterWorldChecks()
     AGratiaStage1Runtime& Runtime = GetRuntime();
     int32 CharacterCount = 0;
     for (TActorIterator<AGratiaPreviewCharacter> It(GetWorld()); It; ++It)
-    {
         ++CharacterCount;
-        Runtime.TestCharacter = *It;
+    TestCheck(Runtime.TargetCharacter.IsValid() && Runtime.TargetCharacter->GetWorld() == GetWorld(),
+        TEXT("The runtime has an explicit valid character target in this world"));
+    if (!Runtime.TargetCharacter.IsValid()) return;
+    AGratiaPreviewCharacter* Character = Runtime.TargetCharacter.Get();
+    UGratiaCharacterProfile* Profile = Character->CharacterProfile;
+    TestCheck(Profile != nullptr, TEXT("The character target has a cooked CharacterProfile"));
+    if (!Profile) return;
+    FString RequestedProfilePath;
+    if (FParse::Value(FCommandLine::Get(), TEXT("GratiaCharacterProfile="), RequestedProfilePath))
+    {
+        const UGratiaCharacterProfile* RequestedProfile = LoadObject<UGratiaCharacterProfile>(nullptr, *RequestedProfilePath);
+        TestCheck(RequestedProfile && RequestedProfile == Profile,
+            TEXT("The explicitly requested character profile is actually active; fallback to another model is not accepted"));
     }
-    TestCheck(CharacterCount == 1, TEXT("Exactly one Gratia preview character is present"));
-    if (!Runtime.TestCharacter.IsValid()) return;
-    AGratiaPreviewCharacter* Character = Runtime.TestCharacter.Get();
+    TArray<FString> ProfileErrors, ProfileWarnings;
+    TestCheck(Profile->ValidateProfile(ProfileErrors, ProfileWarnings), TEXT("The selected CharacterProfile satisfies its resource/capability contract"));
+    for (const FString& Error : ProfileErrors)
+    {
+        UE_LOG(LogGratiaVerification, Error, TEXT("PROFILE ERROR: %s"), *Error);
+    }
+    for (const FString& Warning : ProfileWarnings)
+    {
+        UE_LOG(LogGratiaVerification, Display, TEXT("PROFILE WARNING: %s"), *Warning);
+    }
+    ObservedCharacterProfile = Profile;
+
     USkeletalMeshComponent* Component = Character->CharacterMesh;
     USkeletalMesh* Mesh = Component ? Component->GetSkeletalMeshAsset() : nullptr;
-    TestCheck(Mesh && Mesh->GetPathName() == TEXT("/Game/Gratia/GameRig/SK_Gratia_Game.SK_Gratia_Game"),
-        TEXT("The cooked Gratia skeletal mesh is loaded"));
+    TestCheck(Mesh && Mesh == Profile->Mesh, TEXT("The rendered skeletal mesh matches the selected CharacterProfile"));
     if (!Mesh || !Component) return;
 
     bool bAllClipsCompatible = true;
-    for (EGratiaPreviewPose Pose : {EGratiaPreviewPose::Idle, EGratiaPreviewPose::Arms, EGratiaPreviewPose::Head})
+    int32 ProvidedClips = 0;
+    for (const UAnimSequence* Clip : {Profile->Idle.Get(), Profile->Arms.Get(), Profile->Head.Get(),
+        Profile->ReactSoft.Get(), Profile->ReactBright.Get()})
     {
-        const UAnimSequence* Clip = Character->GetPreviewAnimation(Pose);
-        bAllClipsCompatible &= Clip && Clip->GetPlayLength() > 0.1f && Clip->GetSkeleton() == Mesh->GetSkeleton();
+        if (!Clip) continue;
+        ++ProvidedClips;
+        bAllClipsCompatible &= Clip->GetPlayLength() > 0.0f && Clip->GetSkeleton() == Mesh->GetSkeleton();
     }
-    TestCheck(bAllClipsCompatible, TEXT("All three cooked preview clips are non-empty and use the Gratia skeleton"));
-    for (const bool bBright : {false, true})
-    {
-        const UAnimSequence* Clip = Character->GetReactionAnimation(bBright);
-        TestCheck(Clip && FMath::IsNearlyEqual(Clip->GetPlayLength(), 2.0f, 0.04f) && Clip->GetSkeleton() == Mesh->GetSkeleton(),
-            bBright ? TEXT("Bright reaction cue is cooked on the clean skeleton") : TEXT("Soft reaction cue is cooked on the clean skeleton"));
-    }
+    if (ProvidedClips)
+        TestCheck(bAllClipsCompatible, TEXT("Every supplied profile animation is non-empty and compatible with this model's skeleton"));
+    else TestSkip(TEXT("This profile supplies no animation clips; reference pose or its AnimationClass is expected"));
+    if (!Profile->Capabilities.bReactionAnimations)
+        TestSkip(TEXT("ReactionAnimations is disabled in the selected profile"));
+    if (!Profile->Capabilities.bBlink)
+        TestSkip(TEXT("Blink is disabled in the selected profile; eyelid morphs are not required"));
+    if (!Profile->Capabilities.bFacialReactions)
+        TestSkip(TEXT("FacialReactions is disabled in the selected profile; facial morphs are not required"));
+    if (!Profile->Capabilities.bGaze)
+        TestSkip(TEXT("Gaze is disabled in the selected profile"));
+
     UAnimSingleNodeInstance* Animation = Component->GetSingleNodeInstance();
-    TestCheck(Animation && Animation->GetAnimationAsset() == Character->GetExpectedAnimation()
-        && (Character->IsIdlePreview() ? Animation->IsPlaying() && Animation->IsLooping() : !Animation->IsPlaying()),
-        TEXT("The requested preview animation is active with the correct playback mode"));
-    TestCheck(Mesh->FindMorphTarget(TEXT("Mouth O wide")) != nullptr,
-        TEXT("The formerly colliding Mouth O morph is present under its unique name"));
-    TestCheck(Mesh->FindMorphTarget(TEXT("Eye L close")) && Mesh->FindMorphTarget(TEXT("Eye R close")),
-        TEXT("Both eyelid morphs are available for idle blinking"));
+    if (Profile->AnimationClass)
+    {
+        TestCheck(Component->GetAnimInstance() && Component->GetAnimInstance()->IsA(Profile->AnimationClass),
+            TEXT("The configured profile AnimationClass is active"));
+    }
+    else if (Character->GetExpectedAnimation())
+    {
+        TestCheck(Animation && Animation->GetAnimationAsset() == Character->GetExpectedAnimation()
+            && (Character->IsIdlePreview() ? Animation->IsPlaying() && Animation->IsLooping() : !Animation->IsPlaying()),
+            TEXT("The requested profile preview clip is active with the correct playback mode"));
+    }
+    else TestSkip(TEXT("No preview clip is supplied for this profile; reference pose is expected"));
     TestCheck(Character->GetActorScale3D().Equals(FVector::OneVector, 0.001)
         && Component->GetComponentScale().Equals(FVector::OneVector, 0.001)
-        && FMath::IsNearlyEqual(Mesh->GetBounds().BoxExtent.Z * 2.0, 216.36, 2.2),
-        TEXT("Unit character scale and source height including accessories are preserved within one percent"));
+        && !Mesh->GetBounds().BoxExtent.ContainsNaN() && Mesh->GetBounds().BoxExtent.Z > 0.0,
+        TEXT("The character uses unit actor/component scale and finite positive mesh bounds"));
+    if (Profile->ExpectedBoneCount > 0)
+        TestCheck(Mesh->GetRefSkeleton().GetNum() == Profile->ExpectedBoneCount, TEXT("Bone count matches this profile's optional regression expectation"));
+    if (Profile->ExpectedMorphCount > 0)
+        TestCheck(Mesh->GetMorphTargets().Num() == Profile->ExpectedMorphCount, TEXT("Morph count matches this profile's optional regression expectation"));
+    UPhysicsAsset* Physics = Profile->PhysicsAsset ? Profile->PhysicsAsset.Get() : Mesh->GetPhysicsAsset();
+    if (Profile->ExpectedPhysicsBodyCount > 0)
+        TestCheck(Physics && Physics->SkeletalBodySetups.Num() == Profile->ExpectedPhysicsBodyCount,
+            TEXT("Physics body count matches this profile's optional regression expectation"));
+    if (Profile->ExpectedConstraintCount > 0)
+        TestCheck(Physics && Physics->ConstraintSetup.Num() == Profile->ExpectedConstraintCount,
+            TEXT("Physics constraint count matches this profile's optional regression expectation"));
 
     bool bBonesFinite = true;
     InitialCharacterBones.Reset();
-    for (const FName Bone : CharacterTestBones)
+    ObservedCharacterBones.Reset();
+    for (const FName Semantic : CharacterTestSemantics)
     {
+        const FName Bone = Profile->ResolveBone(Semantic);
+        ObservedCharacterBones.Add(Bone);
+        if (Bone.IsNone())
+        {
+            InitialCharacterBones.Add(FTransform::Identity);
+            UE_LOG(LogGratiaVerification, Display, TEXT("TEST SKIP: no optional observation mapping for %s"), *Semantic.ToString());
+            continue;
+        }
         const bool bPresent = Component->GetBoneIndex(Bone) != INDEX_NONE;
         const FTransform Transform = Component->GetSocketTransform(Bone, RTS_Component);
         bBonesFinite &= bPresent && IsFiniteTransform(Transform);
         InitialCharacterBones.Add(Transform);
     }
     TestCheck(bBonesFinite && IsFiniteTransform(Character->GetActorTransform()),
-        TEXT("Head, both hands, both feet and root bones exist with finite transforms"));
+        TEXT("All mapped observation bones and the character actor have finite transforms"));
+    if (Profile->bRequirePlantedIdle)
+        TestCheck(!Profile->ResolveBone(TEXT("LeftFoot")).IsNone() && !Profile->ResolveBone(TEXT("RightFoot")).IsNone()
+            && !Profile->ResolveBone(TEXT("Root")).IsNone(), TEXT("The planted-idle contract supplies both feet and root semantic mappings"));
     InitialCharacterActor = Character->GetActorTransform();
     InitialAnimationTime = Animation ? Animation->GetCurrentTime() : 0.0f;
-    UE_LOG(LogGratiaVerification, Display, TEXT("CHARACTER TEST CONFIG: actor=%s mode=%d clip=%s source_height_cm=%.2f"),
-        *Character->GetName(), static_cast<int32>(Character->PreviewPose), *GetNameSafe(Character->GetExpectedAnimation()),
+    UE_LOG(LogGratiaVerification, Display, TEXT("CHARACTER TEST CONFIG: actor=%s profile=%s characters=%d mode=%d clip=%s bounds_height_cm=%.2f"),
+        *Character->GetName(), *Profile->ProfileId.ToString(), CharacterCount, static_cast<int32>(Character->PreviewPose), *GetNameSafe(Character->GetExpectedAnimation()),
         Mesh->GetBounds().BoxExtent.Z * 2.0);
 }
 
 void UGratiaRuntimeVerification::SampleCharacterAnimation(bool bFinish)
 {
     AGratiaStage1Runtime& Runtime = GetRuntime();
-    if (!Runtime.TestCharacter.IsValid() || !Runtime.TestCharacter->IsIdlePreview())
+    if (!Runtime.TargetCharacter.IsValid() || !Runtime.TargetCharacter->IsIdlePreview())
     {
         if (bFinish)
         {
@@ -217,16 +311,19 @@ void UGratiaRuntimeVerification::SampleCharacterAnimation(bool bFinish)
         }
         return;
     }
-    USkeletalMeshComponent* Component = Runtime.TestCharacter->CharacterMesh;
-    if (!Component || InitialCharacterBones.Num() != UE_ARRAY_COUNT(CharacterTestBones))
+    USkeletalMeshComponent* Component = Runtime.TargetCharacter->CharacterMesh;
+    UGratiaCharacterProfile* Profile = Runtime.TargetCharacter->CharacterProfile;
+    if (!Component || !Profile || InitialCharacterBones.Num() != UE_ARRAY_COUNT(CharacterTestSemantics)
+        || ObservedCharacterBones.Num() != InitialCharacterBones.Num() || ObservedCharacterProfile.Get() != Profile)
     {
         if (bFinish) TestCheck(false, TEXT("Idle motion observation has a valid baseline"));
         return;
     }
     bool bFinite = true;
-    for (int32 Index = 0; Index < UE_ARRAY_COUNT(CharacterTestBones); ++Index)
+    for (int32 Index = 0; Index < ObservedCharacterBones.Num(); ++Index)
     {
-        const FTransform Current = Component->GetSocketTransform(CharacterTestBones[Index], RTS_Component);
+        if (ObservedCharacterBones[Index].IsNone()) continue;
+        const FTransform Current = Component->GetSocketTransform(ObservedCharacterBones[Index], RTS_Component);
         bFinite &= IsFiniteTransform(Current);
         if (!IsFiniteTransform(Current)) continue;
         const FTransform& Baseline = InitialCharacterBones[Index];
@@ -248,7 +345,7 @@ void UGratiaRuntimeVerification::SampleCharacterAnimation(bool bFinish)
             MaxRootDriftDegrees = FMath::Max(MaxRootDriftDegrees, Angle);
         }
     }
-    const FTransform ActorTransform = Runtime.TestCharacter->GetActorTransform();
+    const FTransform ActorTransform = Runtime.TargetCharacter->GetActorTransform();
     bFinite &= IsFiniteTransform(ActorTransform);
     MaxRootDriftCm = FMath::Max(MaxRootDriftCm, FVector::Distance(ActorTransform.GetLocation(), InitialCharacterActor.GetLocation()));
     MaxRootDriftDegrees = FMath::Max(MaxRootDriftDegrees,
@@ -262,12 +359,17 @@ void UGratiaRuntimeVerification::SampleCharacterAnimation(bool bFinish)
     if (bFinish)
     {
         TestCheck(bCharacterBonesRemainFinite, TEXT("Animated character bone transforms remain finite throughout the observation"));
-        TestCheck(bAnimationTimeAdvanced && (MaxHeadMovementCm > 0.02 || MaxHeadMovementDegrees > 0.05),
-            TEXT("Idle animation advances and visibly changes the evaluated head transform between three and seven seconds"));
-        TestCheck(MaxFootDriftCm <= 0.1 && MaxFootDriftDegrees <= 0.1,
-            TEXT("Idle keeps both feet planted within one millimetre and one tenth of a degree"));
-        TestCheck(MaxRootDriftCm <= 0.1 && MaxRootDriftDegrees <= 0.1,
-            TEXT("Idle has no actor or root drift beyond one millimetre and one tenth of a degree"));
+        if (Profile->Idle && !Profile->AnimationClass)
+            TestCheck(bAnimationTimeAdvanced, TEXT("The supplied native idle animation advances throughout the observation"));
+        else TestSkip(TEXT("No native idle clip is supplied; animation-time advancement is not asserted"));
+        if (Profile->bRequirePlantedIdle)
+        {
+            TestCheck(MaxFootDriftCm <= Profile->MaxIdleFootDriftCm && MaxFootDriftDegrees <= Profile->MaxIdleFootRotationDegrees,
+                TEXT("Idle foot drift stays inside this profile's planted-idle limits"));
+            TestCheck(MaxRootDriftCm <= Profile->MaxIdleRootDriftCm && MaxRootDriftDegrees <= Profile->MaxIdleRootRotationDegrees,
+                TEXT("Idle actor/root drift stays inside this profile's planted-idle limits"));
+        }
+        else TestSkip(TEXT("This profile does not require a planted idle; drift is measured without a planted-pose assertion"));
         UE_LOG(LogGratiaVerification, Display, TEXT("CHARACTER MOTION: head=%.5fcm/%.5fdeg feet=%.5fcm/%.5fdeg root=%.5fcm/%.5fdeg"),
             MaxHeadMovementCm, MaxHeadMovementDegrees, MaxFootDriftCm, MaxFootDriftDegrees, MaxRootDriftCm, MaxRootDriftDegrees);
     }
@@ -276,17 +378,40 @@ void UGratiaRuntimeVerification::SampleCharacterAnimation(bool bFinish)
 void UGratiaRuntimeVerification::RunSelfChecks()
 {
     AGratiaStage1Runtime& Runtime = GetRuntime();
+    FString InputAssetFailure;
+    TestCheck(ValidateInputAssets(InputAssetFailure),
+        TEXT("Cooked input assets use registered XR keys, vector-parent bindings and no legacy template locomotion"));
+    if (!InputAssetFailure.IsEmpty())
+    {
+        UE_LOG(LogGratiaVerification, Error, TEXT("%s"), *InputAssetFailure);
+    }
     FString MovementFailure;
     TestCheck(Runtime.Locomotion && Runtime.Locomotion->RunChecks(MovementFailure), TEXT("Head-relative walking, deadzone, wall sweep, snap pivot and teleport suppression"));
     if (!MovementFailure.IsEmpty()) UE_LOG(LogGratiaVerification, Error, TEXT("%s"), *MovementFailure);
+    FString SolverFailure;
+    TestCheck(GratiaContactSolver::RunRegressionChecks(SolverFailure),
+        TEXT("Independent hand solver covers fast sweep, penetrating starts, overlapping proxies, sliding and pose changes"));
+    if (!SolverFailure.IsEmpty()) UE_LOG(LogGratiaVerification, Error, TEXT("%s"), *SolverFailure);
+    UGratiaCharacterProfile* Profile = Runtime.TargetCharacter.IsValid() ? Runtime.TargetCharacter->CharacterProfile.Get() : nullptr;
     FString ContactFailure;
-    TestCheck(Runtime.TestCharacter.IsValid() && Runtime.TestCharacter->Interaction && Runtime.TestCharacter->Interaction->RunChecks(ContactFailure),
-        TEXT("All contact zones complete repeated two-hand cycles, cooldown and proxy constraint checks"));
+    if (Profile && Profile->Capabilities.bContacts)
+        TestCheck(Runtime.TargetCharacter->Interaction && Runtime.TargetCharacter->Interaction->RunChecks(ContactFailure),
+            TEXT("All enabled profile contact zones complete repeated two-hand cycles, cooldown and proxy constraint checks"));
+    else TestSkip(TEXT("Contacts is disabled or the profile is absent; character-zone cycles are not run"));
     if (!ContactFailure.IsEmpty()) UE_LOG(LogGratiaVerification, Error, TEXT("%s"), *ContactFailure);
     TestCheck(Runtime.Menu && Runtime.Menu->RunChecks(), TEXT("World menu, ten pose/mood switches, reset and all quality profiles"));
     FString PhysicsFailure;
-    TestCheck(Runtime.TestCharacter.IsValid() && Runtime.TestCharacter->SecondaryMotion && Runtime.TestCharacter->SecondaryMotion->RunChecks(PhysicsFailure),
-        TEXT("Cooked PhysicsAsset, real Chaos bodies, quality budgets, planted core and physics disable/reset"));
+    if (Profile && Profile->Capabilities.bSecondaryPhysics)
+        TestCheck(Runtime.TargetCharacter->SecondaryMotion && Runtime.TargetCharacter->SecondaryMotion->RunChecks(PhysicsFailure),
+            TEXT("Enabled profile physics satisfies its asset, body budgets, controlled core and disable/reset contract"));
+    else if (Profile && Runtime.TargetCharacter->SecondaryMotion)
+    {
+        Runtime.TargetCharacter->SecondaryMotion->RefreshSettings(true);
+        TestCheck(Runtime.TargetCharacter->SecondaryMotion->GetActiveBodyCount() == 0,
+            TEXT("A profile with SecondaryPhysics disabled leaves no active secondary bodies"));
+        TestSkip(TEXT("SecondaryPhysics is disabled; physical asset/constraint checks are not required"));
+    }
+    else TestSkip(TEXT("No profile/secondary-motion component is present; physical asset checks are not run"));
     if (!PhysicsFailure.IsEmpty()) UE_LOG(LogGratiaVerification, Error, TEXT("%s"), *PhysicsFailure);
     FGratiaTrackingGate Gate;
     TestCheck(!Gate.CanInteract(), TEXT("Fresh tracking gate forbids interaction"));
@@ -348,9 +473,369 @@ void UGratiaRuntimeVerification::RunSelfChecks()
     }
 }
 
+bool UGratiaRuntimeVerification::ValidateInputAssets(FString& Failure) const
+{
+    TArray<FString> Errors;
+    TSet<FString> VectorWalkKeys;
+    const TSet<FString> KnownProfiles = {TEXT("OculusTouch"), TEXT("ValveIndex"), TEXT("MixedReality"), TEXT("Vive")};
+    const TSet<FString> ExpectedWalkKeys = {
+        TEXT("OculusTouch_Left_Thumbstick_2D"), TEXT("ValveIndex_Left_Thumbstick_2D"),
+        TEXT("MixedReality_Left_Thumbstick_2D"), TEXT("Vive_Left_Trackpad_2D")
+    };
+    const UEnhancedInputDeveloperSettings* Settings = GetDefault<UEnhancedInputDeveloperSettings>();
+    bool bMovementRegistered = false;
+    if (!Settings || !Settings->bEnableDefaultMappingContexts)
+        Errors.Add(TEXT("OpenXR default mapping contexts are not enabled."));
+    else for (const FDefaultContextSetting& DefaultContext : Settings->DefaultMappingContexts)
+    {
+        const UInputMappingContext* Context = DefaultContext.InputMappingContext.LoadSynchronous();
+        if (!Context)
+        {
+            Errors.Add(FString::Printf(TEXT("A configured input mapping context is not cooked: %s."),
+                *DefaultContext.InputMappingContext.ToSoftObjectPath().ToString()));
+            continue;
+        }
+        const bool bMovement = Context->GetFName() == TEXT("IMC_GratiaLocomotion");
+        const bool bMenu = Context->GetFName() == TEXT("IMC_GratiaMenu");
+        const bool bTemplate = Context->GetFName() == TEXT("IMC_Default");
+        bMovementRegistered |= bMovement && DefaultContext.bAddImmediately;
+        Context->ForEachKeyMapping([&](const FEnhancedActionKeyMapping& Mapping)
+        {
+            if (!Mapping.Action) return;
+            const FString Key = Mapping.Key.ToString();
+            const FString Action = Mapping.Action->GetName();
+            if ((bMovement || bMenu) && !Mapping.Key.IsValid())
+                Errors.Add(FString::Printf(TEXT("%s/%s uses an unregistered key %s."), *Context->GetName(), *Action, *Key));
+            TArray<FString> Tokens;
+            const bool bKnownXR = Key.ParseIntoArray(Tokens, TEXT("_")) == EKeys::NUM_XR_KEY_TOKENS
+                && KnownProfiles.Contains(Tokens[0]);
+            if (bKnownXR && Mapping.Action->ValueType == EInputActionValueType::Axis2D)
+            {
+                if (!Mapping.Key.IsAxis2D() || Tokens[3] != TEXT("2D"))
+                    Errors.Add(FString::Printf(TEXT("%s/%s binds an OpenXR vector action to scalar path key %s."),
+                        *Context->GetName(), *Action, *Key));
+                if (!Mapping.Modifiers.IsEmpty())
+                    Errors.Add(FString::Printf(TEXT("%s/%s modifies the complete XR vector at mapping level (%s)."),
+                        *Context->GetName(), *Action, *Key));
+            }
+            if (bMovement && Action == TEXT("IA_Walk") && bKnownXR)
+                VectorWalkKeys.Add(Key);
+            if (bTemplate && (Action == TEXT("IA_Move") || Action == TEXT("IA_Turn") || Action.StartsWith(TEXT("IA_Turn_"))))
+                Errors.Add(FString::Printf(TEXT("Legacy template locomotion %s remains mapped to %s."), *Action, *Key));
+        });
+    }
+    if (!bMovementRegistered)
+        Errors.Add(TEXT("The locomotion context is not registered for OpenXR session creation and immediate Enhanced Input use."));
+    for (const FString& Key : ExpectedWalkKeys)
+        if (!VectorWalkKeys.Contains(Key))
+            Errors.Add(FString::Printf(TEXT("No cooked vector-parent walk mapping exists for %s."), *Key));
+    for (const FString& Key : VectorWalkKeys)
+        if (!ExpectedWalkKeys.Contains(Key))
+            Errors.Add(FString::Printf(TEXT("Unexpected XR walk mapping needs a validated provider/type contract: %s."), *Key));
+    Failure = FString::Join(Errors, TEXT("\n"));
+    return Errors.IsEmpty();
+}
+
+void UGratiaRuntimeVerification::OnReactionQAContact(FName ZoneName, int32 HandIndex, float HandSpeed, int32 Mood)
+{
+    ++ReactionQAEventCount;
+    UGratiaInteraction* Interaction = GetRuntime().TargetCharacter.IsValid() ? GetRuntime().TargetCharacter->Interaction.Get() : nullptr;
+    ReactionQAHandIndex = HandIndex;
+    ReactionQASerial = Interaction ? Interaction->ReactionSerial : 0;
+    bReactionQAContactReceived = ZoneName == FName(*ReactionQAZone) && HandIndex == 0 && ReactionQASerial > 0;
+    TestCheck(bReactionQAContactReceived, TEXT("Synthetic QA hand reached the requested zone through the ordinary contact event"));
+    UE_LOG(LogGratiaVerification, Display,
+        TEXT("REACTION QA EVENT: source=synthetic-resource-QA zone=%s hand=%d serial=%d speed=%.3f mood=%d events=%d; not real VR tracking/contact acceptance"),
+        *ZoneName.ToString(), HandIndex, ReactionQASerial, HandSpeed, Mood, ReactionQAEventCount);
+}
+
+void UGratiaRuntimeVerification::RunReactionResourceQA(float DeltaSeconds)
+{
+    if (bReactionQACompleted) return;
+    AGratiaStage1Runtime& Runtime = GetRuntime();
+    if (FMath::IsFinite(DeltaSeconds) && DeltaSeconds > 0.0f) ReactionQASeconds += DeltaSeconds;
+    if (Runtime.bXRActive || bSmokeTest || bSelfTest || SoakDuration > 0.0f || PerfDuration > 0.0f)
+    {
+        TestCheck(false, TEXT("Reaction resource QA requires a separate desktop -nohmd invocation without smoke/selftest/soak"));
+        FinishReactionResourceQA();
+        return;
+    }
+    AGratiaPreviewCharacter* Character = Runtime.TargetCharacter.Get();
+    UGratiaCharacterProfile* Profile = Character ? Character->CharacterProfile.Get() : nullptr;
+    UGratiaInteraction* Interaction = Character ? Character->Interaction.Get() : nullptr;
+    USkeletalMeshComponent* Component = Character ? Character->CharacterMesh.Get() : nullptr;
+    UGratiaAnimInstance* Animation = Component ? Cast<UGratiaAnimInstance>(Component->GetAnimInstance()) : nullptr;
+    if (!bReactionQAStarted)
+    {
+        if (ReactionQASeconds < 3.0f) return;
+        bReactionQAStarted = true;
+        UE_LOG(LogGratiaVerification, Display,
+            TEXT("REACTION QA CONFIG: source=synthetic-resource-QA zone=%s expected_clip=%s corrective_prefix=%s profile=%s; visual hand injection tests resource routing, not controller input or collision surface accuracy"),
+            *ReactionQAZone, *ReactionQAExpectedClip, *ReactionQACorrectivePrefix, Profile ? *Profile->GetPathName() : TEXT("MISSING"));
+        TestCheck(Character && Profile && Component && Interaction && Animation && Character->IsIdlePreview(),
+            TEXT("Reaction resource QA has an explicit character target, profile, native reaction animation and idle base"));
+        TestCheck(Profile && Profile->Capabilities.bContacts && Profile->Capabilities.bReactionAnimations
+            && Profile->Capabilities.bFacialReactions && Profile->bAuthoredReactionFacialCurves,
+            TEXT("The requested resource fixture supports contacts, authored reaction clips and facial curves"));
+        if (bTestFailed) { FinishReactionResourceQA(); return; }
+        UAnimSequence* Expected = ReactionQAExpectedClip.IsEmpty() ? nullptr : LoadObject<UAnimSequence>(nullptr, *ReactionQAExpectedClip);
+        const TObjectPtr<UAnimSequence>* RoutedClip = Profile->ReactionClips.Find(FName(*ReactionQAZone));
+        TestCheck(Expected && RoutedClip && RoutedClip->Get() == Expected && Component->GetSkeletalMeshAsset()
+            && Expected->GetSkeleton() == Component->GetSkeletalMeshAsset()->GetSkeleton() && Expected->GetPlayLength() > 0.0f,
+            TEXT("The actual profile zone mapping references the exact expected cooked clip and compatible skeleton"));
+        if (bTestFailed) { FinishReactionResourceQA(); return; }
+        ReactionQAClip = Expected;
+        bReactionQARequireCorrective = !ReactionQACorrectivePrefix.IsEmpty();
+        Interaction->ResetState();
+        Interaction->bDemo = false;
+        for (int32 Index = 0; Index < Interaction->Zones.Num(); ++Index)
+            if (Interaction->Zones[Index].Name == FName(*ReactionQAZone)) { ReactionQAZoneIndex = Index; break; }
+        TestCheck(Interaction->Zones.IsValidIndex(ReactionQAZoneIndex) && !Interaction->Zones[ReactionQAZoneIndex].bSceneActor,
+            TEXT("The requested character contact zone exists in the runtime profile"));
+        if (bTestFailed) { FinishReactionResourceQA(); return; }
+
+        // Sample cooked curve data, never editor-only raw curves. Neutral correction alone
+        // cannot satisfy the dynamic correction requirement for the two new arm paths.
+        for (const TPair<FName, FName>& Mapping : Profile->SemanticMorphs)
+            if (!Mapping.Value.IsNone() && Expected->HasCurveData(Mapping.Value, false))
+                ReactionQAFacialCurves.AddUnique(Mapping.Value);
+        for (UMorphTarget* Morph : Component->GetSkeletalMeshAsset()->GetMorphTargets())
+        {
+            if (!Morph) continue;
+            const FName Name = Morph->GetFName();
+            if (bReactionQARequireCorrective && Name.ToString().StartsWith(ReactionQACorrectivePrefix)
+                && !Name.ToString().Contains(TEXT("Neutral")) && Expected->HasCurveData(Name, false))
+                ReactionQACorrectiveCurves.Add(Name);
+        }
+        bool bCurvesFinite = true;
+        float BestFaceScore = -1.0f;
+        const FName Head = Profile->ResolveBone(TEXT("Head"));
+        const int32 HeadIndex = Expected->GetSkeleton()->GetReferenceSkeleton().FindBoneIndex(Head);
+        FTransform HeadStart = FTransform::Identity;
+        if (HeadIndex != INDEX_NONE)
+            Expected->GetBoneTransform(HeadStart, FSkeletonPoseBoneIndex(HeadIndex), FAnimExtractContext(0.0), false);
+        for (int32 Sample = 0; Sample <= 60; ++Sample)
+        {
+            const float Time = Expected->GetPlayLength() * Sample / 60.0f;
+            const FAnimExtractContext Context(Time);
+            float FacePeak = 0.0f, ExpressiveScore = 0.0f;
+            for (const FName Name : ReactionQAFacialCurves)
+            {
+                const float Value = Expected->EvaluateCurveData(Name, Context, false);
+                bCurvesFinite &= FMath::IsFinite(Value);
+                if (FMath::IsFinite(Value)) FacePeak = FMath::Max(FacePeak, FMath::Abs(Value));
+            }
+            ReactionQACookedFacialPeak = FMath::Max(ReactionQACookedFacialPeak, FacePeak);
+            for (const TPair<FName, FName>& Mapping : Profile->SemanticMorphs)
+            {
+                const FString Semantic = Mapping.Key.ToString();
+                if (Semantic.StartsWith(TEXT("Blink")) || Semantic.StartsWith(TEXT("Look")) || Mapping.Value.IsNone()) continue;
+                const float Value = Expected->EvaluateCurveData(Mapping.Value, Context, false);
+                if (FMath::IsFinite(Value)) ExpressiveScore += FMath::Abs(Value);
+            }
+            for (const FName Name : ReactionQACorrectiveCurves)
+            {
+                const float Value = Expected->EvaluateCurveData(Name, Context, false);
+                bCurvesFinite &= FMath::IsFinite(Value);
+                if (FMath::IsFinite(Value)) ReactionQACookedCorrectivePeak = FMath::Max(ReactionQACookedCorrectivePeak, FMath::Abs(Value));
+            }
+            if (HeadIndex != INDEX_NONE)
+            {
+                FTransform HeadAtTime = FTransform::Identity;
+                Expected->GetBoneTransform(HeadAtTime, FSkeletonPoseBoneIndex(HeadIndex), Context, false);
+                bCurvesFinite &= IsFiniteTransform(HeadAtTime) && IsFiniteTransform(HeadStart);
+                ReactionQAHeadRotationDegrees = FMath::Max(ReactionQAHeadRotationDegrees,
+                    float(FMath::RadiansToDegrees(HeadStart.GetRotation().AngularDistance(HeadAtTime.GetRotation()))));
+            }
+            // Prefer a fully blended expressive frame, rather than either fade boundary.
+            if (Time >= 0.25f && Time <= Expected->GetPlayLength() - 0.3f && ExpressiveScore > BestFaceScore)
+            {
+                BestFaceScore = ExpressiveScore;
+                ReactionQACaptureTime = Time;
+            }
+        }
+        TestCheck(bCurvesFinite && ReactionQACookedFacialPeak > 0.01f,
+            TEXT("The imported cooked clip contains finite nonzero facial morph curves mapped by this profile"));
+        if (bReactionQARequireCorrective)
+            TestCheck(ReactionQACookedCorrectivePeak > 0.01f,
+                TEXT("The imported cooked clip contains nonzero dynamic corrective curves with the requested prefix"));
+        else
+            TestCheck(ReactionQAHeadRotationDegrees > 0.1f,
+                TEXT("The facial response clip contains actual semantic head bone motion"));
+        UE_LOG(LogGratiaVerification, Display,
+            TEXT("REACTION QA RESOURCE: clip=%s duration=%.3f facial_curves=%d facial_peak=%.6f corrective_curves=%d corrective_peak=%.6f head_motion_deg=%.4f capture_time=%.3f samples=61 raw_data=false"),
+            *Expected->GetPathName(), Expected->GetPlayLength(), ReactionQAFacialCurves.Num(), ReactionQACookedFacialPeak,
+            ReactionQACorrectiveCurves.Num(), ReactionQACookedCorrectivePeak, ReactionQAHeadRotationDegrees, ReactionQACaptureTime);
+        if (bTestFailed) { FinishReactionResourceQA(); return; }
+
+        const FGratiaContactZone& TargetZone = Interaction->Zones[ReactionQAZoneIndex];
+        const FVector Center = Interaction->GetZoneWorldPosition(ReactionQAZoneIndex);
+        const double Scale = Character->GetActorScale3D().GetAbsMax();
+        const double Reach = TargetZone.Radius * Scale + TargetZone.Settings.TouchPaddingCm - 0.25;
+        bool bFoundPoint = false;
+        double BestClearance = -UE_BIG_NUMBER;
+        for (int32 X = -3; X <= 3; ++X)
+            for (int32 Y = -3; Y <= 3; ++Y)
+                for (int32 Z = -3; Z <= 3; ++Z)
+                {
+                    const FVector Offset = FVector(X, Y, Z) * (Reach / 3.0);
+                    if (Offset.Size() > Reach) continue;
+                    const FVector Point = Center + Offset;
+                    double Clearance = Reach - Offset.Size();
+                    bool bWins = true;
+                    for (int32 Other = 0; Other < Interaction->Zones.Num(); ++Other)
+                    {
+                        const FGratiaContactZone& Zone = Interaction->Zones[Other];
+                        if (Other == ReactionQAZoneIndex || Zone.bSceneActor || Zone.Priority > TargetZone.Priority
+                            || Zone.Priority == TargetZone.Priority && Other > ReactionQAZoneIndex) continue;
+                        const double Gap = FVector::Distance(Point, Interaction->GetZoneWorldPosition(Other))
+                            - Zone.Radius * Scale - Zone.Settings.TouchPaddingCm;
+                        Clearance = FMath::Min(Clearance, Gap);
+                        if (Gap <= 0.25) { bWins = false; break; }
+                    }
+                    if (bWins && Clearance > BestClearance)
+                    {
+                        bFoundPoint = true; BestClearance = Clearance; ReactionQATouchOffset = Offset;
+                    }
+                }
+        TestCheck(bFoundPoint, TEXT("A synthetic sample lies in the requested zone outside every competing higher-priority zone"));
+        if (bTestFailed) { FinishReactionResourceQA(); return; }
+        Interaction->OnContactReaction.AddDynamic(this, &UGratiaRuntimeVerification::OnReactionQAContact);
+        UE_LOG(LogGratiaVerification, Display, TEXT("REACTION QA SAMPLE: zone=%s offset_cm=%s priority_clearance_cm=%.3f"),
+            *ReactionQAZone, *ReactionQATouchOffset.ToString(), BestClearance);
+    }
+    if (!Character || !Profile || !Interaction || !Animation || !ReactionQAClip.IsValid())
+    {
+        TestCheck(false, TEXT("Reaction resource QA target and animation remain valid during playback"));
+        FinishReactionResourceQA(); return;
+    }
+    // Runtime updates untracked desktop hands first; this explicit opt-in synthetic
+    // sample is then consumed by the normal interaction tick before animation evaluation.
+    const FVector Point = Interaction->GetZoneWorldPosition(ReactionQAZoneIndex) + ReactionQATouchOffset;
+    const FTransform Touch(FQuat::Identity, Point);
+    Interaction->SetHandSample(true, Touch, Touch, !bReactionQAContactReceived);
+    Interaction->SetHandSample(false, FTransform::Identity, FTransform::Identity, false);
+    if (bTestFailed) { FinishReactionResourceQA(); return; }
+    if (bReactionQAContactReceived && Animation->LastReactionSerial == static_cast<uint32>(ReactionQASerial))
+    {
+        if (!bReactionQAClipObserved)
+        {
+            bReactionQAClipObserved = true;
+            TestCheck(Animation->ReactionClip == ReactionQAClip.Get() && Animation->IsReactionCuePlaying(),
+                TEXT("The normal animation instance selected and plays the exact requested clip after the contact serial"));
+            if (Character->ReactionPresentation && Character->ReactionPresentation->bPresentCaptions && Profile->ContactSettings.CaptionSeconds > 0.0f)
+                TestCheck(Character->ReactionPresentation->IsCaptionVisible()
+                    && Character->ReactionPresentation->GetCaptionText().Contains(ReactionQAZone),
+                    TEXT("The event subscriber presents the actual contact zone caption"));
+            UE_LOG(LogGratiaVerification, Display, TEXT("REACTION QA SELECTED: zone=%s serial=%d clip=%s time=%.4f duration=%.4f"),
+                *ReactionQAZone, ReactionQASerial, *GetPathNameSafe(Animation->ReactionClip), Animation->ReactionTime, Animation->ReactionClipDuration);
+        }
+        bool bEvaluatedFinite = true;
+        for (const FName Name : ReactionQAFacialCurves)
+        {
+            const float Value = Animation->GetCurveValue(Name);
+            bEvaluatedFinite &= FMath::IsFinite(Value);
+            if (FMath::IsFinite(Value)) ReactionQAEvaluatedFacialPeak = FMath::Max(ReactionQAEvaluatedFacialPeak, FMath::Abs(Value));
+        }
+        for (const FName Name : ReactionQACorrectiveCurves)
+        {
+            const float Value = Animation->GetCurveValue(Name);
+            bEvaluatedFinite &= FMath::IsFinite(Value);
+            if (FMath::IsFinite(Value)) ReactionQAEvaluatedCorrectivePeak = FMath::Max(ReactionQAEvaluatedCorrectivePeak, FMath::Abs(Value));
+        }
+        if (!bEvaluatedFinite) TestCheck(false, TEXT("The blended reaction evaluation stays finite"));
+        if (!bReactionQAScreenshotRequested && Animation->ReactionTime >= ReactionQACaptureTime)
+        {
+            TestCheck(FApp::CanEverRender() && GEngine && GEngine->GameViewport,
+                TEXT("The packaged reaction QA has a viewport for its expressive capture"));
+            if (bTestFailed) { FinishReactionResourceQA(); return; }
+            FScreenshotRequest::RequestScreenshot(FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Screenshots/Windows/GratiaReactionQA.png")),
+                false, true, false);
+            ReactionQAScreenshotPath = FScreenshotRequest::GetFilename();
+            bReactionQAScreenshotRequested = true;
+            ReactionQAScreenshotSeconds = ReactionQASeconds;
+            FName BlendObservationCurve;
+            float SourceCurveSample = 0.0f, BlendedCurveSample = 0.0f;
+            for (const FName Name : ReactionQAFacialCurves)
+            {
+                const float Source = ReactionQAClip->EvaluateCurveData(Name, FAnimExtractContext(Animation->ReactionTime), false);
+                if (FMath::IsFinite(Source) && FMath::Abs(Source) > FMath::Abs(SourceCurveSample))
+                {
+                    BlendObservationCurve = Name; SourceCurveSample = Source; BlendedCurveSample = Animation->GetCurveValue(Name);
+                }
+            }
+            UE_LOG(LogGratiaVerification, Display,
+                TEXT("REACTION QA CAPTURE: serial=%d clip=%s sampled_time=%.4f duration=%.4f contact_response_weight=%.4f facial_blended_peak=%.6f corrective_blended_peak=%.6f curve=%s source_curve_sample=%.6f blended_curve_sample=%.6f observed_curve_ratio=%.4f screenshot=%s; desktop synthetic resource QA; observed ratio includes base pose and evaluation timing"),
+                ReactionQASerial, *GetPathNameSafe(Animation->ReactionClip), Animation->ReactionTime, Animation->ReactionClipDuration,
+                Interaction->Reaction, ReactionQAEvaluatedFacialPeak, ReactionQAEvaluatedCorrectivePeak, *BlendObservationCurve.ToString(),
+                SourceCurveSample, BlendedCurveSample, FMath::Abs(SourceCurveSample) > 0.001f ? BlendedCurveSample / SourceCurveSample : 0.0f,
+                *ReactionQAScreenshotPath);
+        }
+        if (bReactionQAScreenshotRequested && !Animation->IsReactionCuePlaying()
+            && ReactionQASeconds >= ReactionQAScreenshotSeconds + 0.5f)
+        {
+            FinishReactionResourceQA(); return;
+        }
+    }
+    if (ReactionQASeconds >= 20.0f)
+    {
+        UE_LOG(LogGratiaVerification, Error, TEXT("REACTION QA TIMEOUT: %s"), *Interaction->GetContactDiagnostics());
+        TestCheck(false, TEXT("The ordinary contact event, clip playback and screenshot complete before the reaction QA timeout"));
+        FinishReactionResourceQA();
+    }
+}
+
+void UGratiaRuntimeVerification::FinishReactionResourceQA()
+{
+    if (bReactionQACompleted) return;
+    bReactionQACompleted = true;
+    if (!bTestFailed)
+    {
+        TestCheck(bReactionQAContactReceived && ReactionQAEventCount == 1 && ReactionQAHandIndex == 0 && ReactionQASerial > 0,
+            TEXT("One ordinary contact event from the explicitly synthetic hand triggered this QA run"));
+        TestCheck(bReactionQAClipObserved && ReactionQAEvaluatedFacialPeak > 0.01f,
+            TEXT("The selected reaction contributes nonzero facial curves to the evaluated blended pose"));
+        if (bReactionQARequireCorrective)
+            TestCheck(ReactionQAEvaluatedCorrectivePeak > 0.01f,
+                TEXT("The selected reaction contributes nonzero dynamic corrective curves to the evaluated blended pose"));
+        TestCheck(bReactionQAScreenshotRequested && IFileManager::Get().FileSize(*ReactionQAScreenshotPath) > 0,
+            TEXT("The expressive packaged desktop screenshot was saved"));
+    }
+    if (GetRuntime().TargetCharacter.IsValid() && GetRuntime().TargetCharacter->Interaction)
+    {
+        UGratiaInteraction* Interaction = GetRuntime().TargetCharacter->Interaction;
+        Interaction->OnContactReaction.RemoveDynamic(this, &UGratiaRuntimeVerification::OnReactionQAContact);
+        Interaction->SetHandSample(true, FTransform::Identity, FTransform::Identity, false);
+        Interaction->SetHandSample(false, FTransform::Identity, FTransform::Identity, false);
+        Interaction->ResetState();
+        if (GetRuntime().TargetCharacter->ReactionPresentation)
+            TestCheck(!GetRuntime().TargetCharacter->ReactionPresentation->IsCaptionVisible()
+                && GetRuntime().TargetCharacter->ReactionPresentation->GetCaptionText().IsEmpty(),
+                TEXT("Resetting the contact source clears its event subscriber caption"));
+    }
+    UE_LOG(LogGratiaVerification, Display,
+        TEXT("REACTION QA RESULT: zone=%s expected_clip=%s serial=%d events=%d cooked_facial_peak=%.6f evaluated_facial_peak=%.6f cooked_corrective_peak=%.6f evaluated_corrective_peak=%.6f elapsed=%.3f"),
+        *ReactionQAZone, *ReactionQAExpectedClip, ReactionQASerial, ReactionQAEventCount, ReactionQACookedFacialPeak,
+        ReactionQAEvaluatedFacialPeak, ReactionQACookedCorrectivePeak, ReactionQAEvaluatedCorrectivePeak, ReactionQASeconds);
+    if (bTestFailed)
+    {
+        UE_LOG(LogGratiaVerification, Error, TEXT("GRATIA_REACTION_QA_FAIL"));
+    }
+    else
+    {
+        UE_LOG(LogGratiaVerification, Display, TEXT("GRATIA_REACTION_QA_PASS"));
+    }
+    FPlatformMisc::RequestExitWithStatus(false, bTestFailed ? 1 : 0, TEXT("GratiaReactionResourceQA"));
+}
+
 void UGratiaRuntimeVerification::RunRequestedTests(float DeltaSeconds)
 {
     AGratiaStage1Runtime& Runtime = GetRuntime();
+    if (bReactionQAEnabled)
+    {
+        RunReactionResourceQA(DeltaSeconds);
+        return;
+    }
     if (!bSmokeTest && !bSelfTest) return;
     if (FMath::IsFinite(DeltaSeconds) && DeltaSeconds > 0.0f) TestElapsedSeconds += DeltaSeconds;
     if (bRecenterTestPending && !Runtime.bPendingRecenter)
@@ -381,7 +866,9 @@ void UGratiaRuntimeVerification::RunRequestedTests(float DeltaSeconds)
         SampleCharacterAnimation(bFinish);
         bCharacterMotionChecksDone = bFinish;
     }
-    if (bTestChecksDone && bCharacterMotionChecksDone && TestElapsedSeconds >= 8.0f && !bRecenterTestPending)
+    if (bTestChecksDone && bSelfTest) RunInputIntegration();
+    if (bTestChecksDone && bCharacterMotionChecksDone && TestElapsedSeconds >= 8.0f && !bRecenterTestPending
+        && (!bSelfTest || bInputIntegrationDone))
     {
         if (bTestFailed)
         {
@@ -396,6 +883,67 @@ void UGratiaRuntimeVerification::RunRequestedTests(float DeltaSeconds)
     }
 }
 
+void UGratiaRuntimeVerification::RunInputIntegration()
+{
+    AGratiaStage1Runtime& Runtime = GetRuntime();
+    if (bInputIntegrationDone) return;
+    if (Runtime.bXRActive)
+    {
+        // Never inject player movement into a real headset test or soak session.
+        TestSkip(TEXT("Synthetic keyboard movement is disabled in XR; this integration test does not prove OpenXR controller input"));
+        bInputIntegrationDone = true;
+        return;
+    }
+    if (bRecenterTestPending || Runtime.bPendingRecenter) return;
+    APlayerController* PC = Runtime.PlayerController.Get();
+    APawn* Pawn = Runtime.PlayerPawn.Get();
+    UGratiaLocomotion* Movement = Runtime.Locomotion;
+    if (!PC || !Pawn || !Movement || !Movement->IsReady())
+    {
+        if (PC && bInputIntegrationStarted)
+            PC->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W, IE_Released, 0.0f));
+        if (Pawn && bInputIntegrationStarted)
+            Pawn->SetActorTransform(InputOriginalPawn, false, nullptr, ETeleportType::TeleportPhysics);
+        TestCheck(false, TEXT("Enhanced-input integration has a ready player, pawn and locomotion component"));
+        bInputIntegrationDone = true;
+        return;
+    }
+    if (!bInputIntegrationStarted)
+    {
+        InputOriginalPawn = Pawn->GetActorTransform();
+        bInputEventAccepted = PC->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W, IE_Pressed, 1.0f));
+        bInputIntegrationStarted = true;
+        UE_LOG(LogGratiaVerification, Display, TEXT("INPUT INTEGRATION: simulated W -> cooked mapping -> bound IA_Walk -> normal locomotion; OpenXR hardware is outside this test"));
+        return;
+    }
+    ++InputIntegrationFrames;
+    if (!bInputIntegrationReleased)
+    {
+        bObservedKeyboardKey |= PC->IsInputKeyDown(EKeys::W);
+        bObservedMappedWalk |= Movement->MappedStick.Y > Movement->StickDeadZone;
+        ObservedInputTravelCm = FMath::Max(ObservedInputTravelCm,
+            FVector::Dist2D(Pawn->GetActorLocation(), InputOriginalPawn.GetLocation()));
+        if (InputIntegrationFrames >= 6)
+        {
+            PC->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W, IE_Released, 0.0f));
+            bInputIntegrationReleased = true;
+            InputIntegrationFrames = 0;
+        }
+        return;
+    }
+    // Allow the release event to travel through PlayerInput and both tick orders.
+    if (InputIntegrationFrames < 3) return;
+    TestCheck(bInputEventAccepted && bObservedKeyboardKey, TEXT("A simulated keyboard press enters the player's real key state"));
+    TestCheck(bObservedMappedWalk, TEXT("The cooked keyboard mapping produces the bound IA_Walk forward value"));
+    TestCheck(ObservedInputTravelCm > 0.1, TEXT("Bound IA_Walk moves the real pawn through normal locomotion across several frames"));
+    TestCheck(!PC->IsInputKeyDown(EKeys::W) && Movement->MappedStick.IsNearlyZero(0.001)
+        && Movement->LastPawnDelta.IsNearlyZero(0.001), TEXT("Keyboard release clears the bound walk action and stops normal pawn movement"));
+    UE_LOG(LogGratiaVerification, Display, TEXT("INPUT INTEGRATION RESULT: key=%d mapped=%d distance_cm=%.3f release_reason=%s"),
+        bObservedKeyboardKey, bObservedMappedWalk, ObservedInputTravelCm, *Movement->MovementReason);
+    Pawn->SetActorTransform(InputOriginalPawn, false, nullptr, ETeleportType::TeleportPhysics);
+    bInputIntegrationDone = true;
+}
+
 void UGratiaRuntimeVerification::RunSoakAndMetrics(float DeltaSeconds)
 {
     AGratiaStage1Runtime& Runtime = GetRuntime();
@@ -403,42 +951,72 @@ void UGratiaRuntimeVerification::RunSoakAndMetrics(float DeltaSeconds)
         || !FMath::IsFinite(DeltaSeconds) || DeltaSeconds <= 0.0f) return;
     MetricsSeconds += DeltaSeconds;
     MetricsInterval += DeltaSeconds;
-    if (SoakDuration > 0.0f && Runtime.TestCharacter.IsValid())
+    if (SoakDuration > 0.0f && Runtime.TargetCharacter.IsValid())
     {
-        auto* Character = Runtime.TestCharacter.Get();
+        auto* Character = Runtime.TargetCharacter.Get();
+        const auto* Profile = Character->CharacterProfile.Get();
         auto* Contact = Character->Interaction.Get();
-        const int32 Cycle = FMath::FloorToInt(FMath::Max(0.0f, MetricsSeconds - 3.0f) / 3.0f);
-        const int32 ZoneIndex = Cycle % Contact->Zones.Num();
-        if (Cycle != SoakCycle)
+        if (Contact)
         {
-            SoakCycle = Cycle;
-            Contact->Quality = (Cycle / Contact->Zones.Num()) % 3;
-            Contact->Mood = Cycle % 3;
-            Contact->bHairMotion = Contact->bClothMotion = Contact->bBodyMotion = true;
-            Contact->bPhysicalMotion = Cycle % 9 != 8;
-            Contact->bLocalSpring = Cycle % 7 != 6;
+            // Keep demonstration events out of actual synthetic-contact coverage.
+            Contact->bDemo = false;
+            const int32 Serial = Contact->ReactionSerial;
+            if (bSoakReactionBaselineSet && Serial >= LastSoakReactionSerial)
+                ActualSoakReactions += Serial - LastSoakReactionSerial;
+            LastSoakReactionSerial = Serial;
+            bSoakReactionBaselineSet = true;
         }
-        const auto& Zone = Contact->Zones[ZoneIndex];
-        FVector Target = Zone.Bone.IsNone() ? FVector(155, 150, 108) :
-            Character->CharacterMesh->GetSocketLocation(Zone.Bone) + Character->GetActorTransform().TransformVectorNoScale(Zone.Offset);
-        Target += FVector(-Zone.Radius - 6.0f, 0, 0);
-        const FTransform Raw(FQuat::Identity, Target);
-        const FTransform Start(FQuat::Identity, Target + FVector(-100, 0, 0));
-        const FTransform Visual = Contact->ConstrainHand(Start, Raw);
-        const bool Held = MetricsSeconds >= 3.0f && MetricsSeconds < SoakDuration - 5.0f
-            && FMath::Fmod(MetricsSeconds - 3.0f, 3.0f) < 2.0f;
-        const int32 ContactHand = (Cycle / Contact->Zones.Num()) % 2;
-        Contact->SetHandSample(true, Raw, Visual, Held && (ContactHand == 0 || Cycle % 3 == 0));
-        Contact->SetHandSample(false, Raw, Visual, Held && (ContactHand == 1 || Cycle % 3 == 0));
-        if (Character->SecondaryMotion->HasFault()) bTestFailed = true;
-        for (const FTransform& Bone : Character->CharacterMesh->GetComponentSpaceTransforms())
-            if (Bone.ContainsNaN()) bTestFailed = true;
+        if (Profile && Profile->Capabilities.bContacts && Contact && !Contact->Zones.IsEmpty())
+        {
+            const int32 Cycle = FMath::FloorToInt(FMath::Max(0.0f, MetricsSeconds - 3.0f) / 3.0f);
+            const int32 ZoneIndex = Cycle % Contact->Zones.Num();
+            if (Cycle != SoakCycle)
+            {
+                SoakCycle = Cycle;
+                Contact->Quality = (Cycle / Contact->Zones.Num()) % 3;
+                Contact->Mood = Cycle % 3;
+                Contact->bHairMotion = Contact->bClothMotion = Contact->bBodyMotion = true;
+                Contact->bPhysicalMotion = Profile->Capabilities.bSecondaryPhysics && Cycle % 9 != 8;
+                Contact->bLocalSpring = Profile->Capabilities.bLocalSprings && Cycle % 7 != 6;
+            }
+            const auto& Zone = Contact->Zones[ZoneIndex];
+            FVector Target = Contact->GetZoneWorldPosition(ZoneIndex);
+            Target += FVector(-Zone.Radius - Profile->ContactSettings.HandRadiusCm, 0, 0);
+            const FTransform Raw(FQuat::Identity, Target);
+            const FTransform Start(FQuat::Identity, Target + FVector(-100, 0, 0));
+            const FTransform VisualLeft = Contact->ConstrainHand(Start, Raw, true);
+            const FTransform VisualRight = Contact->ConstrainHand(Start, Raw, false);
+            const float ReleaseSeconds = FMath::Max(5.0f,
+                Profile->ContactSettings.ReactionSeconds + Profile->ContactSettings.CooldownSeconds + 1.0f);
+            const bool Held = MetricsSeconds >= 3.0f && MetricsSeconds < SoakDuration - ReleaseSeconds
+                && FMath::Fmod(MetricsSeconds - 3.0f, 3.0f) < 2.0f;
+            const int32 ContactHand = (Cycle / Contact->Zones.Num()) % 2;
+            Contact->SetHandSample(true, Raw, VisualLeft, Held && (ContactHand == 0 || Cycle % 3 == 0));
+            Contact->SetHandSample(false, Raw, VisualRight, Held && (ContactHand == 1 || Cycle % 3 == 0));
+        }
+        else if (!bSoakContactAvailabilityReported)
+        {
+            bSoakContactAvailabilityReported = true;
+            if (!Profile)
+                TestCheck(false, TEXT("Soak target has a CharacterProfile"));
+            else if (Profile->Capabilities.bContacts)
+                TestCheck(false, TEXT("An enabled contact capability supplies a component and at least one runtime zone for soak"));
+            else
+                TestSkip(TEXT("Soak profile has Contacts disabled; no synthetic contact cycles are generated"));
+        }
+        if (Character->SecondaryMotion && Character->SecondaryMotion->HasFault()) bTestFailed = true;
+        if (Character->CharacterMesh)
+        {
+            for (const FTransform& Bone : Character->CharacterMesh->GetComponentSpaceTransforms())
+                if (!IsFiniteTransform(Bone)) bTestFailed = true;
+        }
+        else bTestFailed = true;
     }
     if (MetricsInterval >= 1.0f)
     {
         MetricsInterval = 0.0f;
-        const auto* Contact = Runtime.TestCharacter.IsValid() ? Runtime.TestCharacter->Interaction.Get() : nullptr;
-        const auto* Physics = Runtime.TestCharacter.IsValid() ? Runtime.TestCharacter->SecondaryMotion.Get() : nullptr;
+        const auto* Contact = Runtime.TargetCharacter.IsValid() ? Runtime.TargetCharacter->Interaction.Get() : nullptr;
+        const auto* Physics = Runtime.TargetCharacter.IsValid() ? Runtime.TargetCharacter->SecondaryMotion.Get() : nullptr;
         PerfRows += FString::Printf(TEXT("%.3f,%d,%d,%.3f,%.3f,%.3f,%.3f,%d,%d\n"),
             MetricsSeconds, Runtime.bXRActive ? 1 : 0, Contact ? Contact->Quality : 1,
             Runtime.EstimatedFrameMs, Runtime.GameThreadMs, Runtime.RenderThreadMs, Runtime.GPUFrameMs,
@@ -452,17 +1030,42 @@ void UGratiaRuntimeVerification::RunSoakAndMetrics(float DeltaSeconds)
     if (MetricsSeconds < Duration) return;
     bMetricsFinished = true;
     const FString MetricsPath = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("GratiaMetrics.csv"));
-    FFileHelper::SaveStringToFile(PerfRows, *MetricsPath);
-    UE_LOG(LogGratiaVerification, Display, TEXT("METRICS saved=%s duration=%.1f"), *MetricsPath, MetricsSeconds);
+    if (FFileHelper::SaveStringToFile(PerfRows, *MetricsPath))
+    {
+        UE_LOG(LogGratiaVerification, Display, TEXT("METRICS saved=%s duration=%.1f"), *MetricsPath, MetricsSeconds);
+    }
+    else
+    {
+        bTestFailed = true;
+        UE_LOG(LogGratiaVerification, Error, TEXT("METRICS could not save=%s"), *MetricsPath);
+    }
     if (SoakDuration > 0.0f)
     {
-        if (Runtime.TestCharacter.IsValid())
+        if (Runtime.TargetCharacter.IsValid() && Runtime.TargetCharacter->CharacterProfile)
         {
-            auto* Contact = Runtime.TestCharacter->Interaction.Get();
-            for (const auto& Zone : Contact->Zones)
-                UE_LOG(LogGratiaVerification, Display, TEXT("SOAK zone=%s reactions=%d state=%d"), *Zone.Name.ToString(), Zone.Reactions, int32(Zone.State));
-            TestCheck(Contact->Reaction < 0.01f && Contact->ActiveZone == INDEX_NONE, TEXT("Soak returns to neutral after final release"));
-            TestCheck(!Runtime.TestCharacter->SecondaryMotion->HasFault(), TEXT("Soak secondary physics remains finite and bounded"));
+            const auto* Profile = Runtime.TargetCharacter->CharacterProfile.Get();
+            const auto* Contact = Runtime.TargetCharacter->Interaction.Get();
+            if (Profile->Capabilities.bContacts && Contact && !Contact->Zones.IsEmpty())
+            {
+                int32 ZoneTouchEntries = 0;
+                for (const auto& Zone : Contact->Zones)
+                {
+                    ZoneTouchEntries += Zone.Reactions;
+                    UE_LOG(LogGratiaVerification, Display, TEXT("SOAK zone=%s reactions=%d state=%d"), *Zone.Name.ToString(), Zone.Reactions, int32(Zone.State));
+                }
+                const float ReleaseSeconds = FMath::Max(5.0f,
+                    Profile->ContactSettings.ReactionSeconds + Profile->ContactSettings.CooldownSeconds + 1.0f);
+                if (SoakDuration >= 3.0f + ReleaseSeconds + 1.0f)
+                    TestCheck(ActualSoakReactions > 0, TEXT("Soak generated at least one actual runtime contact reaction"));
+                else TestSkip(TEXT("Soak is too short for acquisition and final release; positive contact-reaction coverage is not asserted"));
+                TestCheck(Contact->Reaction < 0.01f && Contact->ActiveZone == INDEX_NONE, TEXT("Soak returns to neutral after final release"));
+                UE_LOG(LogGratiaVerification, Display, TEXT("SOAK CONTACT COVERAGE: generated_cycles=%d zone_touch_entries=%d actual_reaction_serial_events=%d; a generated cycle or zone entry is not proof that its target reaction ran"),
+                    SoakCycle == INDEX_NONE ? 0 : SoakCycle + 1, ZoneTouchEntries, ActualSoakReactions);
+            }
+            if (Profile->Capabilities.bSecondaryPhysics)
+                TestCheck(Runtime.TargetCharacter->SecondaryMotion && !Runtime.TargetCharacter->SecondaryMotion->HasFault(),
+                    TEXT("Soak enabled secondary physics remains finite and bounded"));
+            else TestSkip(TEXT("SecondaryPhysics is disabled in this soak profile"));
         }
         else bTestFailed = true;
         UE_LOG(LogGratiaVerification, Display, TEXT("GRATIA_SOAK_%s seconds=%.1f cycles=%d"), bTestFailed ? TEXT("FAIL") : TEXT("PASS"), MetricsSeconds, SoakCycle);

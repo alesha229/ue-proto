@@ -5,6 +5,10 @@
   "Description": "Gratia PC VR prototype — stage 1",
   "Plugins": [
     {
+      "Name": "AndroidFileServer",
+      "Enabled": false
+    },
+    {
       "Name": "OpenXR",
       "Enabled": true
     },
@@ -65,6 +69,11 @@
     {
       "Name": "GratiaVR",
       "Type": "Runtime",
+      "LoadingPhase": "Default"
+    },
+    {
+      "Name": "GratiaVREditorTools",
+      "Type": "Editor",
       "LoadingPhase": "Default"
     }
   ]

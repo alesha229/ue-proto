@@ -1,35 +1,79 @@
 #include "GratiaInteraction.h"
 #include "GratiaPreviewCharacter.h"
+#include "GratiaAnimInstance.h"
 #include "Camera/CameraComponent.h"
 #include "Components/SkeletalMeshComponent.h"
-#include "Components/TextRenderComponent.h"
 #include "GameFramework/Pawn.h"
 #include "Kismet/GameplayStatics.h"
-#include "Sound/SoundWaveProcedural.h"
 #include "Engine/World.h"
+#include "DrawDebugHelpers.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogGratiaContact, Log, All);
 
+namespace
+{
+    float Nonnegative(float Value)
+    {
+        return FMath::IsFinite(Value) ? FMath::Max(0.0f, Value) : 0.0f;
+    }
+
+    bool ValidBounds(const FVector& Center, const FVector& Extent)
+    {
+        return !Center.ContainsNaN() && !Extent.ContainsNaN()
+            && Extent.X > UE_SMALL_NUMBER && Extent.Y > UE_SMALL_NUMBER && Extent.Z > UE_SMALL_NUMBER;
+    }
+
+    const TCHAR* StateName(EGratiaContactState State)
+    {
+        switch (State)
+        {
+        case EGratiaContactState::Hovered: return TEXT("hover");
+        case EGratiaContactState::Touched: return TEXT("touch");
+        case EGratiaContactState::Held: return TEXT("held");
+        case EGratiaContactState::Cooldown: return TEXT("cooldown");
+        default: return TEXT("idle");
+        }
+    }
+}
+
 void FGratiaContactZone::Step(bool bLeft, bool bRight, bool bHover, float Delta)
 {
+    // This bound limits stalled-frame state jumps; the actual behaviour durations belong to the profile.
     const float StepTime = FMath::IsFinite(Delta) ? FMath::Clamp(Delta, 0.0f, 0.05f) : 0.0f;
     const int32 Owner = Hand == 0 && bLeft ? 0 : Hand == 1 && bRight ? 1 : bLeft ? 0 : bRight ? 1 : INDEX_NONE;
     Elapsed += StepTime;
     if (State == EGratiaContactState::Cooldown)
     {
         Hand = INDEX_NONE;
-        // Require release before rearming. Holding cannot retrigger every cooldown.
-        if (Elapsed >= 0.7f && Owner == INDEX_NONE) { State = bHover ? EGratiaContactState::Hovered : EGratiaContactState::Idle; Elapsed = 0.0f; }
+        if (Elapsed >= Nonnegative(Settings.CooldownSeconds) && Owner == INDEX_NONE)
+        {
+            State = bHover ? EGratiaContactState::Hovered : EGratiaContactState::Idle;
+            Elapsed = 0.0f;
+        }
         return;
     }
     if (State == EGratiaContactState::Touched || State == EGratiaContactState::Held)
     {
-        if (Owner == INDEX_NONE || (!bCanHold && Elapsed >= 0.18f)) { State = EGratiaContactState::Cooldown; Hand = INDEX_NONE; Elapsed = 0.0f; }
-        else { Hand = Owner; if (bCanHold && Elapsed >= 0.4f) State = EGratiaContactState::Held; }
+        if (Owner == INDEX_NONE || (!bCanHold && Elapsed >= Nonnegative(Settings.SingleTouchSeconds)))
+        {
+            State = EGratiaContactState::Cooldown; Hand = INDEX_NONE; Elapsed = 0.0f;
+        }
+        else
+        {
+            Hand = Owner;
+            if (bCanHold && Elapsed >= Nonnegative(Settings.HoldSeconds)) State = EGratiaContactState::Held;
+        }
         return;
     }
-    if (Owner != INDEX_NONE) { State = EGratiaContactState::Touched; Hand = Owner; Elapsed = 0.0f; ++Reactions; }
-    else { State = bHover ? EGratiaContactState::Hovered : EGratiaContactState::Idle; Hand = INDEX_NONE; }
+    if (Owner != INDEX_NONE)
+    {
+        State = EGratiaContactState::Touched; Hand = Owner; Elapsed = 0.0f; ++Reactions;
+    }
+    else
+    {
+        State = bHover ? EGratiaContactState::Hovered : EGratiaContactState::Idle;
+        Hand = INDEX_NONE;
+    }
 }
 
 UGratiaInteraction::UGratiaInteraction()
@@ -38,167 +82,320 @@ UGratiaInteraction::UGratiaInteraction()
     PrimaryComponentTick.TickGroup = TG_PostUpdateWork;
 }
 
-void UGratiaInteraction::MakeZones()
+void UGratiaInteraction::RebuildProfileZones()
 {
+    Character = Cast<AGratiaPreviewCharacter>(GetOwner());
+    UGratiaCharacterProfile* Profile = Character.IsValid() ? Character->CharacterProfile.Get() : nullptr;
+    ActiveProfile = Profile;
+    ContactSettings = Profile ? Profile->ContactSettings : FGratiaContactSettings();
     Zones.Reset();
-    auto Add = [this](const TCHAR* Name, const TCHAR* Bone, float Radius, bool Hold, int32 Priority, FVector Offset = FVector::ZeroVector)
+    ActiveZone = INDEX_NONE;
+    Reaction = Impulse = ReactionSeconds = DemoSeconds = 0.0f;
+    ReactionSerial = 0;
+    for (int32 Hand = 0; Hand < 2; ++Hand)
     {
-        FGratiaContactZone Zone; Zone.Name = Name; Zone.Bone = Bone; Zone.Radius = Radius; Zone.bCanHold = Hold; Zone.Priority = Priority; Zone.Offset = Offset; Zones.Add(Zone);
-    };
-    Add(TEXT("Left hand"), TEXT("DEF-hand_L"), 7.0f, true, 1);
-    Add(TEXT("Right hand"), TEXT("DEF-hand_R"), 7.0f, true, 1);
-    Add(TEXT("Left forearm"), TEXT("DEF-forearm_L"), 9.0f, true, 2);
-    Add(TEXT("Right forearm"), TEXT("DEF-forearm_R"), 9.0f, true, 2);
-    Add(TEXT("Left shoulder"), TEXT("DEF-upper_arm_L"), 11.0f, true, 3);
-    Add(TEXT("Right shoulder"), TEXT("DEF-upper_arm_R"), 11.0f, true, 3);
-    Add(TEXT("Face"), TEXT("DEF-spine_006"), 12.0f, false, 0, FVector(0, 0, 11));
-    Add(TEXT("Hair"), TEXT("DEF-spine_006"), 16.0f, true, 4, FVector(0, 0, 27));
-    Add(TEXT("Upper costume"), TEXT("DEF-spine_003"), 23.0f, true, 5);
-    Add(TEXT("Clothed torso"), TEXT("DEF-spine_002"), 21.0f, true, 6);
-    Add(TEXT("Waist fabric"), TEXT("DEF-spine"), 23.0f, true, 7);
-    Add(TEXT("Left fabric"), TEXT("DEF-thigh_L"), 15.0f, true, 8);
-    Add(TEXT("Right fabric"), TEXT("DEF-thigh_R"), 15.0f, true, 8);
-    Add(TEXT("Scene cube"), TEXT("None"), 32.0f, true, 9);
+        Hands[Hand] = FHandSample();
+        LastConstraint[Hand] = FGratiaContactSolveResult();
+        ContactRecoveryUntil[Hand] = 0.0;
+    }
+    OnContactReset.Broadcast();
+    if (!Profile || !Character->CharacterMesh)
+    {
+        UE_LOG(LogGratiaContact, Warning, TEXT("Interaction waiting for an assigned CharacterProfile and mesh."));
+        return;
+    }
+    if (!Profile->Capabilities.bContacts)
+    {
+        UE_LOG(LogGratiaContact, Display, TEXT("Interaction disabled by profile %s capability."), *Profile->ProfileId.ToString());
+        return;
+    }
+    for (const FGratiaContactZoneDefinition& Definition : Profile->ContactZones)
+    {
+        const FName Bone = Profile->ResolveBone(Definition.BoneSemantic);
+        if (Bone.IsNone() || Character->CharacterMesh->GetBoneIndex(Bone) == INDEX_NONE
+            || !FMath::IsFinite(Definition.Radius) || Definition.Radius <= 0.0f || Definition.Offset.ContainsNaN())
+        {
+            UE_LOG(LogGratiaContact, Warning, TEXT("Skipped invalid contact zone %s: semantic bone=%s resolved=%s."),
+                *Definition.Name.ToString(), *Definition.BoneSemantic.ToString(), *Bone.ToString());
+            continue;
+        }
+        FGratiaContactZone Zone;
+        Zone.Name = Definition.Name; Zone.Bone = Bone; Zone.Offset = Definition.Offset;
+        Zone.Radius = Definition.Radius; Zone.bCanHold = Definition.bCanHold; Zone.Priority = Definition.Priority;
+        Zone.Settings = ContactSettings;
+        Zones.Add(Zone);
+    }
+    FVector Center, Extent;
+    if (SceneBounds(Center, Extent))
+    {
+        FGratiaContactZone Zone;
+        Zone.Name = SceneContactActor->GetFName();
+        Zone.bSceneActor = true; Zone.Priority = MAX_int32; Zone.Radius = Extent.GetMax();
+        Zone.Settings = ContactSettings;
+        Zones.Add(Zone);
+    }
+    UE_LOG(LogGratiaContact, Display,
+        TEXT("Interaction profile=%s zones=%d collision proxies=%d scene actor=%s hold=%.3fs cooldown=%.3fs."),
+        *Profile->ProfileId.ToString(), Zones.Num(), Profile->CollisionProxies.Num(),
+        IsValid(SceneContactActor.Get()) ? *SceneContactActor->GetName() : TEXT("unassigned"),
+        ContactSettings.HoldSeconds, ContactSettings.CooldownSeconds);
+}
+
+void UGratiaInteraction::SetSceneContactActor(AActor* Actor)
+{
+    if (SceneContactActor.Get() == Actor) return;
+    SceneContactActor = Actor;
+    RebuildProfileZones();
 }
 
 void UGratiaInteraction::BeginPlay()
 {
     Super::BeginPlay();
-    Character = Cast<AGratiaPreviewCharacter>(GetOwner());
-    MakeZones();
-    Caption = NewObject<UTextRenderComponent>(GetOwner(), TEXT("ReactionCaption"));
-    GetOwner()->AddInstanceComponent(Caption);
-    Caption->SetupAttachment(GetOwner()->GetRootComponent());
-    Caption->SetWorldSize(3.5f);
-    Caption->SetHorizontalAlignment(EHTA_Center);
-    Caption->SetTextRenderColor(FColor(230, 240, 255));
-    Caption->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-    Caption->RegisterComponent();
-    Caption->SetVisibility(false);
-    UE_LOG(LogGratiaContact, Display, TEXT("Interaction ready: %d zones; hold=0.4s cooldown=0.7s face hold disabled, existing owner then left-hand tie priority."), Zones.Num());
+    RebuildProfileZones();
+}
+
+double UGratiaInteraction::CharacterScale() const
+{
+    return Character.IsValid() ? FMath::Max(double(UE_SMALL_NUMBER), Character->GetActorScale3D().GetAbs().GetMax()) : 1.0;
+}
+
+bool UGratiaInteraction::SceneBounds(FVector& Center, FVector& Extent) const
+{
+    if (!IsValid(SceneContactActor.Get())) return false;
+    SceneContactActor->GetActorBounds(false, Center, Extent);
+    return ValidBounds(Center, Extent);
+}
+
+bool UGratiaInteraction::ResolveProxyPoint(FName Semantic, const FVector& Offset, FVector& Point) const
+{
+    if (!Character.IsValid() || !Character->CharacterMesh || !Character->CharacterProfile || Offset.ContainsNaN()) return false;
+    const FName Bone = Character->CharacterProfile->ResolveBone(Semantic);
+    if (Bone.IsNone() || Character->CharacterMesh->GetBoneIndex(Bone) == INDEX_NONE) return false;
+    Point = Character->CharacterMesh->GetSocketLocation(Bone) + Character->GetActorTransform().TransformVector(Offset);
+    return !Point.ContainsNaN();
 }
 
 FVector UGratiaInteraction::ZonePosition(const FGratiaContactZone& Zone) const
 {
-    if (Zone.Bone.IsNone()) return FVector(155, 150, 108);
-    if (!Character.IsValid()) return FVector::ZeroVector;
-    return Character->CharacterMesh->GetSocketLocation(Zone.Bone) + Character->GetActorTransform().TransformVectorNoScale(Zone.Offset);
+    FVector Center, Extent;
+    if (Zone.bSceneActor) return SceneBounds(Center, Extent) ? Center : GetOwner()->GetActorLocation();
+    if (!Character.IsValid() || !Character->CharacterMesh) return GetOwner()->GetActorLocation();
+    return Character->CharacterMesh->GetSocketLocation(Zone.Bone) + Character->GetActorTransform().TransformVector(Zone.Offset);
+}
+
+FVector UGratiaInteraction::GetZoneWorldPosition(int32 ZoneIndex) const
+{
+    return Zones.IsValidIndex(ZoneIndex) ? ZonePosition(Zones[ZoneIndex]) : GetOwner()->GetActorLocation();
+}
+
+bool UGratiaInteraction::ZoneGap(const FGratiaContactZone& Zone, const FVector& Point, double& Gap) const
+{
+    if (Point.ContainsNaN()) return false;
+    if (Zone.bSceneActor)
+    {
+        FVector Center, Extent;
+        if (!SceneBounds(Center, Extent)) return false;
+        const FVector Relative = Point - Center;
+        const FVector Nearest(
+            FMath::Clamp(Relative.X, -Extent.X, Extent.X),
+            FMath::Clamp(Relative.Y, -Extent.Y, Extent.Y),
+            FMath::Clamp(Relative.Z, -Extent.Z, Extent.Z));
+        Gap = FVector::Distance(Relative, Nearest);
+        return FMath::IsFinite(Gap);
+    }
+    if (!Character.IsValid() || !Character->CharacterMesh || Character->CharacterMesh->GetBoneIndex(Zone.Bone) == INDEX_NONE) return false;
+    Gap = FVector::Distance(Point, ZonePosition(Zone)) - Zone.Radius * CharacterScale();
+    return FMath::IsFinite(Gap);
+}
+
+void UGratiaInteraction::GatherCollisionShapes(TArray<FGratiaContactShape>& Shapes) const
+{
+    Shapes.Reset();
+    if (!Character.IsValid() || !Character->CharacterProfile) return;
+    const UGratiaCharacterProfile* Profile = Character->CharacterProfile;
+    const double Scale = CharacterScale();
+    const double HandRadius = Nonnegative(Profile->ContactSettings.HandRadiusCm);
+    for (const FGratiaCollisionProxyDefinition& Proxy : Profile->CollisionProxies)
+    {
+        FVector Start, End;
+        if (!FMath::IsFinite(Proxy.Radius) || Proxy.Radius <= 0.0f
+            || !ResolveProxyPoint(Proxy.StartBoneSemantic, Proxy.StartOffset, Start)) continue;
+        const double Radius = Proxy.Radius * Scale + HandRadius;
+        if (Proxy.Shape == EGratiaCollisionProxyShape::Capsule)
+        {
+            if (!ResolveProxyPoint(Proxy.EndBoneSemantic, Proxy.EndOffset, End)) continue;
+            Shapes.Add(FGratiaContactShape::Capsule(Start, End, Radius));
+        }
+        else Shapes.Add(FGratiaContactShape::Sphere(Start, Radius));
+    }
+    FVector Center, Extent;
+    if (SceneBounds(Center, Extent)) Shapes.Add(FGratiaContactShape::Box(Center, Extent + FVector(HandRadius)));
+}
+
+FTransform UGratiaInteraction::ConstrainHand(const FTransform& From, const FTransform& Target, bool bLeft) const
+{
+    const int32 HandIndex = bLeft ? 0 : 1;
+    TArray<FGratiaContactShape> Shapes;
+    GatherCollisionShapes(Shapes);
+    const FGratiaContactSolveResult Solved = GratiaContactSolver::Solve(From.GetLocation(), Target.GetLocation(), Shapes);
+    LastConstraint[HandIndex] = Solved;
+    const bool bUnsafe = !Solved.bInputValid || !Solved.bConverged || Solved.bUsedFallback
+        || Solved.StartCorrectionDistance > Nonnegative(ContactSettings.MaxHandCorrectionCm)
+        || Solved.TargetCorrectionDistance > Nonnegative(ContactSettings.MaxHandCorrectionCm);
+    if (bUnsafe)
+    {
+        const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+        ContactRecoveryUntil[HandIndex] = Now + Nonnegative(ContactSettings.ContactRecoverySeconds);
+    }
+    FTransform Result = !Target.ContainsNaN() ? Target : !From.ContainsNaN() ? From : FTransform::Identity;
+    Result.SetLocation(Solved.Position);
+    return Result;
 }
 
 void UGratiaInteraction::SetHandSample(bool bLeft, const FTransform& Raw, const FTransform& Visual, bool bAllowed)
 {
-    FHandSample& Hand = Hands[bLeft ? 0 : 1];
+    const int32 Index = bLeft ? 0 : 1;
+    FHandSample& Hand = Hands[Index];
     Hand.Raw = Raw; Hand.Visual = Visual;
-    Hand.bAllowed = bAllowed && !Raw.ContainsNaN() && !Visual.ContainsNaN();
-}
-
-FTransform UGratiaInteraction::ConstrainHand(const FTransform& From, const FTransform& Target) const
-{
-    if (Target.ContainsNaN() || !Character.IsValid()) return Target;
-    FVector Point = Target.GetLocation();
-    // Conservative bone-following sphere proxies; a hand centre stops at radius + its own 6cm.
-    // These remain active when secondary animation is disabled.
-    for (int32 Pass = 0; Pass < 4; ++Pass)
+    const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+    const bool bValidSample = !Raw.ContainsNaN() && !Visual.ContainsNaN();
+    const UGratiaCharacterProfile* Profile = ActiveProfile.Get();
+    const double Correction = bValidSample ? FVector::Distance(Raw.GetLocation(), Visual.GetLocation()) : 0.0;
+    const double CorrectionLimit = Nonnegative(ContactSettings.MaxHandCorrectionCm);
+    const FGratiaContactSolveResult& Constraint = LastConstraint[Index];
+    const bool bSafeConstraint = Constraint.bInputValid && Constraint.bConverged && !Constraint.bUsedFallback
+        && Constraint.StartCorrectionDistance <= CorrectionLimit && Constraint.TargetCorrectionDistance <= CorrectionLimit;
+    if (bValidSample && Correction > CorrectionLimit)
+        ContactRecoveryUntil[Index] = Now + Nonnegative(ContactSettings.ContactRecoverySeconds);
+    Hand.bAllowed = bAllowed && bValidSample && Profile && Profile->Capabilities.bContacts
+        && bSafeConstraint && Correction <= CorrectionLimit && Now >= ContactRecoveryUntil[Index];
+    Hand.GateReason = !bValidSample ? TEXT("invalid sample")
+        : !bAllowed ? TEXT("tracking unavailable/recovering")
+        : !Profile ? TEXT("missing profile")
+        : !Profile->Capabilities.bContacts ? TEXT("contacts disabled")
+        : !bSafeConstraint ? TEXT("proxy fallback/excess correction")
+        : Correction > CorrectionLimit ? TEXT("excess hand correction")
+        : Now < ContactRecoveryUntil[Index] ? TEXT("proxy correction recovery")
+        : TEXT("ready");
+    if (!Hand.bAllowed)
     {
-        for (const FGratiaContactZone& Zone : Zones)
+        // Cancel/transfer ownership in the same update; tracking loss never leaves a held contact.
+        const int32 Other = 1 - Index;
+        for (FGratiaContactZone& Zone : Zones)
         {
-            if (Zone.Bone.IsNone()) continue; // the room cube is constrained as a box below
-            const FVector Center = ZonePosition(Zone);
-            const float Radius = Zone.Radius + 6.0f;
-            FVector Offset = Point - Center;
-            if (Offset.SizeSquared() < FMath::Square(Radius))
+            if (Zone.Hand != Index) continue;
+            double OtherGap = 0.0;
+            if (Hands[Other].bAllowed && ZoneGap(Zone, Hands[Other].Visual.GetLocation(), OtherGap)
+                && OtherGap <= Nonnegative(ContactSettings.TouchPaddingCm))
+                Zone.Hand = Other;
+            else
             {
-                if (Offset.IsNearlyZero()) Offset = FVector(-1, 0, 0);
-                Point = Center + Offset.GetSafeNormal() * Radius;
-            }
-            // Catch fast movement through a proxy, rather than only the final overlap.
-            const FVector Start = From.GetLocation();
-            const FVector Travel = Point - Start;
-            const FVector Relative = Start - Center;
-            const double A = Travel.SizeSquared(), B = FVector::DotProduct(Relative, Travel), C = Relative.SizeSquared() - Radius * Radius;
-            const double Discriminant = B * B - A * C;
-            if (A > UE_SMALL_NUMBER && C > 0.0 && Discriminant >= 0.0)
-            {
-                const double T = (-B - FMath::Sqrt(Discriminant)) / A;
-                if (T >= 0.0 && T < 1.0) Point = Start + Travel * FMath::Max(0.0, T - 0.002);
+                Zone.State = EGratiaContactState::Cooldown; Zone.Hand = INDEX_NONE; Zone.Elapsed = 0.0f;
             }
         }
     }
-    // The one-metre scene prop has a box surface, rather than a spherical stand-in.
-    const FVector Cube(155, 150, 50), Extent(56, 56, 56);
-    FVector P = Point - Cube;
-    if (FMath::Abs(P.X) < Extent.X && FMath::Abs(P.Y) < Extent.Y && FMath::Abs(P.Z) < Extent.Z)
+}
+
+FString UGratiaInteraction::GetContactDiagnostics() const
+{
+    const UGratiaCharacterProfile* Profile = ActiveProfile.Get();
+    FString Text = FString::Printf(TEXT("Contact profile=%s zones=%d proxies=%d\n"),
+        Profile ? *Profile->ProfileId.ToString() : TEXT("MISSING"), Zones.Num(), Profile ? Profile->CollisionProxies.Num() : 0);
+    for (int32 Index = 0; Index < 2; ++Index)
     {
-        const FVector Depth = Extent - P.GetAbs();
-        if (Depth.X <= Depth.Y && Depth.X <= Depth.Z) P.X = P.X >= 0.0 ? Extent.X : -Extent.X;
-        else if (Depth.Y <= Depth.Z) P.Y = P.Y >= 0.0 ? Extent.Y : -Extent.Y;
-        else P.Z = P.Z >= 0.0 ? Extent.Z : -Extent.Z;
-        Point = Cube + P;
+        const FHandSample& Hand = Hands[Index];
+        const FGratiaContactSolveResult& Solve = LastConstraint[Index];
+        Text += FString::Printf(TEXT("%s: %s; near=%s gap=%.1fcm; blocked=%d fallback=%d pen=%.4fcm correction=%.1fcm\n"),
+            Index == 0 ? TEXT("L") : TEXT("R"), *Hand.GateReason.ToString(),
+            Hand.NearestZone.IsNone() ? TEXT("none") : *Hand.NearestZone.ToString(), Hand.NearestZone.IsNone() ? 0.0 : Hand.NearestGapCm,
+            Solve.bBlocked ? 1 : 0, Solve.bUsedFallback ? 1 : 0, Solve.MaxPenetration, Solve.TargetCorrectionDistance);
     }
-    FTransform Result = Target; Result.SetLocation(Point); return Result;
+    if (Zones.IsValidIndex(ActiveZone))
+        Text += FString::Printf(TEXT("Zone=%s state=%s owner=%d"), *Zones[ActiveZone].Name.ToString(),
+            StateName(Zones[ActiveZone].State), Zones[ActiveZone].Hand);
+    else Text += TEXT("Zone=none");
+    return Text;
 }
 
 void UGratiaInteraction::React(int32 ZoneIndex)
 {
-    ++ReactionSerial;
-    ActiveZone = ZoneIndex; ReactionSeconds = 1.4f;
+    if (!Zones.IsValidIndex(ZoneIndex) || !Character.IsValid()) return;
+    const double ResponseNow = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+    if (ResponseNow - LastResponseTime < Nonnegative(ContactSettings.ReactionMinimumIntervalSeconds)) return;
+    LastResponseTime = ResponseNow;
+    ReactionSerial = ReactionSerial == MAX_int32 ? 1 : ReactionSerial + 1;
+    ActiveZone = ZoneIndex; ReactionSeconds = Nonnegative(ContactSettings.ReactionSeconds);
     const FGratiaContactZone& Zone = Zones[ZoneIndex];
+    LastReactionZoneName = Zone.Name;
     const float Speed = Zone.Hand != INDEX_NONE ? Hands[Zone.Hand].Speed : 0.0f;
-    Impulse = FMath::Clamp(Speed / 150.0f, 0.15f, 1.0f);
-    Caption->SetText(FText::FromString(FString::Printf(TEXT("%s%s"), Speed > 120.0f ? TEXT("Easy... ") : Mood == 2 ? TEXT("Hmm. ") : TEXT("Hey! "), *Zone.Name.ToString())));
-    Caption->SetWorldLocation(Character->GetActorLocation() + FVector(0, 0, 225));
-    Caption->SetWorldRotation(FRotator(0, 180, 0));
-    Caption->SetVisibility(true); CaptionSeconds = 1.8f;
-    const float Now = GetWorld()->GetTimeSeconds();
-    if (bSound && Now - LastChime > 0.7f)
-    {
-        // A short soft acknowledgement tone, generated locally; no speech-service dependency.
-        USoundWaveProcedural* Sound = NewObject<USoundWaveProcedural>(this);
-        Sound->SetSampleRate(24000); Sound->NumChannels = 1; Sound->Duration = 0.12f;
-        TArray<int16> Samples; Samples.SetNum(2880);
-        for (int32 I = 0; I < Samples.Num(); ++I)
-        {
-            const double T = double(I) / 24000.0;
-            const double Envelope = FMath::Sin(PI * I / Samples.Num());
-            Samples[I] = int16(1100.0 * Envelope * FMath::Sin(2.0 * PI * (Speed > 120.0f ? 390.0 : 620.0) * T));
-        }
-        Sound->QueueAudio(reinterpret_cast<const uint8*>(Samples.GetData()), Samples.Num() * sizeof(int16));
-        UGameplayStatics::PlaySoundAtLocation(this, Sound, ZonePosition(Zone), 0.3f);
-        LastChime = Now;
-    }
-    UE_LOG(LogGratiaContact, Display, TEXT("CONTACT REACTION: zone=%s hand=%d speed=%.2f mood=%d impulse=%.2f"), *Zone.Name.ToString(), Zone.Hand, Speed, Mood, Impulse);
+    Impulse = FMath::Clamp(Speed / FMath::Max(UE_SMALL_NUMBER, ContactSettings.ImpulseSpeedCmPerSecond), 0.15f, 1.0f);
+    OnContactReaction.Broadcast(Zone.Name, Zone.Hand, Speed, Mood);
+    UE_LOG(LogGratiaContact, Display, TEXT("CONTACT REACTION: zone=%s hand=%d source=%s speed=%.2f mood=%d impulse=%.2f"),
+        *Zone.Name.ToString(), Zone.Hand, Zone.Hand == INDEX_NONE ? TEXT("demo") : TEXT("hand sample"), Speed, Mood, Impulse);
 }
 
 void UGratiaInteraction::ResetState()
 {
-    MakeZones(); ActiveZone = INDEX_NONE; Reaction = ReactionSeconds = CaptionSeconds = Impulse = 0.0f; ReactionSerial = 0;
+    RebuildProfileZones();
+    LastReactionZoneName = NAME_None; LastResponseTime = -100.0;
     bDemo = false;
-    for (FHandSample& Hand : Hands) Hand.bAllowed = false;
-    if (Caption) Caption->SetVisibility(false);
 }
 
 void UGratiaInteraction::TickComponent(float Delta, ELevelTick Type, FActorComponentTickFunction* Tick)
 {
     Super::TickComponent(Delta, Type, Tick);
+    if (!Character.IsValid()) Character = Cast<AGratiaPreviewCharacter>(GetOwner());
     if (!Character.IsValid() || !FMath::IsFinite(Delta) || Delta <= 0.0f) return;
+    if (ActiveProfile.Get() != Character->CharacterProfile.Get()) RebuildProfileZones();
+    const UGratiaCharacterProfile* Profile = ActiveProfile.Get();
+    if (!Profile || !Character->CharacterMesh) return;
     const float StepTime = FMath::Min(Delta, 0.05f);
     APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
     UCameraComponent* View = Player ? Player->FindComponentByClass<UCameraComponent>() : nullptr;
     if (View) LookTarget = View->GetComponentLocation();
     for (FHandSample& Hand : Hands)
     {
-        Hand.Speed = Hand.bAllowed ? FMath::Min(500.0, FVector::Distance(Hand.Raw.GetLocation(), Hand.Last) / FMath::Max(0.001f, Delta)) : 0.0f;
-        Hand.Last = Hand.Raw.GetLocation();
+        Hand.Speed = Hand.bAllowed && Hand.bWasAllowed
+            ? FMath::Min(double(Nonnegative(ContactSettings.MaxHandSpeedCmPerSecond)),
+                FVector::Distance(Hand.Raw.GetLocation(), Hand.Last) / FMath::Max(0.001f, Delta)) : 0.0f;
+        if (!Hand.Raw.ContainsNaN()) Hand.Last = Hand.Raw.GetLocation();
+        Hand.bWasAllowed = Hand.bAllowed;
+        Hand.NearestZone = NAME_None; Hand.NearestGapCm = TNumericLimits<double>::Max();
     }
+    int32 NewReaction = INDEX_NONE;
     for (int32 Index = 0; Index < Zones.Num(); ++Index)
     {
-        FGratiaContactZone& Zone = Zones[Index]; const FVector Center = ZonePosition(Zone);
-        const double L = FVector::Distance(Hands[0].Raw.GetLocation(), Center), R = FVector::Distance(Hands[1].Raw.GetLocation(), Center);
+        FGratiaContactZone& Zone = Zones[Index];
+        double Gap[2] = { 0.0, 0.0 };
+        bool Near[2] = { false, false }, Hover[2] = { false, false };
+        for (int32 HandIndex = 0; HandIndex < 2; ++HandIndex)
+        {
+            if (!ZoneGap(Zone, Hands[HandIndex].Visual.GetLocation(), Gap[HandIndex])) continue;
+            Near[HandIndex] = Hands[HandIndex].bAllowed && Gap[HandIndex] <= Nonnegative(ContactSettings.TouchPaddingCm);
+            Hover[HandIndex] = Hands[HandIndex].bAllowed && Gap[HandIndex] <= Nonnegative(ContactSettings.HoverPaddingCm);
+            if (Gap[HandIndex] < Hands[HandIndex].NearestGapCm)
+            {
+                Hands[HandIndex].NearestZone = Zone.Name; Hands[HandIndex].NearestGapCm = Gap[HandIndex];
+            }
+        }
         const int32 Before = Zone.Reactions;
-        Zone.Step(Hands[0].bAllowed && L <= Zone.Radius + 6.5f, Hands[1].bAllowed && R <= Zone.Radius + 6.5f,
-            (Hands[0].bAllowed && L <= Zone.Radius + 20.0f) || (Hands[1].bAllowed && R <= Zone.Radius + 20.0f), StepTime);
-        if (Zone.Reactions > Before && (ActiveZone == INDEX_NONE || ReactionSeconds <= 0.0f || Zone.Priority < Zones[ActiveZone].Priority)) React(Index);
+        Zone.Step(Near[0], Near[1], Hover[0] || Hover[1], StepTime);
+        if (Zone.Reactions > Before && (NewReaction == INDEX_NONE || Zone.Priority < Zones[NewReaction].Priority))
+            NewReaction = Index;
+        if (bShowContactDebug)
+        {
+            const FColor Color = Zone.State == EGratiaContactState::Touched || Zone.State == EGratiaContactState::Held
+                ? FColor::Green : Zone.State == EGratiaContactState::Hovered ? FColor::Yellow : FColor::Silver;
+            if (Zone.bSceneActor)
+            {
+                FVector Center, Extent;
+                if (SceneBounds(Center, Extent)) DrawDebugBox(GetWorld(), Center, Extent, Color, false, 0.0f, 0, 0.5f);
+            }
+            else DrawDebugSphere(GetWorld(), ZonePosition(Zone), Zone.Radius * CharacterScale(), 12, Color, false, 0.0f, 0, 0.5f);
+        }
     }
+    if (NewReaction != INDEX_NONE && (ActiveZone == INDEX_NONE || ReactionSeconds <= 0.0f
+        || Zones[NewReaction].Priority < Zones[ActiveZone].Priority)) React(NewReaction);
     bool Held = false;
     if (Zones.IsValidIndex(ActiveZone))
     {
@@ -207,54 +404,125 @@ void UGratiaInteraction::TickComponent(float Delta, ELevelTick Type, FActorCompo
         if (Held && Zone.Hand != INDEX_NONE) LookTarget = Hands[Zone.Hand].Visual.GetLocation();
     }
     ReactionSeconds = FMath::Max(0.0f, ReactionSeconds - StepTime);
-    const float Desired = Held ? 0.6f : ReactionSeconds > 0.0f ? FMath::Clamp(ReactionSeconds / 1.4f, 0.0f, 1.0f) : 0.0f;
-    Reaction = FMath::FInterpTo(Reaction, Desired, StepTime, 8.0f);
-    Impulse = FMath::FInterpTo(Impulse, 0.0f, StepTime, 4.0f);
+    const float Desired = Held ? FMath::Clamp(ContactSettings.HoldReactionWeight, 0.0f, 1.0f)
+        : ReactionSeconds > 0.0f ? FMath::Clamp(ReactionSeconds / FMath::Max(UE_SMALL_NUMBER, ContactSettings.ReactionSeconds), 0.0f, 1.0f) : 0.0f;
+    Reaction = FMath::FInterpTo(Reaction, Desired, StepTime, Nonnegative(ContactSettings.ReactionInterpSpeed));
+    Impulse = FMath::FInterpTo(Impulse, 0.0f, StepTime, Nonnegative(ContactSettings.ImpulseDecaySpeed));
     if (!Held && ReactionSeconds == 0.0f && Reaction < 0.001f) ActiveZone = INDEX_NONE;
-    CaptionSeconds -= StepTime;
-    Caption->SetVisibility(CaptionSeconds > 0.0f);
-    if (View && CaptionSeconds > 0.0f) Caption->SetWorldRotation((View->GetComponentLocation() - Caption->GetComponentLocation()).Rotation());
     DemoSeconds += StepTime;
-    if (bDemo && DemoSeconds >= 4.0f) { DemoSeconds = 0.0f; React((ActiveZone + 1 + Zones.Num()) % Zones.Num()); }
-    USkeletalMeshComponent* Mesh = Character->CharacterMesh;
-    Mesh->SetMorphTarget(TEXT("Mouth smile"), Reaction * (Mood == 2 ? 0.15f : 0.65f));
-    Mesh->SetMorphTarget(TEXT("Brows up"), Reaction * (0.15f + Impulse * 0.45f));
-    Mesh->SetMorphTarget(TEXT("Eyes surprised"), Reaction * Impulse * 0.5f);
-    Mesh->SetMorphTarget(TEXT("Mouth o"), Reaction * Impulse * 0.12f);
+    if (bDemo && Zones.Num() > 0 && DemoSeconds >= FMath::Max(0.1f, ContactSettings.DemoIntervalSeconds))
+    {
+        DemoSeconds = 0.0f;
+        const int32 DemoZone = (ActiveZone + 1 + Zones.Num()) % Zones.Num();
+        // Synthetic demonstration never reports a real controller as its source.
+        const int32 SavedHand = Zones[DemoZone].Hand;
+        Zones[DemoZone].Hand = INDEX_NONE;
+        React(DemoZone);
+        Zones[DemoZone].Hand = SavedHand;
+    }
+    if (Profile->Capabilities.bFacialReactions)
+    {
+        const auto* Animation = Cast<UGratiaAnimInstance>(Character->CharacterMesh->GetAnimInstance());
+        const bool bAuthoredFace = Profile->bAuthoredReactionFacialCurves && Animation && Animation->IsReactionCuePlaying();
+        auto SetMorph = [this, Profile](FName Semantic, float Weight)
+        {
+            const FName Morph = Profile->ResolveMorph(Semantic);
+            if (!Morph.IsNone()) Character->CharacterMesh->SetMorphTarget(Morph, Weight);
+        };
+        SetMorph(TEXT("Smile"), bAuthoredFace ? 0.0f : Reaction * (Mood == 2 ? 0.15f : 0.65f));
+        SetMorph(TEXT("BrowsUp"), bAuthoredFace ? 0.0f : Reaction * (0.15f + Impulse * 0.45f));
+        SetMorph(TEXT("Surprise"), bAuthoredFace ? 0.0f : Reaction * Impulse * 0.5f);
+        SetMorph(TEXT("MouthOpen"), bAuthoredFace ? 0.0f : Reaction * Impulse * 0.12f);
+    }
+    if (bShowContactDebug)
+        for (const FHandSample& Hand : Hands)
+            if (!Hand.Raw.ContainsNaN() && !Hand.Visual.ContainsNaN())
+                DrawDebugLine(GetWorld(), Hand.Raw.GetLocation(), Hand.Visual.GetLocation(), FColor::Cyan, false, 0.0f, 0, 1.0f);
+    const double Now = GetWorld()->GetTimeSeconds();
+    if (Now >= NextDiagnosticTime)
+    {
+        NextDiagnosticTime = Now + 0.5;
+        const FString Diagnostic = GetContactDiagnostics();
+        if (Diagnostic != LastDiagnostic)
+        {
+            LastDiagnostic = Diagnostic;
+            UE_LOG(LogGratiaContact, Display, TEXT("CONTACT DIAGNOSTIC: %s"), *Diagnostic.Replace(TEXT("\n"), TEXT(" | ")));
+        }
+    }
 }
 
 bool UGratiaInteraction::RunChecks(FString& Failure)
 {
-    bool Pass = Zones.Num() == 14;
+    const UGratiaCharacterProfile* Profile = ActiveProfile.Get();
+    if (!Profile || !Character.IsValid() || !Character->CharacterMesh)
+    {
+        Failure = TEXT("Contact integration needs a valid assigned profile and mesh");
+        return false;
+    }
+    if (!Profile->Capabilities.bContacts)
+    {
+        UE_LOG(LogGratiaContact, Display, TEXT("CONTACT SELFTEST: SKIP profile disables contacts."));
+        return true;
+    }
+    FVector SceneCenter, SceneExtent;
+    const int32 ExpectedZones = Profile->ContactZones.Num() + (SceneBounds(SceneCenter, SceneExtent) ? 1 : 0);
+    bool Pass = Zones.Num() == ExpectedZones;
     int32 Cycles = 0;
     for (const FGratiaContactZone& Definition : Zones)
     {
-        Pass &= Definition.Bone.IsNone() || (Character.IsValid() && Character->CharacterMesh->GetBoneIndex(Definition.Bone) != INDEX_NONE);
-        for (int32 Hand = 0; Hand < 2; ++Hand) for (int32 Cycle = 0; Cycle < 20; ++Cycle)
+        Pass &= Definition.bSceneActor || Character->CharacterMesh->GetBoneIndex(Definition.Bone) != INDEX_NONE;
+        for (int32 HandIndex = 0; HandIndex < 2; ++HandIndex) for (int32 Cycle = 0; Cycle < 20; ++Cycle)
         {
-            FGratiaContactZone Zone = Definition; Zone.State = EGratiaContactState::Idle; Zone.Hand = INDEX_NONE; Zone.Reactions = 0; Zone.Elapsed = 0.0f;
-            Zone.Step(false, false, true, 0.011f); Pass &= Zone.State == EGratiaContactState::Hovered && Zone.Reactions == 0;
-            Zone.Step(Hand == 0, Hand == 1, true, 0.011f); Pass &= Zone.State == EGratiaContactState::Touched && Zone.Hand == Hand && Zone.Reactions == 1;
-            for (int32 I = 0; I < 500; ++I) Zone.Step(Hand == 0, Hand == 1, true, 0.01f);
+            FGratiaContactZone Zone = Definition;
+            Zone.State = EGratiaContactState::Idle; Zone.Hand = INDEX_NONE; Zone.Reactions = 0; Zone.Elapsed = 0.0f;
+            Zone.Step(false, false, true, 0.01f);
+            Pass &= Zone.State == EGratiaContactState::Hovered && Zone.Reactions == 0;
+            Zone.Step(HandIndex == 0, HandIndex == 1, true, 0.01f);
+            Pass &= Zone.State == EGratiaContactState::Touched && Zone.Hand == HandIndex && Zone.Reactions == 1;
+            Zone.Elapsed = Zone.bCanHold ? Nonnegative(Zone.Settings.HoldSeconds) : Nonnegative(Zone.Settings.SingleTouchSeconds);
+            Zone.Step(HandIndex == 0, HandIndex == 1, true, 0.01f);
             Pass &= Zone.Reactions == 1 && (Zone.bCanHold ? Zone.State == EGratiaContactState::Held : Zone.State == EGratiaContactState::Cooldown);
-            Zone.Step(false, false, false, 0.011f);
-            Pass &= Zone.State == EGratiaContactState::Cooldown || (!Zone.bCanHold && Zone.State == EGratiaContactState::Idle);
-            for (int32 I = 0; I < 72; ++I) Zone.Step(false, false, false, 0.01f);
+            Zone.Elapsed += Nonnegative(Zone.Settings.CooldownSeconds);
+            Zone.Step(HandIndex == 0, HandIndex == 1, true, 0.01f);
+            Pass &= Zone.Reactions == 1;
+            Zone.Step(false, false, false, 0.01f);
+            Zone.Elapsed = Nonnegative(Zone.Settings.CooldownSeconds);
+            Zone.Step(false, false, false, 0.01f);
             Pass &= Zone.State == EGratiaContactState::Idle;
             ++Cycles;
         }
-        if (!Definition.Bone.IsNone())
-        {
-            const FVector Center = ZonePosition(Definition);
-            const FTransform Goal(FQuat::Identity, Center);
-            const FTransform Constrained = ConstrainHand(FTransform(FQuat::Identity, Center + FVector(-100,0,0)), Goal);
-            Pass &= !Constrained.ContainsNaN() && FVector::Distance(Center, Constrained.GetLocation()) >= Definition.Radius + 5.0f;
-        }
     }
-    FGratiaContactZone Tie; Tie.Step(true, true, true, 0.011f); Pass &= Tie.Hand == 0;
-    Tie.Step(false, true, true, 0.011f); Pass &= Tie.Hand == 1 && Tie.Reactions == 1;
-    Tie.Step(false, false, false, 0.011f); Pass &= Tie.State == EGratiaContactState::Cooldown;
-    UE_LOG(LogGratiaContact, Display, TEXT("CONTACT SELFTEST: %d zones, %d full cycles, loss/hold/tie/cooldown and proxy bounds=%s"), Zones.Num(), Cycles, Pass ? TEXT("PASS") : TEXT("FAIL"));
-    if (!Pass) Failure = TEXT("Contact zone geometry, lifecycle, priority or proxy constraint test failed");
+    FGratiaContactZone Tie;
+    Tie.Settings = ContactSettings;
+    Tie.Step(true, true, true, 0.01f); Pass &= Tie.Hand == 0;
+    Tie.Step(false, true, true, 0.01f); Pass &= Tie.Hand == 1 && Tie.Reactions == 1;
+    Tie.Step(false, false, false, 0.01f); Pass &= Tie.State == EGratiaContactState::Cooldown;
+    TArray<FGratiaContactShape> Shapes;
+    GatherCollisionShapes(Shapes);
+    for (const FGratiaContactShape& Shape : Shapes)
+    {
+        const FVector Center = Shape.Type == EGratiaContactShapeType::Capsule ? (Shape.A + Shape.B) * 0.5 : Shape.A;
+        const double Extent = Shape.Type == EGratiaContactShapeType::AxisAlignedBox ? Shape.HalfExtent.GetMax() : Shape.Radius;
+        const auto Solved = GratiaContactSolver::Solve(Center + FVector(-2.0 * Extent - 100.0, 0, 0), Center, Shapes);
+        Pass &= !Solved.Position.ContainsNaN() && GratiaContactSolver::MaxPenetration(Solved.Position, Shapes) <= 0.001;
+    }
+    const FHandSample SavedHands[2] = { Hands[0], Hands[1] };
+    const double SavedRecovery[2] = { ContactRecoveryUntil[0], ContactRecoveryUntil[1] };
+    const TArray<FGratiaContactZone> SavedZones = Zones;
+    for (int32 HandIndex = 0; HandIndex < 2; ++HandIndex)
+    {
+        SetHandSample(HandIndex == 0, FTransform::Identity,
+            FTransform(FQuat::Identity, FVector(ContactSettings.MaxHandCorrectionCm + 1.0f, 0, 0)), true);
+        Pass &= !Hands[HandIndex].bAllowed;
+    }
+    for (int32 HandIndex = 0; HandIndex < 2; ++HandIndex)
+    {
+        Hands[HandIndex] = SavedHands[HandIndex];
+        ContactRecoveryUntil[HandIndex] = SavedRecovery[HandIndex];
+    }
+    Zones = SavedZones;
+    UE_LOG(LogGratiaContact, Display, TEXT("CONTACT SELFTEST: profile=%s %d zones, %d cycles, %d separate proxies, lifecycle/loss/tie and correction gates=%s"),
+        *Profile->ProfileId.ToString(), Zones.Num(), Cycles, Shapes.Num(), Pass ? TEXT("PASS") : TEXT("FAIL"));
+    if (!Pass) Failure = TEXT("Profile contact integration, lifecycle, separate proxy bounds or correction gate failed");
     return Pass;
 }

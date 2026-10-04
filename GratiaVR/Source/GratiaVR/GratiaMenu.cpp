@@ -7,11 +7,12 @@
 #include "Components/TextRenderComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "EnhancedPlayerInput.h"
+#include "EnhancedInputComponent.h"
+#include "GratiaCharacterProfile.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/Engine.h"
 #include "IXRTrackingSystem.h"
 #include "IHeadMountedDisplay.h"
-#include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "InputAction.h"
@@ -44,6 +45,29 @@ void UGratiaMenu::BeginPlay()
     Text->RegisterComponent(); Text->SetVisibility(false);
     UE_LOG(LogGratiaMenu,Display,TEXT("World menu: Y/B or F4=open; A/X=next/previous; right trigger or Enter=apply."));
 }
+void UGratiaMenu::SetCharacter(AGratiaPreviewCharacter* Value)
+{
+    Character = Value;
+    if (Character.IsValid()) ApplyQuality(Character->Interaction->Quality, false);
+    Refresh();
+}
+void UGratiaMenu::BindInput(APlayerController* Controller)
+{
+    if (Controller == BoundController.Get()) return;
+    if (ActionInput && BoundController.IsValid()) BoundController->PopInputComponent(ActionInput);
+    if (ActionInput) ActionInput->DestroyComponent();
+    ActionInput = nullptr; BoundController = Controller;
+    if (!Controller || !ToggleAction || !NextAction || !ApplyAction) return;
+    ActionInput = NewObject<UEnhancedInputComponent>(Controller, TEXT("GratiaMenuActions"));
+    ActionInput->Priority = 110; ActionInput->bBlockInput = false;
+    ActionInput->BindActionValue(ToggleAction); ActionInput->BindActionValue(NextAction); ActionInput->BindActionValue(ApplyAction);
+    ActionInput->RegisterComponent(); Controller->PushInputComponent(ActionInput);
+}
+void UGratiaMenu::EndPlay(const EEndPlayReason::Type Reason)
+{
+    BindInput(nullptr);
+    Super::EndPlay(Reason);
+}
 FString UGratiaMenu::QualityLabel() const
 {
     int32 P = Character.IsValid() ? Character->Interaction->Quality : 1;
@@ -70,14 +94,17 @@ void UGratiaMenu::Toggle()
     if (auto* Runtime=Cast<AGratiaStage1Runtime>(GetOwner())) Runtime->Locomotion->bEnabled=!bOpen;
     Refresh();
 }
-void UGratiaMenu::ApplyQuality(int32 Profile)
+void UGratiaMenu::ApplyQuality(int32 Profile, bool bResetMotion)
 {
     if (!Character.IsValid()) return;
     auto* I=Character->Interaction.Get(); I->Quality=Profile;
-    I->bBodyMotion=true; I->bEarMotion=true; I->bHairMotion=Profile>0; I->bClothMotion=Profile>0; I->bLocalSpring=true;
+    if (bResetMotion) { I->bBodyMotion=true; I->bEarMotion=true; I->bHairMotion=Profile>0; I->bClothMotion=Profile>0; I->bLocalSpring=true; }
     auto* PC=UGameplayStatics::GetPlayerController(this,0);
-    PC->ConsoleCommand(FString::Printf(TEXT("r.ScreenPercentage %d"),Profile==0?70:Profile==1?85:100),false);
-    PC->ConsoleCommand(FString::Printf(TEXT("sg.EffectsQuality %d"),Profile),false);
+    if (PC)
+    {
+        PC->ConsoleCommand(FString::Printf(TEXT("r.ScreenPercentage %d"),Profile==0?70:Profile==1?85:100),false);
+        PC->ConsoleCommand(FString::Printf(TEXT("sg.EffectsQuality %d"),Profile),false);
+    }
     if (GEngine && GEngine->XRSystem.IsValid())
         if (IHeadMountedDisplay* HMD = GEngine->XRSystem->GetHMDDevice())
             HMD->SetPixelDensity(Profile==0?0.70f:Profile==1?0.85f:1.0f);
@@ -122,6 +149,18 @@ void UGratiaMenu::Refresh()
         FString::Printf(TEXT("Physical animation: %s"),I->bPhysicalMotion?TEXT("ON"):TEXT("OFF")), FString::Printf(TEXT("Sound: %s"),I->bSound?TEXT("ON"):TEXT("OFF")),
         FString::Printf(TEXT("Ears / tail motion: %s"),I->bEarMotion?TEXT("ON"):TEXT("OFF"))
     };
+    if (Character->CharacterProfile)
+    {
+        const auto& Caps = Character->CharacterProfile->Capabilities;
+        const bool Secondary = Caps.bSecondaryPhysics || Caps.bLocalSprings;
+        if (!Secondary || !Character->CharacterProfile->SecondaryBones.ContainsByPredicate([](const auto& Bone){return Bone.Group == 1;})) Rows[8]=TEXT("Hair motion: unavailable");
+        if (!Secondary || !Character->CharacterProfile->SecondaryBones.ContainsByPredicate([](const auto& Bone){return Bone.Group == 2;})) Rows[9]=TEXT("Cloth motion: unavailable");
+        if (!Secondary || !Character->CharacterProfile->SecondaryBones.ContainsByPredicate([](const auto& Bone){return Bone.Group == 3;})) Rows[10]=TEXT("Body motion: unavailable");
+        if (!Caps.bLocalSprings) Rows[11]=TEXT("Local springs: unavailable");
+        if (!Caps.bSecondaryPhysics) Rows[12]=TEXT("Physical animation: unavailable");
+        if (!Caps.bSound) Rows[13]=TEXT("Sound: unavailable");
+        if (!Secondary || !Character->CharacterProfile->SecondaryBones.ContainsByPredicate([](const auto& Bone){return Bone.Group == 4;})) Rows[14]=TEXT("Ears / tail: unavailable");
+    }
     FString Label=TEXT("GRATIA / SETTINGS\nY/B: close | A/X: next/previous\nRight trigger: apply | F4/arrows/Enter\n\n");
     for(int32 Row=0;Row<Rows.Num();++Row) Label+=(Row==Selected?TEXT("> "):TEXT("  "))+Rows[Row]+TEXT("\n");
     Text->SetText(FText::FromString(Label));
@@ -129,16 +168,15 @@ void UGratiaMenu::Refresh()
 void UGratiaMenu::TickComponent(float Delta,ELevelTick Type,FActorComponentTickFunction* Tick)
 {
     Super::TickComponent(Delta,Type,Tick);
-    if(!Character.IsValid()) for(TActorIterator<AGratiaPreviewCharacter> It(GetWorld());It;++It){Character=*It;ApplyQuality(Character->Interaction->Quality);break;}
     auto* PC=UGameplayStatics::GetPlayerController(this,0);
-    auto* Input=PC?Cast<UEnhancedPlayerInput>(PC->PlayerInput):nullptr;
-    if(!Input) return;
-    bool ToggleInput=ToggleAction && Input->GetActionValue(ToggleAction).Get<bool>();
+    BindInput(PC);
+    if(!ActionInput || !PC) return;
+    bool ToggleInput=ToggleAction && ActionInput->GetBoundActionValue(ToggleAction).Get<bool>();
     if(!ToggleInput) bToggleArmed=true;
     if((ToggleInput && bToggleArmed)||PC->WasInputKeyJustPressed(EKeys::F4)){Toggle();bToggleArmed=false;}
     if(!bOpen) return;
-    float Next=NextAction?Input->GetActionValue(NextAction).Get<float>():0.0f;
-    float Apply=ApplyAction?Input->GetActionValue(ApplyAction).Get<float>():0.0f;
+    float Next=NextAction?ActionInput->GetBoundActionValue(NextAction).Get<float>():0.0f;
+    float Apply=ApplyAction?ActionInput->GetBoundActionValue(ApplyAction).Get<float>():0.0f;
     if(FMath::Abs(Next)<0.2f) bNextArmed=true;
     if(Apply<0.2f) bApplyArmed=true;
     if((bNextArmed && FMath::Abs(Next)>=0.5f)||PC->WasInputKeyJustPressed(EKeys::Down)||PC->WasInputKeyJustPressed(EKeys::Up))
@@ -150,7 +188,6 @@ void UGratiaMenu::TickComponent(float Delta,ELevelTick Type,FActorComponentTickF
 }
 bool UGratiaMenu::RunChecks()
 {
-    if(!Character.IsValid()) for(TActorIterator<AGratiaPreviewCharacter> It(GetWorld());It;++It){Character=*It;break;}
     if(!Character.IsValid()||!ToggleAction||!NextAction||!ApplyAction||!MenuMapping) return false;
     for(int32 I=0;I<10;++I){Selected=0;ApplySelected();Selected=1;ApplySelected();}
     Selected=6;ApplySelected();

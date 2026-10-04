@@ -1,9 +1,11 @@
 #include "GratiaCharacterProfile.h"
 
 #include "Animation/AnimSequence.h"
+#include "Animation/AnimBlueprintGeneratedClass.h"
 #include "Engine/SkeletalMesh.h"
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "PhysicsEngine/SkeletalBodySetup.h"
+#include "Sound/SoundBase.h"
 
 int32 FGratiaQualityProfile::GetGroupCap(uint8 Group) const
 {
@@ -86,6 +88,10 @@ bool UGratiaCharacterProfile::ValidateProfile(TArray<FString>& Errors, TArray<FS
     if (ForwardAxis.ContainsNaN() || UpAxis.ContainsNaN() || ForwardAxis.IsNearlyZero() || UpAxis.IsNearlyZero()
         || FMath::Abs(FVector::DotProduct(ForwardAxis.GetSafeNormal(), UpAxis.GetSafeNormal())) > 0.01)
         Errors.Add(TEXT("ForwardAxis and UpAxis must be finite, non-zero, orthogonal directions."));
+    if (!FMath::IsFinite(MaxHeadYawDegrees) || MaxHeadYawDegrees < 0.0f || MaxHeadYawDegrees > 90.0f
+        || !FMath::IsFinite(MaxHeadPitchDegrees) || MaxHeadPitchDegrees < 0.0f || MaxHeadPitchDegrees > 90.0f
+        || !FMath::IsFinite(GazeInterpSpeed) || GazeInterpSpeed < 0.0f)
+        Errors.Add(TEXT("Gaze angle/interpolation settings are invalid."));
     for (const auto& Pair : SemanticBones)
         if (Pair.Value.IsNone() || Ref.FindBoneIndex(Pair.Value) == INDEX_NONE)
             Errors.Add(FString::Printf(TEXT("Semantic bone %s refers to missing bone %s."), *Pair.Key.ToString(), *Pair.Value.ToString()));
@@ -99,12 +105,32 @@ bool UGratiaCharacterProfile::ValidateProfile(TArray<FString>& Errors, TArray<FS
         Errors.Add(TEXT("Gaze capability requires the Head semantic bone."));
     if (Capabilities.bFacialReactions && ResolveMorph(TEXT("Smile")).IsNone())
         Errors.Add(TEXT("FacialReactions capability requires at least the Smile semantic morph."));
-    if (Capabilities.bReactionAnimations && !ReactSoft && !ReactBright)
-        Errors.Add(TEXT("ReactionAnimations capability is enabled without a reaction clip."));
+    if (Capabilities.bReactionAnimations && !ReactSoft && ReactionClips.IsEmpty())
+        Errors.Add(TEXT("ReactionAnimations capability requires a default soft clip or explicit zone routing."));
     if (!Idle) Warnings.Add(TEXT("No idle clip: the model remains in its reference pose unless AnimationClass supplies animation."));
+    if (const auto* BlueprintClass = Cast<UAnimBlueprintGeneratedClass>(AnimationClass.Get()))
+        if (BlueprintClass->GetTargetSkeleton() != Mesh->GetSkeleton())
+            Errors.Add(TEXT("AnimationClass targets another skeleton. Retarget the Animation Blueprint before assigning it."));
     for (const UAnimSequence* Clip : {Idle.Get(), Arms.Get(), Head.Get(), ReactSoft.Get(), ReactBright.Get()})
         if (Clip && Clip->GetSkeleton() != Mesh->GetSkeleton())
             Errors.Add(FString::Printf(TEXT("Animation %s uses a different skeleton. Retarget it before assigning."), *Clip->GetName()));
+    for (const auto& Pair : ReactionClips)
+        if (Pair.Key.IsNone() || !Pair.Value || Pair.Value->GetSkeleton() != Mesh->GetSkeleton())
+            Errors.Add(FString::Printf(TEXT("Reaction routing %s requires a clip on this profile's skeleton."), *Pair.Key.ToString()));
+    auto ValidateReactionSound = [&Errors](const USoundBase* Sound, const FString& Label)
+    {
+        if (!IsValid(Sound)) { Errors.Add(Label + TEXT(" has no valid sound resource.")); return; }
+        if (!FMath::IsFinite(Sound->GetDuration()) || Sound->IsLooping())
+            Errors.Add(Label + TEXT(" must be a finite, non-looping acknowledgement."));
+    };
+    if (DefaultReactionSound) ValidateReactionSound(DefaultReactionSound.Get(), TEXT("DefaultReactionSound"));
+    for (const auto& Pair : ReactionSounds)
+    {
+        if (Pair.Key.IsNone()) Errors.Add(TEXT("Reaction sound routing requires a non-empty zone name or Default key."));
+        ValidateReactionSound(Pair.Value.Get(), FString::Printf(TEXT("Reaction sound %s"), *Pair.Key.ToString()));
+    }
+    if (!Capabilities.bSound && (DefaultReactionSound || !ReactionSounds.IsEmpty()))
+        Warnings.Add(TEXT("Reaction sounds are assigned but the Sound capability is disabled."));
 
     TSet<FName> ZoneNames;
     if (Capabilities.bContacts && ContactZones.IsEmpty()) Errors.Add(TEXT("Contacts capability is enabled without character contact zones."));
@@ -116,14 +142,40 @@ bool UGratiaCharacterProfile::ValidateProfile(TArray<FString>& Errors, TArray<FS
             Errors.Add(FString::Printf(TEXT("Contact zone %s has no mapping for %s."), *Zone.Name.ToString(), *Zone.BoneSemantic.ToString()));
         if (!FMath::IsFinite(Zone.Radius) || Zone.Radius <= 0.0f || Zone.Offset.ContainsNaN())
             Errors.Add(FString::Printf(TEXT("Contact zone %s has invalid geometry."), *Zone.Name.ToString()));
+        if (Capabilities.bReactionAnimations && !ReactSoft && !ReactionClips.Contains(TEXT("Default"))
+            && !ReactionClips.Contains(Zone.Name))
+            Warnings.Add(FString::Printf(TEXT("Contact zone %s has no animation routing; its animation response is unavailable."), *Zone.Name.ToString()));
     }
     const float Times[] = {ContactSettings.HoldSeconds, ContactSettings.CooldownSeconds, ContactSettings.SingleTouchSeconds,
-        ContactSettings.ReactionSeconds, ContactSettings.CaptionSeconds};
+        ContactSettings.ReactionSeconds, ContactSettings.ReactionMinimumIntervalSeconds, ContactSettings.CaptionSeconds, ContactSettings.ContactRecoverySeconds,
+        ContactSettings.ReactionInterpSpeed, ContactSettings.ImpulseDecaySpeed};
     for (float Time : Times) if (!FMath::IsFinite(Time) || Time < 0.0f) Errors.Add(TEXT("Contact durations must be finite and non-negative."));
     if (!FMath::IsFinite(ContactSettings.HandRadiusCm) || ContactSettings.HandRadiusCm <= 0.0f
         || !FMath::IsFinite(ContactSettings.TouchPaddingCm) || ContactSettings.TouchPaddingCm < 0.0f
         || !FMath::IsFinite(ContactSettings.HoverPaddingCm) || ContactSettings.HoverPaddingCm < ContactSettings.TouchPaddingCm)
         Errors.Add(TEXT("Contact hand/padding dimensions must be finite; hover padding must include touch padding."));
+    const float PositiveSettings[] = {ContactSettings.DemoIntervalSeconds, ContactSettings.MaxHandSpeedCmPerSecond,
+        ContactSettings.ImpulseSpeedCmPerSecond, ContactSettings.StrongReactionSpeedCmPerSecond, ContactSettings.MaxHandCorrectionCm};
+    for (float Value : PositiveSettings)
+        if (!FMath::IsFinite(Value) || Value <= 0.0f) Errors.Add(TEXT("Contact speed/recovery limits must be finite and positive."));
+    if (ContactSettings.CaptionOffset.ContainsNaN() || !FMath::IsFinite(ContactSettings.HoldReactionWeight)
+        || ContactSettings.HoldReactionWeight < 0.0f || ContactSettings.HoldReactionWeight > 1.0f)
+        Errors.Add(TEXT("Caption offset or hold reaction weight is invalid."));
+    TSet<FName> ProxyNames;
+    if (Capabilities.bContacts && CollisionProxies.IsEmpty())
+        Errors.Add(TEXT("Contacts capability requires separately authored hand collision proxies."));
+    for (const auto& Proxy : CollisionProxies)
+    {
+        if (Proxy.Name.IsNone() || ProxyNames.Contains(Proxy.Name)) Errors.Add(TEXT("Collision proxy names must be unique and non-empty."));
+        ProxyNames.Add(Proxy.Name);
+        if (ResolveBone(Proxy.StartBoneSemantic).IsNone()
+            || (Proxy.Shape == EGratiaCollisionProxyShape::Capsule && ResolveBone(Proxy.EndBoneSemantic).IsNone()))
+            Errors.Add(FString::Printf(TEXT("Collision proxy %s has missing semantic endpoints."), *Proxy.Name.ToString()));
+        if (Proxy.Shape != EGratiaCollisionProxyShape::Sphere && Proxy.Shape != EGratiaCollisionProxyShape::Capsule)
+            Errors.Add(TEXT("Unsupported collision proxy shape."));
+        if (!FMath::IsFinite(Proxy.Radius) || Proxy.Radius <= 0.0f || Proxy.StartOffset.ContainsNaN() || Proxy.EndOffset.ContainsNaN())
+            Errors.Add(FString::Printf(TEXT("Collision proxy %s has invalid geometry."), *Proxy.Name.ToString()));
+    }
 
     UPhysicsAsset* Physics = PhysicsAsset ? PhysicsAsset.Get() : Mesh->GetPhysicsAsset();
     if (Capabilities.bSecondaryPhysics && (!Physics || SecondaryBones.IsEmpty()))
@@ -162,8 +214,18 @@ bool UGratiaCharacterProfile::ValidateProfile(TArray<FString>& Errors, TArray<FS
         for (float Value : NonNegative) if (!FMath::IsFinite(Value) || Value < 0.0f) Errors.Add(TEXT("Secondary motion settings must be finite and non-negative."));
         if (!FMath::IsFinite(Settings.BlendWeight) || Settings.BlendWeight < 0.0f || Settings.BlendWeight > 1.0f || !FMath::IsFinite(Settings.HeadInertiaScale))
             Errors.Add(TEXT("Secondary motion blend/inertia settings are invalid."));
+        if (Settings.SpringLocalAxis.ContainsNaN() || Settings.SpringLocalAxis.IsNearlyZero())
+            Errors.Add(TEXT("SpringLocalAxis must be a finite, non-zero direction."));
     }
     for (const auto& Bone : SecondaryBones)
         if (!Groups.Contains(Bone.Group)) Errors.Add(FString::Printf(TEXT("Secondary group %d has no settings."), Bone.Group));
+    if (bRequirePlantedIdle && (ResolveBone(TEXT("Root")).IsNone() || ResolveBone(TEXT("LeftFoot")).IsNone() || ResolveBone(TEXT("RightFoot")).IsNone()))
+        Errors.Add(TEXT("Planted-idle verification requires Root, LeftFoot and RightFoot semantic bones."));
+    const float PlantedLimits[] = {MaxIdleFootDriftCm, MaxIdleFootRotationDegrees, MaxIdleRootDriftCm, MaxIdleRootRotationDegrees};
+    for (float Value : PlantedLimits)
+        if (!FMath::IsFinite(Value) || Value < 0.0f) Errors.Add(TEXT("Planted-idle limits must be finite and non-negative."));
+    if (!FMath::IsFinite(MaxPhysicsTargetDeviationCm) || MaxPhysicsTargetDeviationCm <= 0.0f
+        || !FMath::IsFinite(PhysicsSafetyCheckSeconds) || PhysicsSafetyCheckSeconds <= 0.0f)
+        Errors.Add(TEXT("Physics safety limits must be finite and positive."));
     return Errors.IsEmpty();
 }

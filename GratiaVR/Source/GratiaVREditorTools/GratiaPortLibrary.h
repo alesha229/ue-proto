@@ -9,7 +9,7 @@ class UPhysicsAsset;
 
 /** Editor authoring helpers; no asset creation or animation runs in constructors. */
 UCLASS()
-class GRATIAVR_API UGratiaPortLibrary : public UBlueprintFunctionLibrary
+class GRATIAVREDITORTOOLS_API UGratiaPortLibrary : public UBlueprintFunctionLibrary
 {
     GENERATED_BODY()
 

@@ -14,6 +14,9 @@ The profile owns model-specific references and names:
 - Semantic bone and morph maps. Gameplay asks for Head, LeftHand, BlinkLeft,
   Smile or Surprise; it does not contain exported Gratia bone names.
 - Character contact-zone geometry and hold permissions.
+- Separate sphere/capsule hand collision proxies. The initial profiles cover
+  the head, torso/pelvis, upper arms, forearms, hands, thighs, shins and feet.
+  These are conservative starting approximations, not certified surface matches.
 - Audited secondary-bone groups, physical-drive settings, local spring settings,
   and Low/Medium/High simulation budgets.
 - Capability flags that explicitly describe unavailable optional features.
@@ -26,7 +29,8 @@ character's anatomical contact zone.
 
 Current primary semantic bones are Root, Head, Neck, UpperChest, Chest,
 Pelvis, LeftHand, RightHand, LeftForearm, RightForearm, LeftUpperArm,
-RightUpperArm, LeftThigh, RightThigh, LeftFoot and RightFoot.
+RightUpperArm, LeftThigh, RightThigh, LeftShin, RightShin, LeftFoot, RightFoot,
+LeftToe and RightToe.
 
 The current facial keys are BlinkLeft, BlinkRight, Smile, BrowsUp,
 Surprise, MouthOpen, MouthWide, LookLeft, LookRight, LookUp, and
@@ -76,8 +80,33 @@ ears/tail. Keep chain anchors and planted body parts animation-controlled.
 
 AnimationClass can select a future character-specific animation Blueprint.
 The current native single-node path controls preview clips and procedural
-reactions. An arbitrary animation Blueprint does not automatically implement
+reactions. The generated native profiles leave AnimationClass empty so clip
+selection and playback use this native path. An arbitrary animation Blueprint does not automatically implement
 that contract; integrate and test its state/event interface explicitly.
+
+UGratiaAnimationProfileLibrary.GetCharacterAnimationSnapshot provides a
+Blueprint-readable snapshot containing profile, look target, bounded target
+head angles, reaction weight/impulse/serial, mood, quality, idle state and motion
+switches. In a normal Animation Blueprint, cast Get Owning Actor to
+GratiaPreviewCharacter and obtain this snapshot on Event Blueprint Update
+Animation. Copy values into Blueprint variables consumed by the AnimGraph.
+The helper is a game-thread API; it is not marked BlueprintThreadSafe.
+
+The native UGratiaAnimInstance still inherits UAnimSingleNodeInstance, which is
+not a normal editable AnimGraph host. Selecting an Animation Blueprint class
+allows a manually authored graph to run, but this change does not convert the
+existing procedural proxy into graphical nodes or build a complete equivalent
+Animation Blueprint. Diagnostic clips and reaction blending remain the native
+path's responsibility unless the custom graph explicitly implements them.
+
+Secondary group drive strengths, blend weights, spring limits/local axes,
+stiffness, damping and head inertia are editable profile values. Native physics
+and procedural animation read them through the profile. Physics fault distance
+and check interval are profile settings as well.
+
+Planted idle is an opt-in validation contract. Gratia enables it with 0.1 cm
+position and 0.1 degree rotation limits for feet/root. The new mannequin profile
+does not claim this contract until its idle has been independently checked.
 
 Hard UObject references are intentional in this MVP: loading a profile retains
 its resources for cooking and playback. For many large interchangeable

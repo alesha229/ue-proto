@@ -45,9 +45,13 @@ def mapping(action, key, y=False, negative=False):
     context.set_editor_property('default_key_mappings', data)
     bindings.append({'action': action.get_name(), 'key': key, 'y': y, 'negative': negative})
 
-for prefix, stick in [('OculusTouch','Thumbstick'), ('ValveIndex','Thumbstick'), ('MixedReality','Thumbstick'), ('Vive','Trackpad'), ('PICO','Thumbstick')]:
-    mapping(walk, f'{prefix}_Left_{stick}_X')
-    mapping(walk, f'{prefix}_Left_{stick}_Y', y=True)
+xr_sticks = [('OculusTouch','Thumbstick'), ('ValveIndex','Thumbstick'),
+             ('MixedReality','Thumbstick'), ('Vive','Trackpad')]
+for prefix, stick in xr_sticks:
+    # OpenXR builds a VECTOR2F action from Axis2D. Its suggested path must be
+    # the vector parent (/input/thumbstick), never the scalar /x and /y paths.
+    # Swizzle belongs only to scalar desktop mappings, not the complete XR vector.
+    mapping(walk, f'{prefix}_Left_{stick}_2D')
     mapping(turn, f'{prefix}_Right_{stick}_X')
     mapping(block, f'{prefix}_Right_{stick}_Y')
 mapping(walk, 'Gamepad_LeftX')
@@ -66,17 +70,35 @@ apply_action.set_editor_property('value_type', unreal.InputActionValueType.AXIS1
 for action in [toggle, next_action, apply_action]:
     action.set_editor_property('consume_input', True)
 template = library.load_asset('/Game/XRFramework/Input/IMC_Default')
-for source_mapping in template.get_editor_property('default_key_mappings').get_editor_property('mappings'):
-    if str(source_mapping.get_editor_property('action').get_name()).startswith('IA_Menu_Toggle'):
+template_mappings = list(template.get_editor_property('default_key_mappings').get_editor_property('mappings'))
+template_action_names = sorted({value.get_editor_property('action').get_name()
+                                for value in template_mappings if value.get_editor_property('action')})
+unreal.log('GRATIA_TEMPLATE_INPUT_ACTIONS: ' + json.dumps(template_action_names))
+removed_template_bindings = []
+for source_mapping in template_mappings:
+    source_action = source_mapping.get_editor_property('action')
+    if not source_action:
+        continue
+    source_name = source_action.get_name()
+    if source_name == 'IA_Move' or source_name == 'IA_Turn' or source_name.startswith('IA_Turn_'):
+        input_key = source_mapping.get_editor_property('key')
+        key = str(input_key.get_editor_property('key_name'))
+        removed_template_bindings.append({'action': source_name, 'key': key})
+        template.unmap_key(source_action, input_key)
+assert library.save_loaded_asset(template, only_if_is_dirty=False)
+for source_mapping in template_mappings:
+    source_action = source_mapping.get_editor_property('action')
+    if source_action and str(source_action.get_name()).startswith('IA_Menu_Toggle'):
         key = str(source_mapping.get_editor_property('key').get_editor_property('key_name'))
         mapping(toggle, key)
 mapping(toggle, 'F4')
 movement_context = context
 context = asset('IMC_GratiaMenu', unreal.InputMappingContext)
 context.unmap_all()
-for prefix in ['OculusTouch', 'ValveIndex']:
+for prefix, left_previous in [('OculusTouch', 'X'), ('ValveIndex', 'A')]:
     mapping(next_action, prefix + '_Right_A_Click')
-    mapping(next_action, prefix + '_Left_X_Click', negative=True)
+    # Index has A/B buttons on both hands, rather than Touch's left X/Y.
+    mapping(next_action, prefix + f'_Left_{left_previous}_Click', negative=True)
     mapping(apply_action, prefix + '_Right_Trigger_Axis')
 mapping(next_action, 'Down')
 mapping(next_action, 'Up', negative=True)
@@ -85,5 +107,50 @@ for item in [walk, turn, block, toggle, next_action, apply_action, movement_cont
     description = 'action_description' if isinstance(item, unreal.InputAction) else 'context_description'
     item.set_editor_property(description, item.get_name())
     assert library.save_loaded_asset(item, only_if_is_dirty=False)
-Path(r'E:/coding/ue proto/evidence/02/locomotion_input_manifest.json').write_text(json.dumps({'priority':50, 'bindings':bindings}, indent=2), encoding='utf-8')
+
+def check_saved_bindings():
+    """Inspect serialized mappings, not only the arguments used to create them."""
+    saved = library.load_asset(movement_context.get_path_name())
+    mappings = list(saved.get_editor_property('default_key_mappings').get_editor_property('mappings'))
+    by_key = {}
+    for value in mappings:
+        key = str(value.get_editor_property('key').get_editor_property('key_name'))
+        by_key[key] = value
+    expected_xr_keys = {f'{prefix}_Left_{stick}_2D' for prefix, stick in xr_sticks}
+    actual_xr_walk_keys = {
+        str(value.get_editor_property('key').get_editor_property('key_name'))
+        for value in mappings
+        if value.get_editor_property('action') == walk
+        and str(value.get_editor_property('key').get_editor_property('key_name')).split('_')[0]
+        in {prefix for prefix, _ in xr_sticks}
+    }
+    assert actual_xr_walk_keys == expected_xr_keys, (actual_xr_walk_keys, expected_xr_keys)
+    assert walk.get_editor_property('value_type') == unreal.InputActionValueType.AXIS2D
+    for key in expected_xr_keys:
+        assert not by_key[key].get_editor_property('modifiers'), f'{key} must preserve the complete XR vector'
+    for key in ['W', 'S', 'Gamepad_LeftY']:
+        modifiers = list(by_key[key].get_editor_property('modifiers'))
+        swizzles = [value for value in modifiers if isinstance(value, unreal.InputModifierSwizzleAxis)]
+        assert len(swizzles) == 1 and swizzles[0].get_editor_property('order') == unreal.InputAxisSwizzle.YXZ
+    for key in ['S', 'A']:
+        assert any(isinstance(value, unreal.InputModifierNegate) for value in by_key[key].get_editor_property('modifiers'))
+    for prefix, stick in xr_sticks:
+        key = f'{prefix}_Right_{stick}_Y'
+        assert by_key[key].get_editor_property('action') == block, f'{key} must consume legacy teleport actions'
+    remaining_template = template.get_editor_property('default_key_mappings').get_editor_property('mappings')
+    for value in remaining_template:
+        action = value.get_editor_property('action')
+        if action:
+            assert action.get_name() not in ['IA_Move', 'IA_Turn'] and not action.get_name().startswith('IA_Turn_')
+    return sorted(expected_xr_keys)
+
+validated_xr_keys = check_saved_bindings()
+manifest_path = Path(r'E:/coding/ue proto/evidence/04/locomotion_input_manifest.json')
+manifest_path.parent.mkdir(parents=True, exist_ok=True)
+manifest_path.write_text(
+    json.dumps({'priority':50, 'bindings':bindings, 'validated_xr_vector_keys':validated_xr_keys,
+                'openxr_vector_binding_contract':'Axis2D -> thumbstick/trackpad parent, no XR swizzle',
+                'template_action_names_before':template_action_names,
+                'removed_template_locomotion':removed_template_bindings,
+                'hardware_input_verified':False}, indent=2), encoding='utf-8')
 unreal.log('GRATIA_LOCOMOTION_INPUT_CREATED')

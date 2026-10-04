@@ -33,3 +33,4 @@ Exports/Gratia/*.fbx
 *.env
 *.key
 *.pem
+GratiaVR/Source/GratiaVR/Generated/

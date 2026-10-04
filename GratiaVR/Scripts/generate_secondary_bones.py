@@ -50,6 +50,6 @@ inline const FGratiaSecondaryBoneDef* Find(FName BoneName)
 }
 }
 '''
-target=root/'GratiaVR/Source/GratiaVR/GratiaSecondaryBones.h'
+target=root/'GratiaVR/Source/GratiaVREditorTools/GratiaSecondaryBones.h'
 target.write_text(text,encoding='utf-8')
 print(f'{target}: {len(rows)} source secondary roles; {sum(r[3] for r in rows)} safe default simulation roles')

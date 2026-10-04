@@ -21,6 +21,9 @@ $taskServer = Get-NetTCPConnection -State Listen -LocalPort 8100 -ErrorAction Si
 if (-not $taskServer) {
     $taskUv = (Get-Command uv.exe -ErrorAction Stop).Source
     $taskPackage = Join-Path $taskWorkspace 'evidence\00\blender_mcp\blender_mcp_src\mcp'
+    if (-not (Test-Path -LiteralPath $taskPackage)) {
+        $taskPackage = 'git+https://projects.blender.org/lab/blender_mcp.git@2cea8d566dde07fbac28a61d698909d69724e853#subdirectory=mcp'
+    }
     $taskServerArgs = 'tool run --from "' + $taskPackage.Replace('\','/') + '" blender-mcp --transport http --host 127.0.0.1 --port 8100'
     Start-Process -FilePath $taskUv -ArgumentList $taskServerArgs -WorkingDirectory $taskWorkspace -WindowStyle Hidden -RedirectStandardOutput (Join-Path $taskEvidence 'server.log') -RedirectStandardError (Join-Path $taskEvidence 'server_stderr.log') | Out-Null
 }

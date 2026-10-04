@@ -7,9 +7,5 @@ public class GratiaVR : ModuleRules
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
         PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine", "InputCore", "HeadMountedDisplay" });
         PrivateDependencyModuleNames.AddRange(new[] { "XRBase", "RenderCore", "RHI", "PhysicsCore", "EnhancedInput" });
-        if (Target.bBuildEditor)
-        {
-            PrivateDependencyModuleNames.AddRange(new[] { "UnrealEd", "PhysicsUtilities", "AssetRegistry" });
-        }
     }
 }

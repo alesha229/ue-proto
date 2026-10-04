@@ -1,18 +1,24 @@
 #include "GratiaPreviewCharacter.h"
 #include "GratiaInteraction.h"
+#include "GratiaReactionPresentation.h"
 #include "GratiaAnimInstance.h"
 #include "GratiaSecondaryMotion.h"
+#include "GratiaCharacterProfile.h"
 
 #include "Animation/AnimSequence.h"
 #include "Animation/AnimSingleNodeInstance.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
+#include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "UObject/ConstructorHelpers.h"
+#if WITH_EDITOR
+#include "UObject/UnrealType.h"
+#endif
 
 DEFINE_LOG_CATEGORY_STATIC(LogGratiaPreview, Log, All);
 
@@ -22,6 +28,7 @@ AGratiaPreviewCharacter::AGratiaPreviewCharacter()
     CharacterMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("CharacterMesh"));
     RootComponent = CharacterMesh;
     Interaction = CreateDefaultSubobject<UGratiaInteraction>(TEXT("Interaction"));
+    ReactionPresentation = CreateDefaultSubobject<UGratiaReactionPresentation>(TEXT("ReactionPresentation"));
     SecondaryMotion = CreateDefaultSubobject<UGratiaSecondaryMotion>(TEXT("SecondaryMotion"));
     CharacterMesh->SetCollisionEnabled(ECollisionEnabled::PhysicsOnly);
     CharacterMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
@@ -30,23 +37,52 @@ AGratiaPreviewCharacter::AGratiaPreviewCharacter()
     CharacterMesh->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
     CharacterMesh->bEnableUpdateRateOptimizations = false;
 
-    static ConstructorHelpers::FObjectFinder<USkeletalMesh> MeshAsset(TEXT("/Game/Gratia/GameRig/SK_Gratia_Game.SK_Gratia_Game"));
-    static ConstructorHelpers::FObjectFinder<UAnimSequence> IdleAsset(TEXT("/Game/Gratia/GameRig/A_Gratia_Game_Idle.A_Gratia_Game_Idle"));
-    static ConstructorHelpers::FObjectFinder<UAnimSequence> ArmsAsset(TEXT("/Game/Gratia/GameRig/A_Gratia_Game_TestArms.A_Gratia_Game_TestArms"));
-    static ConstructorHelpers::FObjectFinder<UAnimSequence> HeadAsset(TEXT("/Game/Gratia/GameRig/A_Gratia_Game_TestHead.A_Gratia_Game_TestHead"));
-    static ConstructorHelpers::FObjectFinder<UAnimSequence> SoftAsset(TEXT("/Game/Gratia/GameRig/A_Gratia_Game_ReactSoft.A_Gratia_Game_ReactSoft"));
-    static ConstructorHelpers::FObjectFinder<UAnimSequence> BrightAsset(TEXT("/Game/Gratia/GameRig/A_Gratia_Game_ReactBright.A_Gratia_Game_ReactBright"));
-    CharacterMesh->SetSkeletalMesh(MeshAsset.Object);
-    IdleAnimation = IdleAsset.Object;
-    ArmsAnimation = ArmsAsset.Object;
-    HeadAnimation = HeadAsset.Object;
-    SoftReaction = SoftAsset.Object;
-    BrightReaction = BrightAsset.Object;
 }
+
+void AGratiaPreviewCharacter::OnConstruction(const FTransform& Transform)
+{
+    Super::OnConstruction(Transform);
+#if WITH_EDITOR
+    if (!GetWorld() || !GetWorld()->IsGameWorld()) RefreshEditorProfilePreview();
+#endif
+}
+
+#if WITH_EDITOR
+void AGratiaPreviewCharacter::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+    Super::PostEditChangeProperty(PropertyChangedEvent);
+    if (PropertyChangedEvent.GetPropertyName() == GET_MEMBER_NAME_CHECKED(AGratiaPreviewCharacter, CharacterProfile)
+        && (!GetWorld() || !GetWorld()->IsGameWorld()))
+        RefreshEditorProfilePreview();
+}
+
+void AGratiaPreviewCharacter::RefreshEditorProfilePreview()
+{
+    if (!CharacterMesh || !CharacterProfile) return;
+    TArray<FString> Errors, Warnings;
+    if (!CharacterProfile->ValidateProfile(Errors, Warnings))
+    {
+        UE_LOG(LogGratiaPreview, Warning, TEXT("Editor profile preview rejected %s: %s"),
+            *CharacterProfile->GetName(), *FString::Join(Errors, TEXT("; ")));
+        return;
+    }
+    // Details edits preview resources only. Gameplay reactions and physical drives
+    // are initialized by SetCharacterProfile/BeginPlay in the actual game world.
+    if (CharacterMesh->GetSkeletalMeshAsset() != CharacterProfile->Mesh)
+        CharacterMesh->SetSkeletalMesh(CharacterProfile->Mesh);
+    if (CharacterMesh->GetPhysicsAsset() != CharacterProfile->PhysicsAsset)
+        CharacterMesh->SetPhysicsAsset(CharacterProfile->PhysicsAsset);
+}
+#endif
 
 void AGratiaPreviewCharacter::BeginPlay()
 {
     Super::BeginPlay();
+    FString RequestedProfile;
+    if (FParse::Value(FCommandLine::Get(), TEXT("GratiaCharacterProfile="), RequestedProfile))
+        SetCharacterProfile(LoadObject<UGratiaCharacterProfile>(nullptr, *RequestedProfile));
+    else if (CharacterProfile) SetCharacterProfile(CharacterProfile);
+    else SetCharacterProfile(LoadObject<UGratiaCharacterProfile>(nullptr, TEXT("/Game/Characters/Profiles/DA_Gratia.DA_Gratia")));
     // Existing placed actors may have serialized the old preview collision mode.
     CharacterMesh->SetCollisionEnabled(ECollisionEnabled::PhysicsOnly);
     CharacterMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
@@ -77,17 +113,60 @@ void AGratiaPreviewCharacter::BeginPlay()
     UE_LOG(LogGratiaPreview, Display, TEXT("Gratia preview ready. F2=idle/arms/head, F3=reset to idle."));
 }
 
+bool AGratiaPreviewCharacter::SetCharacterProfile(UGratiaCharacterProfile* Profile)
+{
+    if (!Profile) { UE_LOG(LogGratiaPreview, Error, TEXT("Character profile unavailable")); return false; }
+    TArray<FString> Errors, Warnings;
+    if (!Profile->ValidateProfile(Errors, Warnings))
+    {
+        for (const FString& Error : Errors) UE_LOG(LogGratiaPreview, Error, TEXT("PROFILE %s: %s"), *Profile->GetName(), *Error);
+        return false;
+    }
+    for (const FString& Warning : Warnings) UE_LOG(LogGratiaPreview, Warning, TEXT("PROFILE %s: %s"), *Profile->GetName(), *Warning);
+    if (CharacterProfile && CharacterProfile != Profile)
+    {
+        const FVector Facing = GetActorRotation().RotateVector(CharacterProfile->ForwardAxis).GetSafeNormal2D();
+        const float LocalYaw = Profile->ForwardAxis.Rotation().Yaw;
+        SetActorRotation(FRotator(0.0f, Facing.Rotation().Yaw - LocalYaw, 0.0f));
+    }
+    CharacterMesh->SetAllBodiesSimulatePhysics(false);
+    CharacterProfile = Profile;
+    CharacterMesh->SetSkeletalMesh(Profile->Mesh);
+    CharacterMesh->SetPhysicsAsset(Profile->PhysicsAsset);
+    IdleAnimation = Profile->Idle; ArmsAnimation = Profile->Arms; HeadAnimation = Profile->Head;
+    SoftReaction = Profile->ReactSoft; BrightReaction = Profile->ReactBright;
+    if (Interaction) Interaction->RebuildProfileZones();
+    ResetToIdle();
+    UE_LOG(LogGratiaPreview, Display, TEXT("CHARACTER PROFILE id=%s mesh=%s bones=%d morphs=%d anim_mode=%s"),
+        *Profile->ProfileId.ToString(), *Profile->Mesh->GetPathName(), Profile->Mesh->GetRefSkeleton().GetNum(),
+        Profile->Mesh->GetMorphTargets().Num(), Profile->AnimationClass && !Profile->AnimationClass->IsChildOf(UGratiaAnimInstance::StaticClass()) ? TEXT("AnimationBlueprint") : TEXT("Native"));
+    return true;
+}
+
+FVector AGratiaPreviewCharacter::GetLookTarget() const { return Interaction ? Interaction->LookTarget : GetActorLocation(); }
+float AGratiaPreviewCharacter::GetReactionWeight() const { return Interaction ? Interaction->Reaction : 0.0f; }
+int32 AGratiaPreviewCharacter::GetReactionSerial() const { return Interaction ? static_cast<int32>(Interaction->ReactionSerial) : 0; }
+
 UAnimSequence* AGratiaPreviewCharacter::GetExpectedAnimation() const
 {
     return GetPreviewAnimation(PreviewPose);
+}
+
+UAnimSequence* AGratiaPreviewCharacter::GetReactionAnimationForZone(FName ZoneName) const
+{
+    if (!CharacterProfile || !CharacterProfile->Capabilities.bReactionAnimations) return nullptr;
+    if (const auto* Clip = CharacterProfile->ReactionClips.Find(ZoneName)) return Clip->Get();
+    if (const auto* Clip = CharacterProfile->ReactionClips.Find(TEXT("Default"))) return Clip->Get();
+    // An unconfigured zone uses a restrained cue; approach speed never chooses an open-arm gesture.
+    return SoftReaction;
 }
 
 UAnimSequence* AGratiaPreviewCharacter::GetPreviewAnimation(EGratiaPreviewPose Pose) const
 {
     switch (Pose)
     {
-    case EGratiaPreviewPose::Arms: return ArmsAnimation.Get();
-    case EGratiaPreviewPose::Head: return HeadAnimation.Get();
+    case EGratiaPreviewPose::Arms: return ArmsAnimation ? ArmsAnimation.Get() : IdleAnimation.Get();
+    case EGratiaPreviewPose::Head: return HeadAnimation ? HeadAnimation.Get() : IdleAnimation.Get();
     default: return IdleAnimation.Get();
     }
 }
@@ -99,16 +178,27 @@ void AGratiaPreviewCharacter::SetPreviewPose(EGratiaPreviewPose Pose)
     UntilNextBlink = 2.2f;
     CharacterMesh->ClearMorphTargets();
     UAnimSequence* Animation = GetExpectedAnimation();
-    if (!CharacterMesh->GetSkeletalMeshAsset() || !Animation)
+    if (!CharacterProfile || !CharacterMesh->GetSkeletalMeshAsset()) return;
+    if (CharacterProfile->AnimationClass && !CharacterProfile->AnimationClass->IsChildOf(UGratiaAnimInstance::StaticClass()))
     {
-        UE_LOG(LogGratiaPreview, Error, TEXT("Missing cooked preview mesh or animation for pose %d."), static_cast<int32>(Pose));
+        CharacterMesh->SetAnimInstanceClass(CharacterProfile->AnimationClass);
+        if (SecondaryMotion) SecondaryMotion->ResetPhysics();
+        return;
+    }
+    if (!Animation)
+    {
+        CharacterMesh->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+        CharacterMesh->SetAnimation(nullptr);
+        CharacterMesh->TickAnimation(0.0f, false); CharacterMesh->RefreshBoneTransforms();
+        if (SecondaryMotion) SecondaryMotion->ResetPhysics();
+        UE_LOG(LogGratiaPreview, Display, TEXT("Profile %s uses reference pose: no preview clip"), *CharacterProfile->GetName());
         return;
     }
 
     const bool bIdle = IsIdlePreview();
     // The diagnostic clips hold their largest pose at the midpoint, avoiding screenshot timing races.
     const float Position = bIdle ? 0.0f : Animation->GetPlayLength() * 0.5f;
-    CharacterMesh->SetAnimInstanceClass(UGratiaAnimInstance::StaticClass());
+    CharacterMesh->SetAnimInstanceClass(CharacterProfile->AnimationClass ? CharacterProfile->AnimationClass.Get() : UGratiaAnimInstance::StaticClass());
     // OverrideAnimationData serializes state but does not refresh an existing SingleNode instance.
     if (UAnimSingleNodeInstance* Instance = CharacterMesh->GetSingleNodeInstance())
     {
@@ -153,6 +243,15 @@ void AGratiaPreviewCharacter::Tick(float DeltaSeconds)
 
 void AGratiaPreviewCharacter::UpdateBlink(float DeltaSeconds)
 {
+    if (!CharacterProfile || !CharacterProfile->Capabilities.bBlink) return;
+    if (const auto* Animation = CharacterProfile->bAuthoredReactionFacialCurves ? Cast<UGratiaAnimInstance>(CharacterMesh->GetAnimInstance()) : nullptr)
+        if (Animation->IsReactionCuePlaying())
+        {
+            CharacterMesh->SetMorphTarget(CharacterProfile->ResolveMorph(TEXT("BlinkLeft")), 0.0f, true);
+            CharacterMesh->SetMorphTarget(CharacterProfile->ResolveMorph(TEXT("BlinkRight")), 0.0f, true);
+            BlinkElapsed = -1.0f; UntilNextBlink = 1.0f;
+            return;
+        }
     if (!FMath::IsFinite(DeltaSeconds) || DeltaSeconds <= 0.0f) return;
     const float Step = FMath::Min(DeltaSeconds, 0.1f);
     if (BlinkElapsed < 0.0f)
@@ -184,6 +283,6 @@ void AGratiaPreviewCharacter::UpdateBlink(float DeltaSeconds)
         BlinkElapsed = -1.0f;
         UntilNextBlink = 3.7f;
     }
-    CharacterMesh->SetMorphTarget(TEXT("Eye L close"), Weight);
-    CharacterMesh->SetMorphTarget(TEXT("Eye R close"), Weight);
+    CharacterMesh->SetMorphTarget(CharacterProfile->ResolveMorph(TEXT("BlinkLeft")), Weight);
+    CharacterMesh->SetMorphTarget(CharacterProfile->ResolveMorph(TEXT("BlinkRight")), Weight);
 }

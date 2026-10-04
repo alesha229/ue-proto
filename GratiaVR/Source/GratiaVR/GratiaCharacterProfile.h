@@ -8,6 +8,37 @@ class USkeletalMesh;
 class UAnimSequence;
 class UAnimInstance;
 class UPhysicsAsset;
+class USoundBase;
+
+UENUM(BlueprintType)
+enum class EGratiaCollisionProxyShape : uint8
+{
+    Sphere,
+    Capsule
+};
+
+/** Hand-blocking geometry is independent of reaction-zone geometry. */
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaCollisionProxyDefinition
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Collision")
+    FName Name;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Collision")
+    EGratiaCollisionProxyShape Shape = EGratiaCollisionProxyShape::Sphere;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Collision")
+    FName StartBoneSemantic;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Collision")
+    FName EndBoneSemantic;
+    /** Endpoint offsets are in actor-local space, in centimetres. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Collision")
+    FVector StartOffset = FVector::ZeroVector;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Collision")
+    FVector EndOffset = FVector::ZeroVector;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Collision", meta = (ClampMin = "0.1", Units = "cm"))
+    float Radius = 5.0f;
+};
 
 /** A character owns geometry and names; interaction code refers to semantic keys. */
 USTRUCT(BlueprintType)
@@ -102,6 +133,8 @@ struct GRATIAVR_API FGratiaSecondaryGroupSettings
     float SpringDamping = 19.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion")
     float HeadInertiaScale = -0.012f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion")
+    FVector SpringLocalAxis = FVector::ForwardVector;
 };
 
 USTRUCT(BlueprintType)
@@ -124,7 +157,29 @@ struct GRATIAVR_API FGratiaContactSettings
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact", meta = (ClampMin = "0.0", Units = "s"))
     float ReactionSeconds = 1.4f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact", meta = (ClampMin = "0.0", Units = "s"))
+    float ReactionMinimumIntervalSeconds = 0.45f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact", meta = (ClampMin = "0.0", Units = "s"))
     float CaptionSeconds = 1.8f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact")
+    FVector CaptionOffset = FVector(0, 0, 225);
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact", meta = (ClampMin = "0.1", Units = "s"))
+    float DemoIntervalSeconds = 4.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact", meta = (ClampMin = "0.1"))
+    float MaxHandSpeedCmPerSecond = 500.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact", meta = (ClampMin = "0.1"))
+    float ImpulseSpeedCmPerSecond = 150.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact", meta = (ClampMin = "0.1"))
+    float StrongReactionSpeedCmPerSecond = 120.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact", meta = (ClampMin = "0.0"))
+    float ReactionInterpSpeed = 8.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact", meta = (ClampMin = "0.0"))
+    float ImpulseDecaySpeed = 4.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+    float HoldReactionWeight = 0.6f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact", meta = (ClampMin = "0.0", Units = "s"))
+    float ContactRecoverySeconds = 0.25f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact", meta = (ClampMin = "0.1", Units = "cm"))
+    float MaxHandCorrectionCm = 20.0f;
 };
 
 USTRUCT(BlueprintType)
@@ -181,6 +236,17 @@ public:
     TObjectPtr<UAnimSequence> ReactSoft;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animations")
     TObjectPtr<UAnimSequence> ReactBright;
+    /** Contact zone name -> authored response. Default is optional restrained fallback. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animations")
+    TMap<FName, TObjectPtr<UAnimSequence>> ReactionClips;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animations")
+    bool bAuthoredReactionFacialCurves = false;
+    /** Optional authored acknowledgement. Empty uses the presenter's short procedural chime. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Presentation|Sound")
+    TObjectPtr<USoundBase> DefaultReactionSound;
+    /** Contact zone name -> sound. Optional Default key precedes DefaultReactionSound. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Presentation|Sound")
+    TMap<FName, TObjectPtr<USoundBase>> ReactionSounds;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mapping")
     TMap<FName, FName> SemanticBones;
@@ -200,6 +266,8 @@ public:
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact")
     TArray<FGratiaContactZoneDefinition> ContactZones;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Collision")
+    TArray<FGratiaCollisionProxyDefinition> CollisionProxies;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact")
     FGratiaContactSettings ContactSettings;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion")
@@ -221,6 +289,21 @@ public:
     int32 ExpectedPhysicsBodyCount = 0;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Validation", meta = (ClampMin = "0"))
     int32 ExpectedConstraintCount = 0;
+    /** Opt-in animation acceptance contract; another model may legitimately move its root/feet. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Validation")
+    bool bRequirePlantedIdle = false;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Validation", meta = (ClampMin = "0.0", Units = "cm"))
+    float MaxIdleFootDriftCm = 0.1f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Validation", meta = (ClampMin = "0.0", Units = "deg"))
+    float MaxIdleFootRotationDegrees = 0.1f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Validation", meta = (ClampMin = "0.0", Units = "cm"))
+    float MaxIdleRootDriftCm = 0.1f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Validation", meta = (ClampMin = "0.0", Units = "deg"))
+    float MaxIdleRootRotationDegrees = 0.1f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion", meta = (ClampMin = "0.1", Units = "cm"))
+    float MaxPhysicsTargetDeviationCm = 35.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion", meta = (ClampMin = "0.01", Units = "s"))
+    float PhysicsSafetyCheckSeconds = 0.25f;
 
     UFUNCTION(BlueprintPure, Category = "Character Profile")
     FName ResolveBone(FName Semantic) const;

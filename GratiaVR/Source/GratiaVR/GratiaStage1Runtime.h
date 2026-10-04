@@ -83,6 +83,13 @@ public:
     AGratiaStage1Runtime();
     virtual void Tick(float DeltaSeconds) override;
 
+    UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Character")
+    TWeakObjectPtr<AGratiaPreviewCharacter> TargetCharacter;
+    UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "Interaction")
+    TObjectPtr<AActor> SceneContactActor;
+    UFUNCTION(BlueprintCallable, Category = "Character")
+    void SetTargetCharacter(AGratiaPreviewCharacter* Character);
+
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Stage 1")
     TObjectPtr<UTextRenderComponent> DebugPanel;
 
@@ -201,7 +208,6 @@ private:
     bool bDesktopCameraApplied = false;
     bool bPendingRecenter = false;
     float DebugRefreshSeconds = 0.0f;
-    TWeakObjectPtr<AGratiaPreviewCharacter> TestCharacter;
 
     void BindPlayer();
     void BindHand(FHandProxy& Hand, FName ControllerName, FName VisualName);

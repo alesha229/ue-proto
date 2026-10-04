@@ -5,6 +5,7 @@
 
 class AGratiaPreviewCharacter;
 class UPhysicalAnimationComponent;
+class UGratiaCharacterProfile;
 
 /** Driven Chaos bodies on accessory chains; the planted character core stays animated. */
 UCLASS()
@@ -23,6 +24,7 @@ protected:
     virtual void BeginPlay() override;
 private:
     TWeakObjectPtr<AGratiaPreviewCharacter> Character;
+    TWeakObjectPtr<UGratiaCharacterProfile> LastProfile;
     UPROPERTY() TObjectPtr<UPhysicalAnimationComponent> Driver;
     TArray<FName> ActiveBones;
     int32 SettingsSignature = INDEX_NONE;

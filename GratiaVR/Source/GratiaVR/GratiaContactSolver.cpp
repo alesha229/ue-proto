@@ -1,4 +1,5 @@
 #include "GratiaContactSolver.h"
+#include <limits>
 
 namespace
 {
@@ -304,6 +305,41 @@ namespace
         }
         return Best;
     }
+
+    FVector ConstrainToManifold(const FVector& Desired, TConstArrayView<FVector> Normals)
+    {
+        auto IsAllowed = [&Normals](const FVector& Candidate)
+        {
+            for (const FVector& Normal : Normals)
+                if (FVector::DotProduct(Candidate, Normal) < -1.0e-9) return false;
+            return true;
+        };
+        if (IsAllowed(Desired)) return Desired;
+        // The closest vector in a 3D contact cone lies inside it, on one plane, on a
+        // two-plane intersection or at zero. Enumerating those cases avoids cyclic
+        // projection pushing a stationary hand away from an overlapping-sphere corner.
+        FVector Best = FVector::ZeroVector;
+        double BestError = Desired.SizeSquared();
+        auto Consider = [&](const FVector& Candidate)
+        {
+            const double Error = (Desired - Candidate).SizeSquared();
+            if (Error < BestError && IsAllowed(Candidate)) { Best = Candidate; BestError = Error; }
+        };
+        for (int32 A = 0; A < Normals.Num(); ++A)
+        {
+            Consider(Desired - Normals[A] * FVector::DotProduct(Desired, Normals[A]));
+            for (int32 B = A + 1; B < Normals.Num(); ++B)
+            {
+                const FVector Cross = FVector::CrossProduct(Normals[A], Normals[B]);
+                if (Cross.SizeSquared() > MathEpsilon)
+                {
+                    const FVector Direction = SafeDirection(Cross);
+                    Consider(Direction * FVector::DotProduct(Desired, Direction));
+                }
+            }
+        }
+        return Best;
+    }
 }
 
 FGratiaContactShape FGratiaContactShape::Sphere(const FVector& Center, double InRadius)
@@ -312,6 +348,162 @@ FGratiaContactShape FGratiaContactShape::Sphere(const FVector& Center, double In
     Result.Type = EGratiaContactShapeType::Sphere; Result.A = Center; Result.Radius = InRadius;
     return Result;
 }
+
+namespace
+{
+    struct FContactRegressionReporter
+    {
+        bool bPassed = true;
+        int32 Checks = 0;
+        FString Failures;
+        void TestTrue(const FString& Label, bool Value)
+        {
+            ++Checks;
+            if (!Value) AddError(Label);
+        }
+        void TestFalse(const FString& Label, bool Value) { TestTrue(Label, !Value); }
+        void AddError(const FString& Label)
+        {
+            bPassed = false;
+            if (!Failures.IsEmpty()) Failures += TEXT("; ");
+            Failures += Label;
+        }
+        FString MakeReport() const
+        {
+            return FString::Printf(TEXT("Contact solver: %d assertions; 2000 seeded mixed trajectories; %s%s%s"),
+                Checks, bPassed ? TEXT("PASS") : TEXT("FAIL"),
+                Failures.IsEmpty() ? TEXT("") : TEXT(": "), *Failures);
+        }
+    };
+}
+
+bool GratiaContactSolver::RunRegressionChecks(FString& Report)
+{
+    FContactRegressionReporter Check;
+    auto IsSafe = [&Check](const TCHAR* Label, const FGratiaContactSolveResult& Result,
+        TConstArrayView<FGratiaContactShape> Shapes)
+    {
+        Check.TestFalse(FString::Printf(TEXT("%s: finite output"), Label), Result.Position.ContainsNaN());
+        Check.TestTrue(FString::Printf(TEXT("%s: no final penetration"), Label),
+            GratiaContactSolver::MaxPenetration(Result.Position, Shapes) <= 0.001);
+    };
+
+    TArray<FGratiaContactShape> Shapes;
+    Shapes.Add(FGratiaContactShape::Box(FVector::ZeroVector, FVector(50)));
+    auto Result = GratiaContactSolver::Solve(FVector(-200, 0, 0), FVector(200, 0, 0), Shapes);
+    IsSafe(TEXT("Fast complete cube traversal"), Result, Shapes);
+    Check.TestTrue(TEXT("Cube sweep stops on the entering face, not on the far side"), Result.Position.X < -50.0 && Result.Position.X > -50.1);
+    Check.TestTrue(TEXT("Cube reports the first shape"), Result.bBlocked && Result.FirstShapeIndex == 0);
+    Check.TestTrue(TEXT("Ordinary cube sweep converges without fallback"), Result.bConverged && !Result.bUsedFallback);
+
+    Shapes.Reset();
+    Shapes.Add(FGratiaContactShape::Sphere(FVector::ZeroVector, 10.0));
+    Result = GratiaContactSolver::Solve(FVector(-10, 0, 0), FVector(30, 0, 0), Shapes);
+    IsSafe(TEXT("Sphere boundary crossing"), Result, Shapes);
+    Check.TestTrue(TEXT("A start on the exact surface cannot cross the sphere"), Result.Position.X < -9.999);
+    Result = GratiaContactSolver::Solve(FVector(-10, 0, 0), FVector(-30, 0, 0), Shapes);
+    Check.TestTrue(TEXT("Outward movement from the sphere surface is allowed"), Result.Position.Equals(FVector(-30, 0, 0), 0.001));
+    Result = GratiaContactSolver::Solve(FVector(-30, 10.02, 0), FVector(30, 10.02, 0), Shapes);
+    Check.TestTrue(TEXT("A grazing tangent does not snag"), Result.Position.Equals(FVector(30, 10.02, 0), 0.001));
+    FVector Resting(-10.02, 0, 0);
+    for (int32 Index = 0; Index < 1000; ++Index)
+        Resting = GratiaContactSolver::Solve(Resting, Resting, Shapes).Position;
+    Check.TestTrue(TEXT("A stationary surface contact does not drift"), Resting.Equals(FVector(-10.02, 0, 0), 0.00001));
+
+    Shapes.Reset();
+    Shapes.Add(FGratiaContactShape::Sphere(FVector(-3, 0, 0), 5.0));
+    Shapes.Add(FGratiaContactShape::Sphere(FVector(3, 0, 0), 5.0));
+    Result = GratiaContactSolver::Solve(FVector(0, -20, 0), FVector::ZeroVector, Shapes);
+    IsSafe(TEXT("Target inside two overlapping spheres"), Result, Shapes);
+    Check.TestTrue(TEXT("Overlap endpoint stays on the approach side"), Result.Position.Y < -3.9);
+    const FVector OverlapContact = Result.Position;
+    FVector HeldContact = OverlapContact;
+    for (int32 Index = 0; Index < 1000; ++Index)
+        HeldContact = GratiaContactSolver::Solve(HeldContact, FVector::ZeroVector, Shapes).Position;
+    Check.TestTrue(TEXT("A held target in an overlap corner does not drift away"),
+        HeldContact.Equals(OverlapContact, 0.001));
+    Result = GratiaContactSolver::Solve(FVector::ZeroVector, FVector::ZeroVector, Shapes);
+    IsSafe(TEXT("Start inside two overlapping spheres"), Result, Shapes);
+    Check.TestTrue(TEXT("Cyclic overlap uses a bounded deterministic escape"), Result.bStartedPenetrating && Result.bUsedFallback && Result.StartCorrectionDistance < 6.0);
+    const FVector FirstEscape = Result.Position;
+    for (int32 Index = 0; Index < 20; ++Index)
+        Check.TestTrue(TEXT("Repeated identical overlap is deterministic"),
+            GratiaContactSolver::Solve(FVector::ZeroVector, FVector::ZeroVector, Shapes).Position.Equals(FirstEscape, 0.000001));
+
+    Shapes.Reset();
+    Shapes.Add(FGratiaContactShape::Capsule(FVector(0, 0, -20), FVector(0, 0, 20), 10.0));
+    Result = GratiaContactSolver::Solve(FVector(-100, 0, 0), FVector(100, 0, 0), Shapes);
+    IsSafe(TEXT("Capsule cylinder traversal"), Result, Shapes);
+    Check.TestTrue(TEXT("Capsule cylinder stops fast movement"), Result.Position.X < -10.0 && Result.Position.X > -10.1);
+    Result = GratiaContactSolver::Solve(FVector(0, 0, 100), FVector::ZeroVector, Shapes);
+    IsSafe(TEXT("Capsule cap traversal"), Result, Shapes);
+    Check.TestTrue(TEXT("Capsule upper end cap is swept"), Result.Position.Z > 30.0 && Result.Position.Z < 30.1);
+    Shapes[0] = FGratiaContactShape::Capsule(FVector(-10, 0, -20), FVector(10, 0, 20), 10.0);
+    Result = GratiaContactSolver::Solve(FVector(0, -100, 0), FVector(0, 100, 0), Shapes);
+    IsSafe(TEXT("Oblique capsule traversal"), Result, Shapes);
+    Check.TestTrue(TEXT("Capsule segment orientation is respected"), Result.Position.Y < -10.0 && Result.Position.Y > -10.1);
+    Shapes[0] = FGratiaContactShape::Capsule(FVector::ZeroVector, FVector::ZeroVector, 10.0);
+    Result = GratiaContactSolver::Solve(FVector(-100, 0, 0), FVector(100, 0, 0), Shapes);
+    Check.TestTrue(TEXT("Zero-length capsule behaves as a sphere"), Result.Position.X < -10.0 && Result.Position.X > -10.1);
+
+    Shapes.Reset();
+    Shapes.Add(FGratiaContactShape::Box(FVector::ZeroVector, FVector(50)));
+    Result = GratiaContactSolver::Solve(FVector(-100, -30, 0), FVector(100, 100, 0), Shapes);
+    IsSafe(TEXT("Tangential box slide"), Result, Shapes);
+    Check.TestTrue(TEXT("Sliding preserves unobstructed tangential movement"), FMath::Abs(Result.Position.Y - 100.0) < 0.001);
+    Check.TestTrue(TEXT("Sliding does not go through the blocked face"), Result.Position.X < -50.0);
+
+    Shapes.Reset();
+    Shapes.Add(FGratiaContactShape::Box(FVector::ZeroVector, FVector(5, 100, 100)));
+    Shapes.Add(FGratiaContactShape::Box(FVector::ZeroVector, FVector(100, 5, 100)));
+    Result = GratiaContactSolver::Solve(FVector(-50, -50, 0), FVector(50, 50, 0), Shapes);
+    IsSafe(TEXT("Two-face corner"), Result, Shapes);
+    Check.TestTrue(TEXT("Both corner normals constrain the final movement"), Result.Position.X < -5.0 && Result.Position.Y < -5.0);
+
+    Shapes.Reset();
+    Shapes.Add(FGratiaContactShape::Sphere(FVector(-20, 0, 0), 5.0));
+    Shapes.Add(FGratiaContactShape::Sphere(FVector(20, 0, 0), 5.0));
+    Result = GratiaContactSolver::Solve(FVector(-100, 0, 0), FVector(100, 0, 0), Shapes);
+    const FVector Ordered = Result.Position;
+    Swap(Shapes[0], Shapes[1]);
+    Result = GratiaContactSolver::Solve(FVector(-100, 0, 0), FVector(100, 0, 0), Shapes);
+    Check.TestTrue(TEXT("Earliest collision is independent of shape iteration order"), Ordered.Equals(Result.Position, 0.000001));
+    Check.TestTrue(TEXT("Earliest index refers to the caller's original shape array"), Result.FirstShapeIndex == 1);
+
+    Shapes.Reset();
+    Shapes.Add(FGratiaContactShape::Sphere(FVector::ZeroVector, 10.0));
+    const double NaN = std::numeric_limits<double>::quiet_NaN();
+    Result = GratiaContactSolver::Solve(FVector(-30, 0, 0), FVector(NaN, 0, 0), Shapes);
+    IsSafe(TEXT("Invalid target"), Result, Shapes);
+    Check.TestTrue(TEXT("Invalid target holds the finite previous position and reports rejection"),
+        !Result.bInputValid && Result.Position.Equals(FVector(-30, 0, 0), 0.001));
+    Shapes.Add(FGratiaContactShape::Sphere(FVector(NaN, 0, 0), 10.0));
+    Result = GratiaContactSolver::Solve(FVector(-30, 0, 0), FVector(30, 0, 0), Shapes);
+    IsSafe(TEXT("Invalid shape"), Result, Shapes);
+    Check.TestTrue(TEXT("Invalid geometry is counted and cannot disable valid collisions"),
+        !Result.bInputValid && Result.InvalidShapeCount == 1 && Result.Position.X < -10.0);
+
+    Shapes.Reset();
+    Shapes.Add(FGratiaContactShape::Sphere(FVector::ZeroVector, 10.0));
+    Shapes.Add(FGratiaContactShape::Capsule(FVector(20, 0, -15), FVector(20, 0, 15), 8.0));
+    Shapes.Add(FGratiaContactShape::Box(FVector(-20, 20, 0), FVector(5, 10, 15)));
+    FRandomStream Random(728913);
+    FVector Point(-80, -80, 0);
+    for (int32 Index = 0; Index < 2000; ++Index)
+    {
+        const FVector Target(Random.FRandRange(-75.0f, 75.0f), Random.FRandRange(-75.0f, 75.0f), Random.FRandRange(-40.0f, 40.0f));
+        Result = GratiaContactSolver::Solve(Point, Target, Shapes);
+        if (Result.Position.ContainsNaN() || GratiaContactSolver::MaxPenetration(Result.Position, Shapes) > 0.001)
+        {
+            Check.AddError(FString::Printf(TEXT("Seeded mixed-shape trajectory failed at step %d"), Index));
+            break;
+        }
+        Point = Result.Position;
+    }
+    Report = Check.MakeReport();
+    return Check.bPassed;
+}
+
 
 FGratiaContactShape FGratiaContactShape::Capsule(const FVector& Start, const FVector& End, double InRadius)
 {
@@ -389,15 +581,8 @@ FGratiaContactSolveResult GratiaContactSolver::Solve(const FVector& From, const 
         Result.bBlocked = true;
         if (Result.FirstShapeIndex == INDEX_NONE) Result.FirstShapeIndex = OriginalIndices[Hit.ShapeIndex];
         Point += Remaining * Hit.Time;
-        Remaining *= 1.0 - Hit.Time;
         ContactNormals.Add(Hit.Normal);
-        // Project against the accumulated contact manifold, not only the last hit.
-        for (int32 Projection = 0; Projection < 4; ++Projection)
-            for (const FVector& Normal : ContactNormals)
-            {
-                const double Inward = FVector::DotProduct(Remaining, Normal);
-                if (Inward < 0.0) Remaining -= Normal * Inward;
-            }
+        Remaining = ConstrainToManifold(SafeTarget - Point, ContactNormals);
         bFinished = Remaining.SizeSquared() <= MathEpsilon;
     }
     if (!bFinished)

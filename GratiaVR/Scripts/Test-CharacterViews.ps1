@@ -1,10 +1,14 @@
-param([int]$TimeoutSeconds = 120)
+param([int]$TimeoutSeconds = 120, [ValidateSet('03','04')][string]$EvidenceStage = '04')
 $ErrorActionPreference = 'Stop'
 $workspaceRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $exePath = Join-Path $workspaceRoot 'Builds\Stage1\Windows\GratiaVR\Binaries\Win64\GratiaVR.exe'
-$evidenceRoot = Join-Path $workspaceRoot 'evidence\03'
+$evidenceRoot = Join-Path $workspaceRoot ('evidence\' + $EvidenceStage)
 $shotRoot = Join-Path $workspaceRoot 'Builds\Stage1\Windows\GratiaVR\Saved\Screenshots\Windows'
 $results = @()
+$manifest = Get-Content -LiteralPath (Join-Path $workspaceRoot 'Builds\Stage1\Windows\build_manifest.json') -Raw | ConvertFrom-Json
+$exeHash = (Get-FileHash -LiteralPath $exePath).Hash
+if ($exeHash -ne $manifest.executable_sha256) { throw 'Executable differs from manifest' }
+New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
 foreach ($view in @('Front','Left','Right','Back','Face')) {
     $logPath = Join-Path $evidenceRoot ("packaged_view_$view.log")
     $began = [DateTimeOffset]::UtcNow
@@ -23,7 +27,8 @@ foreach ($view in @('Front','Left','Right','Back','Face')) {
     if (-not $shot -or $shot.LastWriteTimeUtc -lt $began.UtcDateTime) { throw "No new screenshot for view $view" }
     $shotPath = Join-Path $evidenceRoot ("packaged_view_$view.png")
     Copy-Item -LiteralPath $shot.FullName -Destination $shotPath -Force
-    $results += [pscustomobject]@{view=$view; passed=$pass; screenshot=$shotPath; log=$logPath}
+    $pass = $pass -and $logText.Contains('BUILD id=' + $manifest.build_id)
+    $results += [pscustomobject]@{view=$view; build_id=$manifest.build_id; executable_sha256=$exeHash; passed=$pass; screenshot=$shotPath; log=$logPath}
     $results | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'packaged_view_results.json') -Encoding utf8
     if (-not $pass) { throw "Character view $view failed. See $logPath" }
     Write-Output "Character view $view passed"
