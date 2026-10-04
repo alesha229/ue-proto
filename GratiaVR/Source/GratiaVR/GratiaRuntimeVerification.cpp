@@ -394,8 +394,8 @@ void UGratiaRuntimeVerification::RunSelfChecks()
         TEXT("Independent hand solver covers fast sweep, penetrating starts, overlapping proxies, sliding and pose changes"));
     if (!SolverFailure.IsEmpty())
     {
-        if (bSolverPassed) UE_LOG(LogGratiaVerification, Display, TEXT("%s"), *SolverFailure);
-        else UE_LOG(LogGratiaVerification, Error, TEXT("%s"), *SolverFailure);
+        if (bSolverPassed) { UE_LOG(LogGratiaVerification, Display, TEXT("%s"), *SolverFailure); }
+        else { UE_LOG(LogGratiaVerification, Error, TEXT("%s"), *SolverFailure); }
     }
     UGratiaCharacterProfile* Profile = Runtime.TargetCharacter.IsValid() ? Runtime.TargetCharacter->CharacterProfile.Get() : nullptr;
     FString ContactFailure;
