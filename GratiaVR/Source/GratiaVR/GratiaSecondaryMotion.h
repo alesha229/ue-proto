@@ -18,6 +18,11 @@ public:
     void RefreshSettings(bool bForce = false);
     void ResetPhysics();
     bool RunChecks(FString& Failure);
+    /** Called after tracking and the independent proxy solver. Consumed once next PrePhysics. */
+    void SubmitHand(bool bLeft, const FVector& Position, bool bAllowed, float Delta);
+    void ClearHands();
+    const TArray<FName>& GetActiveBones() const { return ActiveBones; }
+    int32 GetHandPushCount(bool bLeft) const { return HandPushCounts[bLeft ? 0 : 1]; }
     int32 GetActiveBodyCount() const { return ActiveBones.Num(); }
     bool HasFault() const { return bFault; }
 protected:
@@ -31,4 +36,14 @@ private:
     bool bFault = false;
     bool bWaitForDriverTick = true;
     float CheckSeconds = 0.0f;
+    struct FPhysicsHand
+    {
+        FVector Previous = FVector::ZeroVector, Current = FVector::ZeroVector;
+        float Delta = 0.0f;
+        bool bReady = false, bPending = false;
+    };
+    FPhysicsHand Hands[2];
+    int32 HandPushCounts[2] = {};
+    double NextHandLog[2] = {};
+    void ApplyHandPressure();
 };

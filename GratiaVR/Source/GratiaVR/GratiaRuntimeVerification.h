@@ -61,6 +61,11 @@ private:
     int32 ActualSoakReactions = 0;
     FString PerfRows;
     bool bInputIntegrationStarted = false;
+    int32 HandPhysicsQAPhase = 0;
+    int32 HandPhysicsBaseline[2] = {};
+    FName HandPhysicsQABone;
+    FVector HandPhysicsBefore = FVector::ZeroVector;
+    void RunHandPhysicsIntegration();
     bool bInputIntegrationReleased = false;
     bool bInputIntegrationDone = false;
     bool bInputEventAccepted = false;

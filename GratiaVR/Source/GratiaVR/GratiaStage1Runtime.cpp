@@ -98,6 +98,7 @@ void AGratiaStage1Runtime::SetTargetCharacter(AGratiaPreviewCharacter* Character
         TargetCharacter->Interaction->RemoveTickPrerequisiteActor(this);
         TargetCharacter->Interaction->SetSceneContactActor(nullptr);
         TargetCharacter->Interaction->ResetState();
+        if (TargetCharacter->SecondaryMotion) TargetCharacter->SecondaryMotion->ClearHands();
     }
     TargetCharacter = Character;
     if (Menu) Menu->SetCharacter(Character);
@@ -258,7 +259,7 @@ void AGratiaStage1Runtime::BindHand(FHandProxy& Hand, FName ControllerName, FNam
     Hand.LastWorld = Hand.Visual->GetComponentTransform();
     if (!IsFiniteTransform(Hand.LastWorld)) Hand.LastWorld = FTransform::Identity;
     // XR mannequin meshes have no PhysicsAsset and default to NoCollision.
-    // A query proxy supplies predictable contacts; physical blocking comes in stage 5.
+    // Overlap proxy is independent of swept, force-limited Chaos secondary-body interaction.
     USphereComponent* Contact = NewObject<USphereComponent>(PlayerPawn.Get(), NAME_None, RF_Transient);
     PlayerPawn->AddInstanceComponent(Contact);
     Contact->SetupAttachment(Hand.Visual.Get());
@@ -390,7 +391,12 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
     }
     if (IsFiniteTransform(VisualWorld)) Hand.LastWorld = VisualWorld;
     if (TargetCharacter.IsValid() && TargetCharacter->Interaction)
+    {
         TargetCharacter->Interaction->SetHandSample(bLeft, Target, VisualWorld, Hand.Gate.CanInteract());
+        if (TargetCharacter->SecondaryMotion)
+            TargetCharacter->SecondaryMotion->SubmitHand(bLeft, VisualWorld.GetLocation(),
+                TargetCharacter->Interaction->IsHandSampleReady(bLeft) && (!Menu || !Menu->bOpen), DeltaSeconds);
+    }
     if (Before != Hand.Gate.State)
     {
         UE_LOG(LogGratiaStage1, Display, TEXT("%s hand: %s (forced loss=%s)"), bLeft ? TEXT("Left") : TEXT("Right"),

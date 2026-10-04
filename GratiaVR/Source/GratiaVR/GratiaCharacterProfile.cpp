@@ -227,5 +227,11 @@ bool UGratiaCharacterProfile::ValidateProfile(TArray<FString>& Errors, TArray<FS
     if (!FMath::IsFinite(MaxPhysicsTargetDeviationCm) || MaxPhysicsTargetDeviationCm <= 0.0f
         || !FMath::IsFinite(PhysicsSafetyCheckSeconds) || PhysicsSafetyCheckSeconds <= 0.0f)
         Errors.Add(TEXT("Physics safety limits must be finite and positive."));
+    const float HandPositive[] = {HandPhysics.RadiusCm, HandPhysics.MaxSpeedCmPerSecond, HandPhysics.MaxTravelCm};
+    for (float Value : HandPositive)
+        if (!FMath::IsFinite(Value) || Value <= 0.0f) Errors.Add(TEXT("Hand physics geometry/speed limits must be finite and positive."));
+    const float HandNonnegative[] = {HandPhysics.Stiffness, HandPhysics.Damping, HandPhysics.MaxForce};
+    for (float Value : HandNonnegative)
+        if (!FMath::IsFinite(Value) || Value < 0.0f) Errors.Add(TEXT("Hand physics force settings must be finite and nonnegative."));
     return Errors.IsEmpty();
 }

@@ -7,6 +7,9 @@
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "PhysicsEngine/SkeletalBodySetup.h"
 #include "PhysicsEngine/PhysicalAnimationComponent.h"
+#include "CollisionShape.h"
+#include "Engine/World.h"
+#include "GratiaHandPressure.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogGratiaPhysics, Log, All);
 
@@ -39,6 +42,7 @@ void UGratiaSecondaryMotion::RefreshSettings(bool bForce)
     if (!bForce && Signature == SettingsSignature && LastProfile.Get() == CharacterProfile) return;
     LastProfile = CharacterProfile;
     SettingsSignature = Signature;
+    ClearHands();
     bWaitForDriverTick = true;
     USkeletalMeshComponent* Mesh = Character->CharacterMesh;
     Mesh->SetAllBodiesSimulatePhysics(false);
@@ -96,6 +100,86 @@ void UGratiaSecondaryMotion::ResetPhysics()
     RefreshSettings(true);
 }
 
+void UGratiaSecondaryMotion::ClearHands()
+{
+    for (FPhysicsHand& Hand : Hands) Hand = FPhysicsHand();
+}
+
+void UGratiaSecondaryMotion::SubmitHand(bool bLeft, const FVector& Position, bool bAllowed, float Delta)
+{
+    FPhysicsHand& Hand = Hands[bLeft ? 0 : 1];
+    const UGratiaCharacterProfile* Profile = Character.IsValid() ? Character->CharacterProfile.Get() : nullptr;
+    if (!bAllowed || !Profile || !Profile->HandPhysics.bEnabled || ActiveBones.IsEmpty() || bFault
+        || Position.ContainsNaN() || !FMath::IsFinite(Delta) || Delta <= 0 || Delta > 0.1f)
+    { Hand = FPhysicsHand(); return; }
+    // A new/recovered hand is seeded without sweeping from its parked location.
+    const bool bContinuous = Hand.bReady && FVector::Distance(Hand.Current, Position) <= Profile->HandPhysics.MaxTravelCm;
+    Hand.Previous = bContinuous ? Hand.Current : Position;
+    Hand.Current = Position;
+    Hand.Delta = Delta;
+    Hand.bPending = bContinuous;
+    Hand.bReady = true;
+}
+
+void UGratiaSecondaryMotion::ApplyHandPressure()
+{
+    if (!Character.IsValid() || !Character->CharacterProfile || !Character->CharacterMesh || bFault) return;
+    const FGratiaHandPhysicsSettings& Settings = Character->CharacterProfile->HandPhysics;
+    if (!Settings.bEnabled) { ClearHands(); return; }
+    auto* Mesh = Character->CharacterMesh.Get();
+    for (int32 Index = 0; Index < 2; ++Index)
+    {
+        FPhysicsHand& Hand = Hands[Index];
+        if (!Hand.bPending) continue;
+        Hand.bPending = false; // never replay stale tracking data
+        const FVector Velocity = ((Hand.Current - Hand.Previous) / Hand.Delta).GetClampedToMaxSize(Settings.MaxSpeedCmPerSecond);
+        struct FPush { FBodyInstance* Body; FVector Point, Direction; double Force; FName Bone; };
+        TArray<FPush> Pushes;
+        double Total = 0;
+        for (FName Bone : ActiveBones)
+        {
+            FBodyInstance* Body = Mesh->GetBodyInstance(Bone);
+            if (!Body || !Body->IsInstanceSimulatingPhysics()) continue;
+            FHitResult Hit;
+            const bool bSwept = Body->Sweep(Hit, Hand.Previous, Hand.Current, FQuat::Identity,
+                FCollisionShape::MakeSphere(Settings.RadiusCm), false);
+            FVector Closest;
+            const float Distance = Body->GetDistanceToBody(Hand.Current, Closest);
+            const bool bOverlap = FMath::IsFinite(Distance) && Distance >= 0 && Distance < Settings.RadiusCm;
+            if (!bSwept && !bOverlap) continue;
+            FVector Normal = bSwept ? Hit.Normal : (Hand.Current - Closest).GetSafeNormal();
+            if (Normal.IsNearlyZero()) Normal = (Hand.Current - Body->GetUnrealWorldTransform().GetLocation()).GetSafeNormal();
+            if (Normal.ContainsNaN() || Normal.IsNearlyZero()) continue;
+            Normal.Normalize();
+            const FVector Point = bSwept ? Hit.ImpactPoint : Closest;
+            if (Point.ContainsNaN()) continue;
+            const FVector BodyVelocity = Body->GetUnrealWorldVelocityAtPoint(Point);
+            const double ClosingSpeed = -FVector::DotProduct(Velocity - BodyVelocity, Normal);
+            // Crossing a thin body remains a hit even when the endpoint is outside.
+            const double Depth = bOverlap ? Settings.RadiusCm - Distance : 0.0;
+            const double Force = GratiaHandPressure::Force(Depth, ClosingSpeed, Settings.Stiffness, Settings.Damping, Settings.MaxForce);
+            if (Force <= 0) continue;
+            Pushes.Add({Body, Point, -Normal, Force, Bone});
+            Total += Force;
+        }
+        // One aggregate budget per hand prevents dense overlapping chains multiplying force.
+        const double Scale = Total > Settings.MaxForce ? Settings.MaxForce / Total : 1.0;
+        for (const FPush& Push : Pushes)
+            Push.Body->AddImpulseAtPosition(Push.Direction * Push.Force * Scale * Hand.Delta, Push.Point);
+        if (!Pushes.IsEmpty())
+        {
+            ++HandPushCounts[Index];
+            const double Now = GetWorld()->GetTimeSeconds();
+            if (Now >= NextHandLog[Index])
+            {
+                UE_LOG(LogGratiaPhysics, Display, TEXT("HAND_PHYSICS hand=%d bodies=%d first=%s impulse=%.3f pushes=%d"),
+                    Index, Pushes.Num(), *Pushes[0].Bone.ToString(), FMath::Min(Total, double(Settings.MaxForce)) * Hand.Delta, HandPushCounts[Index]);
+                NextHandLog[Index] = Now + 1.0;
+            }
+        }
+    }
+}
+
 void UGratiaSecondaryMotion::TickComponent(float Delta, ELevelTick Type, FActorComponentTickFunction* Tick)
 {
     Super::TickComponent(Delta, Type, Tick);
@@ -103,6 +187,7 @@ void UGratiaSecondaryMotion::TickComponent(float Delta, ELevelTick Type, FActorC
     // ApplyPhysicalAnimationSettings builds target bodies in the driver's tick.
     // GetBodyTargetTransform assumes those arrays already exist in UE 5.8.
     if (bWaitForDriverTick) { bWaitForDriverTick = false; return; }
+    ApplyHandPressure();
     if (!Character.IsValid() || !Character->CharacterProfile || !FMath::IsFinite(Delta)) return;
     const UGratiaCharacterProfile* Profile = Character->CharacterProfile;
     CheckSeconds += Delta;
@@ -111,9 +196,11 @@ void UGratiaSecondaryMotion::TickComponent(float Delta, ELevelTick Type, FActorC
     auto* Mesh = Character->CharacterMesh.Get();
     for (FName Name : ActiveBones)
     {
-        const FTransform Pose = Mesh->GetSocketTransform(Name);
+        const FBodyInstance* Body = Mesh->GetBodyInstance(Name);
+        const FTransform Pose = Body ? Body->GetUnrealWorldTransform() : Mesh->GetSocketTransform(Name);
         const FTransform Target = Driver->GetBodyTargetTransform(Name);
-        if (Pose.ContainsNaN() || Target.ContainsNaN() ||
+        if (!Body || Pose.ContainsNaN() || Target.ContainsNaN() || Body->GetUnrealWorldVelocity().ContainsNaN()
+            || Body->GetUnrealWorldAngularVelocityInRadians().ContainsNaN() ||
             FVector::Distance(Pose.GetLocation(), Target.GetLocation()) > Profile->MaxPhysicsTargetDeviationCm)
         {
             bFault = true;

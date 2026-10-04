@@ -36,6 +36,7 @@ public:
     UGratiaInteraction();
     virtual void TickComponent(float Delta, ELevelTick Type, FActorComponentTickFunction* Tick) override;
     void SetHandSample(bool bLeft, const FTransform& Raw, const FTransform& Visual, bool bAllowed);
+    bool IsHandSampleReady(bool bLeft) const { return Hands[bLeft ? 0 : 1].bAllowed; }
     FTransform ConstrainHand(const FTransform& From, const FTransform& Target, bool bLeft = false) const;
     UFUNCTION(BlueprintCallable, Category = "Interaction")
     void RebuildProfileZones();

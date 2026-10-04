@@ -389,9 +389,14 @@ void UGratiaRuntimeVerification::RunSelfChecks()
     TestCheck(Runtime.Locomotion && Runtime.Locomotion->RunChecks(MovementFailure), TEXT("Head-relative walking, deadzone, wall sweep, snap pivot and teleport suppression"));
     if (!MovementFailure.IsEmpty()) UE_LOG(LogGratiaVerification, Error, TEXT("%s"), *MovementFailure);
     FString SolverFailure;
-    TestCheck(GratiaContactSolver::RunRegressionChecks(SolverFailure),
+    const bool bSolverPassed = GratiaContactSolver::RunRegressionChecks(SolverFailure);
+    TestCheck(bSolverPassed,
         TEXT("Independent hand solver covers fast sweep, penetrating starts, overlapping proxies, sliding and pose changes"));
-    if (!SolverFailure.IsEmpty()) UE_LOG(LogGratiaVerification, Error, TEXT("%s"), *SolverFailure);
+    if (!SolverFailure.IsEmpty())
+    {
+        if (bSolverPassed) UE_LOG(LogGratiaVerification, Display, TEXT("%s"), *SolverFailure);
+        else UE_LOG(LogGratiaVerification, Error, TEXT("%s"), *SolverFailure);
+    }
     UGratiaCharacterProfile* Profile = Runtime.TargetCharacter.IsValid() ? Runtime.TargetCharacter->CharacterProfile.Get() : nullptr;
     FString ContactFailure;
     if (Profile && Profile->Capabilities.bContacts)
@@ -867,8 +872,9 @@ void UGratiaRuntimeVerification::RunRequestedTests(float DeltaSeconds)
         bCharacterMotionChecksDone = bFinish;
     }
     if (bTestChecksDone && bSelfTest) RunInputIntegration();
+    if (bCharacterMotionChecksDone && bSelfTest) RunHandPhysicsIntegration();
     if (bTestChecksDone && bCharacterMotionChecksDone && TestElapsedSeconds >= 8.0f && !bRecenterTestPending
-        && (!bSelfTest || bInputIntegrationDone))
+        && (!bSelfTest || (bInputIntegrationDone && HandPhysicsQAPhase == 3)))
     {
         if (bTestFailed)
         {
@@ -880,6 +886,58 @@ void UGratiaRuntimeVerification::RunRequestedTests(float DeltaSeconds)
             if (bSelfTest) UE_LOG(LogGratiaVerification, Display, TEXT("GRATIA_STAGE1_SELFTEST_PASS"));
         }
         FPlatformMisc::RequestExitWithStatus(false, bTestFailed ? 1 : 0, TEXT("GratiaStage1Tests"));
+    }
+}
+
+void UGratiaRuntimeVerification::RunHandPhysicsIntegration()
+{
+    if (HandPhysicsQAPhase == 3) return;
+    auto* Character = GetRuntime().TargetCharacter.Get();
+    if (!Character || !Character->SecondaryMotion || !Character->CharacterProfile) { HandPhysicsQAPhase = 3; return; }
+    auto* Physics = Character->SecondaryMotion.Get();
+    const auto& Settings = Character->CharacterProfile->HandPhysics;
+    if (!Character->CharacterProfile->Capabilities.bSecondaryPhysics || !Settings.bEnabled)
+    { TestSkip(TEXT("Hand pressure unavailable in this profile")); HandPhysicsQAPhase = 3; return; }
+    if (HandPhysicsQAPhase == 0)
+    {
+        TestCheck(!Physics->GetActiveBones().IsEmpty(), TEXT("Hand pressure has active driven Chaos bodies"));
+        if (Physics->GetActiveBones().IsEmpty()) { HandPhysicsQAPhase = 3; return; }
+        HandPhysicsQABone = Physics->GetActiveBones().Last();
+        FBodyInstance* Body = Character->CharacterMesh->GetBodyInstance(HandPhysicsQABone);
+        if (!Body) { TestCheck(false, TEXT("Hand pressure test body exists")); HandPhysicsQAPhase = 3; return; }
+        HandPhysicsBefore = Body->GetUnrealWorldTransform().GetLocation();
+        UE_LOG(LogGratiaVerification, Display, TEXT("HAND_PHYSICS_QA source=synthetic bone=%s"), *HandPhysicsQABone.ToString());
+        for (int32 Index = 0; Index < 2; ++Index)
+        {
+            HandPhysicsBaseline[Index] = Physics->GetHandPushCount(Index == 0);
+            const FVector Axis = Index == 0 ? FVector::RightVector : FVector::ForwardVector;
+            Physics->SubmitHand(Index == 0, HandPhysicsBefore + Axis * Settings.RadiusCm * 2, true, 1.0f / 90);
+            Physics->SubmitHand(Index == 0, HandPhysicsBefore + Axis * Settings.RadiusCm * 0.25f, true, 1.0f / 90);
+        }
+        HandPhysicsQAPhase = 1;
+    }
+    else if (HandPhysicsQAPhase == 1)
+    {
+        for (int32 Index = 0; Index < 2; ++Index)
+        {
+            TestCheck(Physics->GetHandPushCount(Index == 0) > HandPhysicsBaseline[Index],
+                Index == 0 ? TEXT("Left synthetic hand swept and pushed Chaos bodies") : TEXT("Right synthetic hand swept and pushed Chaos bodies"));
+            HandPhysicsBaseline[Index] = Physics->GetHandPushCount(Index == 0);
+            Physics->SubmitHand(Index == 0, HandPhysicsBefore, true, 1.0f / 90);
+            Physics->SubmitHand(Index == 0, HandPhysicsBefore, false, 1.0f / 90);
+        }
+        FBodyInstance* Body = Character->CharacterMesh->GetBodyInstance(HandPhysicsQABone);
+        const double Travel = Body ? FVector::Distance(HandPhysicsBefore, Body->GetUnrealWorldTransform().GetLocation()) : 0;
+        TestCheck(FMath::IsFinite(Travel) && Travel > 0.000001 && !Physics->HasFault(), TEXT("Chaos test body moved after hand pressure without a safety fault"));
+        UE_LOG(LogGratiaVerification, Display, TEXT("HAND_PHYSICS_QA displacement_cm=%.6f"), Travel);
+        HandPhysicsQAPhase = 2;
+    }
+    else
+    {
+        TestCheck(Physics->GetHandPushCount(true) == HandPhysicsBaseline[0] && Physics->GetHandPushCount(false) == HandPhysicsBaseline[1],
+            TEXT("Revoked hand samples cancel pending physical pressure on both hands"));
+        Physics->ClearHands();
+        HandPhysicsQAPhase = 3;
     }
 }
 

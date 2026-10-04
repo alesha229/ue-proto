@@ -182,6 +182,28 @@ struct GRATIAVR_API FGratiaContactSettings
     float MaxHandCorrectionCm = 20.0f;
 };
 
+/** Bounded hand pressure against active Chaos bodies; separate from reaction zones. */
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaHandPhysicsSettings
+{
+    GENERATED_BODY()
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Physics")
+    bool bEnabled = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Physics", meta = (ClampMin = "0.1"))
+    float RadiusCm = 6.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Physics", meta = (ClampMin = "0.0"))
+    float Stiffness = 30.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Physics", meta = (ClampMin = "0.0"))
+    float Damping = 0.5f;
+    /** Per hand, shared across all overlapping bodies, in kg cm / s^2. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Physics", meta = (ClampMin = "0.0"))
+    float MaxForce = 300.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Physics", meta = (ClampMin = "0.1"))
+    float MaxSpeedCmPerSecond = 500.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Physics", meta = (ClampMin = "0.1"))
+    float MaxTravelCm = 35.0f;
+};
+
 USTRUCT(BlueprintType)
 struct GRATIAVR_API FGratiaCharacterCapabilities
 {
@@ -270,6 +292,8 @@ public:
     TArray<FGratiaCollisionProxyDefinition> CollisionProxies;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact")
     FGratiaContactSettings ContactSettings;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Physics")
+    FGratiaHandPhysicsSettings HandPhysics;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion")
     TArray<FGratiaSecondaryBoneDefinition> SecondaryBones;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion")
