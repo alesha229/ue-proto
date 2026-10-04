@@ -1,0 +1,237 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Engine/DataAsset.h"
+#include "GratiaCharacterProfile.generated.h"
+
+class USkeletalMesh;
+class UAnimSequence;
+class UAnimInstance;
+class UPhysicsAsset;
+
+/** A character owns geometry and names; interaction code refers to semantic keys. */
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaContactZoneDefinition
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact")
+    FName Name;
+
+    /** Key in SemanticBones, for example Head or LeftHand. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact")
+    FName BoneSemantic;
+
+    /** Offset in the actor's local space, in centimetres. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact")
+    FVector Offset = FVector::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact", meta = (ClampMin = "0.1", Units = "cm"))
+    float Radius = 8.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact")
+    bool bCanHold = true;
+
+    /** Smaller values win when zones overlap. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact", meta = (ClampMin = "0"))
+    int32 Priority = 0;
+};
+
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaSecondaryBoneDefinition
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion")
+    FName Bone;
+
+    /** 1 = hair, 2 = clothing/decor, 3 = local body, 4 = ears/tail. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion", meta = (ClampMin = "1", ClampMax = "4"))
+    uint8 Group = 1;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion", meta = (ClampMin = "0.0", Units = "cm"))
+    float RestLengthCm = 0.0f;
+
+    /** False preserves a body as an animation-controlled anchor. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion")
+    bool bSafeSimulation = true;
+};
+
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaQualityProfile
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quality")
+    FName Name = TEXT("Medium");
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quality", meta = (ClampMin = "0"))
+    int32 HairCap = 32;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quality", meta = (ClampMin = "0"))
+    int32 ClothCap = 16;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quality", meta = (ClampMin = "0"))
+    int32 BodyCap = 4;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quality", meta = (ClampMin = "0"))
+    int32 EarCap = 11;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quality", meta = (ClampMin = "0"))
+    int32 TotalBodyCap = 64;
+
+    int32 GetGroupCap(uint8 Group) const;
+};
+
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaSecondaryGroupSettings
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion", meta = (ClampMin = "1", ClampMax = "4"))
+    uint8 Group = 1;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+    float BlendWeight = 0.55f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion", meta = (ClampMin = "0.0"))
+    float OrientationStrength = 180.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion", meta = (ClampMin = "0.0"))
+    float AngularVelocityStrength = 40.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion", meta = (ClampMin = "0.0"))
+    float MaxAngularForce = 35.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion", meta = (ClampMin = "0.0", Units = "deg"))
+    float SpringLimitDegrees = 3.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion", meta = (ClampMin = "0.0"))
+    float SpringStiffness = 90.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion", meta = (ClampMin = "0.0"))
+    float SpringDamping = 19.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion")
+    float HeadInertiaScale = -0.012f;
+};
+
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaContactSettings
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact", meta = (ClampMin = "0.0", Units = "s"))
+    float HoldSeconds = 0.4f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact", meta = (ClampMin = "0.0", Units = "s"))
+    float CooldownSeconds = 0.7f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact", meta = (ClampMin = "0.0", Units = "s"))
+    float SingleTouchSeconds = 0.18f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact", meta = (ClampMin = "0.1", Units = "cm"))
+    float HandRadiusCm = 6.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact", meta = (ClampMin = "0.0", Units = "cm"))
+    float TouchPaddingCm = 6.5f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact", meta = (ClampMin = "0.0", Units = "cm"))
+    float HoverPaddingCm = 20.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact", meta = (ClampMin = "0.0", Units = "s"))
+    float ReactionSeconds = 1.4f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact", meta = (ClampMin = "0.0", Units = "s"))
+    float CaptionSeconds = 1.8f;
+};
+
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaCharacterCapabilities
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Capabilities")
+    bool bBlink = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Capabilities")
+    bool bGaze = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Capabilities")
+    bool bFacialReactions = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Capabilities")
+    bool bReactionAnimations = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Capabilities")
+    bool bContacts = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Capabilities")
+    bool bSecondaryPhysics = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Capabilities")
+    bool bLocalSprings = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Capabilities")
+    bool bSound = true;
+};
+
+/** Editor-editable contract for a replaceable character. Hard references retain its cooked resources. */
+UCLASS(BlueprintType)
+class GRATIAVR_API UGratiaCharacterProfile : public UPrimaryDataAsset
+{
+    GENERATED_BODY()
+
+public:
+    UGratiaCharacterProfile();
+    virtual FPrimaryAssetId GetPrimaryAssetId() const override;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Identity")
+    FName ProfileId;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Identity")
+    FText DisplayName;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Resources")
+    TObjectPtr<USkeletalMesh> Mesh;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Resources")
+    TObjectPtr<UPhysicsAsset> PhysicsAsset;
+    /** Leave empty for native single-node playback. A custom class must implement its own pose/response contract. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Resources")
+    TSubclassOf<UAnimInstance> AnimationClass;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animations")
+    TObjectPtr<UAnimSequence> Idle;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animations")
+    TObjectPtr<UAnimSequence> Arms;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animations")
+    TObjectPtr<UAnimSequence> Head;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animations")
+    TObjectPtr<UAnimSequence> ReactSoft;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animations")
+    TObjectPtr<UAnimSequence> ReactBright;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mapping")
+    TMap<FName, FName> SemanticBones;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mapping")
+    TMap<FName, FName> SemanticMorphs;
+    /** Character forward direction in actor-local space; Gratia uses +Y and the mannequin uses +X. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mapping")
+    FVector ForwardAxis = FVector::RightVector;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mapping")
+    FVector UpAxis = FVector::UpVector;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gaze", meta = (ClampMin = "0.0", ClampMax = "90.0", Units = "deg"))
+    float MaxHeadYawDegrees = 28.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gaze", meta = (ClampMin = "0.0", ClampMax = "90.0", Units = "deg"))
+    float MaxHeadPitchDegrees = 12.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gaze", meta = (ClampMin = "0.0"))
+    float GazeInterpSpeed = 4.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact")
+    TArray<FGratiaContactZoneDefinition> ContactZones;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact")
+    FGratiaContactSettings ContactSettings;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion")
+    TArray<FGratiaSecondaryBoneDefinition> SecondaryBones;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion")
+    TArray<FGratiaSecondaryGroupSettings> SecondaryGroups;
+    /** Runtime indices 0/1/2 correspond to Low/Medium/High. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quality")
+    TArray<FGratiaQualityProfile> QualityProfiles;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Capabilities")
+    FGratiaCharacterCapabilities Capabilities;
+
+    /** Zero disables a model-specific regression assertion. These are never universal model requirements. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Validation", meta = (ClampMin = "0"))
+    int32 ExpectedBoneCount = 0;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Validation", meta = (ClampMin = "0"))
+    int32 ExpectedMorphCount = 0;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Validation", meta = (ClampMin = "0"))
+    int32 ExpectedPhysicsBodyCount = 0;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Validation", meta = (ClampMin = "0"))
+    int32 ExpectedConstraintCount = 0;
+
+    UFUNCTION(BlueprintPure, Category = "Character Profile")
+    FName ResolveBone(FName Semantic) const;
+    UFUNCTION(BlueprintPure, Category = "Character Profile")
+    FName ResolveMorph(FName Semantic) const;
+    UFUNCTION(BlueprintPure, Category = "Character Profile")
+    FGratiaQualityProfile GetQualitySettings(int32 Quality) const;
+    UFUNCTION(BlueprintPure, Category = "Character Profile")
+    FGratiaSecondaryGroupSettings GetSecondaryGroupSettings(uint8 Group) const;
+    UFUNCTION(BlueprintCallable, Category = "Character Profile")
+    bool ValidateProfile(TArray<FString>& Errors, TArray<FString>& Warnings) const;
+
+    const FGratiaSecondaryBoneDefinition* FindSecondaryBone(FName Bone) const;
+};

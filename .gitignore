@@ -1,0 +1,35 @@
+# Generated Unreal and packaged output
+**/Binaries/
+**/Intermediate/
+**/Saved/
+**/DerivedDataCache/
+Builds/
+.vs/
+*.sln
+*.suo
+*.VC.db
+*.VC.opendb
+*.opensdf
+*.sdf
+
+# Evidence and machine-local runtimes, not project source
+evidence/
+**/__pycache__/
+*.pyc
+*.log
+*.tmp
+*.dmp
+.codex/
+
+# Authoring backups / generated exchange files
+*.blend1
+*.blend2
+Exports/Gratia/GameRig/*.fbx
+Exports/Gratia/*.fbx
+
+# Private local configuration and credentials
+*.local.ini
+*.private.ini
+*.env
+*.key
+*.pem
