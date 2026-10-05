@@ -395,7 +395,7 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
         if (Before != EGratiaHandState::Recovering) Hand.RecoveryStart = Hand.LastWorld;
         VisualWorld = BlendTransform(Hand.RecoveryStart, Target, Hand.Gate.RecoveryAlpha(RecoveryBlendSeconds));
         Hand.Visual->SetWorldTransform(VisualWorld, false, nullptr, ETeleportType::TeleportPhysics);
-        Hand.Smoothed = VisualWorld; Hand.bSmoothedValid = true; Hand.bOffsetValid = false;
+        Hand.Smoothed = VisualWorld; Hand.bSmoothedValid = true; Hand.OffsetSmoother.Reset();
     }
     else
     {
@@ -406,7 +406,7 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
             const float Alpha = 1.0f - FMath::Exp(-SafeDelta * FMath::Max(0.1f, ParkingInterpSpeed));
             VisualWorld = BlendTransform(Hand.LastWorld, Parked, Alpha);
             Hand.Visual->SetWorldTransform(VisualWorld, false, nullptr, ETeleportType::TeleportPhysics);
-            Hand.Smoothed = VisualWorld; Hand.bSmoothedValid = true; Hand.bOffsetValid = false;
+            Hand.Smoothed = VisualWorld; Hand.bSmoothedValid = true; Hand.OffsetSmoother.Reset();
         }
     }
     FTransform Desired = VisualWorld;
@@ -489,48 +489,13 @@ void AGratiaStage1Runtime::ApplyVisualHand(FHandProxy& Hand, const FTransform& T
         return FVector::Distance(A.GetLocation(), B.GetLocation()) <= Cm
             && FMath::RadiansToDegrees(A.GetRotation().AngularDistance(B.GetRotation())) <= Degrees;
     };
-    // The visible hand is the controller plus a contact offset (surface, lean, grip, cup, press).
-    // Offset changes explained by the controller's own motion (pushing into the body, a held grip
-    // while the controller moves) are followed exactly: no lag, no extra sinking. Jumps beyond
-    // that (contact shape switch, grip/cup/press on or off) become a residual that eases out
-    // (~35 ms), so the hand neither pops nor trails the controller.
-    const FVector Offset = Desired.GetLocation() - Target.GetLocation();
-    const FQuat OffsetRotation = Desired.GetRotation() * Target.GetRotation().Inverse();
-    if (!Hand.bOffsetValid)
+    // Contact, lean, grip, cup and press switch on and off: ease their jumps (~35 ms) while the
+    // hand follows the controller's own motion exactly (FGratiaHandOffsetSmoother).
+    const FTransform Visible = Hand.OffsetSmoother.Update(Target, Desired, Hand.bSmoothedValid ? Hand.Smoothed : Hand.LastWorld, DeltaSeconds);
+    // A free hand without contact or residual rides the controller (exact late update).
+    if (Hand.OffsetSmoother.IsSettled() && Near(Desired, Target, 0.05, 0.2))
     {
-        // Continue from what is on screen (recovery, parking, first frame).
-        const FTransform& Shown = Hand.bSmoothedValid ? Hand.Smoothed : Hand.LastWorld;
-        Hand.OffsetResidual = Shown.GetLocation() - Desired.GetLocation();
-        Hand.RotationResidual = Shown.GetRotation() * Desired.GetRotation().Inverse();
-    }
-    else
-    {
-        const double Moved = FVector::Distance(Target.GetLocation(), Hand.PrevTarget.GetLocation());
-        const double Turned = FMath::RadiansToDegrees(Target.GetRotation().AngularDistance(Hand.PrevTarget.GetRotation()));
-        const FVector Jump = Offset - Hand.PrevOffset;
-        if (Jump.Size() > Moved + 0.5) Hand.OffsetResidual -= Jump;
-        if (FMath::RadiansToDegrees(OffsetRotation.AngularDistance(Hand.PrevOffsetRotation)) > Turned + 3.0)
-            Hand.RotationResidual = Hand.RotationResidual * Hand.PrevOffsetRotation * OffsetRotation.Inverse();
-    }
-    Hand.PrevTarget = Target;
-    Hand.PrevOffset = Offset;
-    Hand.PrevOffsetRotation = OffsetRotation;
-    Hand.bOffsetValid = true;
-    const float Step = FMath::IsFinite(DeltaSeconds) ? FMath::Clamp(DeltaSeconds, 0.0f, 0.1f) : 0.0f;
-    const float Alpha = 1.0f - FMath::Exp(-Step / 0.035f);
-    Hand.OffsetResidual = (Hand.OffsetResidual * (1.0f - Alpha)).GetClampedToMaxSize(15.0);
-    Hand.RotationResidual = FQuat::Slerp(Hand.RotationResidual, FQuat::Identity, Alpha).GetNormalized();
-    if (Hand.OffsetResidual.ContainsNaN() || Hand.RotationResidual.ContainsNaN())
-    {
-        Hand.OffsetResidual = FVector::ZeroVector;
-        Hand.RotationResidual = FQuat::Identity;
-    }
-    const bool bSettled = Hand.OffsetResidual.Size() <= 0.05 && FMath::RadiansToDegrees(Hand.RotationResidual.GetAngle()) <= 0.2;
-    // A free hand without contact and residual rides the controller (exact late update).
-    if (bSettled && Near(Desired, Target, 0.05, 0.2))
-    {
-        Hand.OffsetResidual = FVector::ZeroVector;
-        Hand.RotationResidual = FQuat::Identity;
+        Hand.OffsetSmoother.Settle();
         Hand.Smoothed = Target;
         Hand.bSmoothedValid = true;
         if (Hand.Visual->GetAttachParent() != Hand.OriginalParent.Get())
@@ -538,9 +503,8 @@ void AGratiaStage1Runtime::ApplyVisualHand(FHandProxy& Hand, const FTransform& T
         Hand.Visual->SetRelativeTransform(Hand.OriginalRelative, false, nullptr, ETeleportType::TeleportPhysics);
         return;
     }
-    Hand.Smoothed = FTransform(Hand.RotationResidual * Desired.GetRotation(), Desired.GetLocation() + Hand.OffsetResidual, Desired.GetScale3D());
+    Hand.Smoothed = IsFiniteTransform(Visible) ? Visible : Desired;
     Hand.bSmoothedValid = true;
-    if (!IsFiniteTransform(Hand.Smoothed)) Hand.Smoothed = Desired;
     if (Hand.Visual->GetAttachParent()) Hand.Visual->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
     Hand.Visual->SetWorldTransform(Hand.Smoothed, false, nullptr, ETeleportType::TeleportPhysics);
 }

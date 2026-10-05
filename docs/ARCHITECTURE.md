@@ -126,8 +126,9 @@ SHA-256 исходников/настроек/скриптов/ассетов и
 
 ## Проверки
 
-1. `Gratia.Math.ContactSolver`, `Gratia.Math.HandPressure` и `Gratia.Stage1.TrackingLossGate`:
-   независимые automation tests (фильтр `Automation RunTests Gratia`, ожидаются три теста).
+1. `Gratia.Math.ContactSolver`, `Gratia.Math.HandPressure`, `Gratia.Stage1.TrackingLossGate` и
+   `Gratia.Stage1.HandOffsetSmoothing`: независимые automation tests (фильтр
+   `Automation RunTests Gratia`, ожидаются четыре теста).
 2. `Test-Stage1.ps1`: три запуска готовой сборки; lifecycle, профиль, planted limits,
    физические бюджеты, геометрия и keyboard key → mapping → bound action → Pawn delta.
    Также проверяются размеры коллайдеров, передача вращения четырёх физических групп
