@@ -46,6 +46,9 @@ private:
     UPROPERTY() TObjectPtr<ACameraActor> ShotCamera;
     bool bShotOn = false, bShotOff = false;
     TArray<FName> GripParts;
+    /** 0: wrapping grip of a limb/torso; > 0: cupping a soft part with this trigger amount. */
+    TArray<float> GripSqueeze;
+    TArray<double> CupSinks;
     int32 GripIndex = 0;
     FVector GripAxis = FVector::ZeroVector;
     EPhase Phase = EPhase::Settle;

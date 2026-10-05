@@ -372,9 +372,42 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
         {
             for (const TCHAR* Token : {TEXT("forearm_L"), TEXT("thigh_L"), TEXT("spine_001")})
                 for (const FGratiaSurfaceCapsule& Capsule : Profile->BodySurface)
-                    if (Capsule.Bone.ToString().Contains(Token)) { GripParts.Add(Capsule.Bone); break; }
+                    if (Capsule.Bone.ToString().Contains(Token)) { GripParts.Add(Capsule.Bone); GripSqueeze.Add(0.0f); break; }
+            // Cupping a breast with a light and a full trigger: the full one must squeeze deeper.
+            for (const FGratiaSurfaceCapsule& Capsule : Profile->BodySurface)
+                if (Capsule.bSoft && Capsule.Bone.ToString().Contains(TEXT("breast")))
+                {
+                    for (const float Amount : {0.3f, 1.0f}) { GripParts.Add(Capsule.Bone); GripSqueeze.Add(Amount); }
+                    break;
+                }
             if (!Check(Surface && HandAnim && Surface->HasSurface() && GripParts.Num() >= 2,
                 FString::Printf(TEXT("body surface has grip targets (%d of forearm/thigh/waist)"), GripParts.Num()))) { Done(); break; }
+            // Pass-through: a hand driven from outside deep into the body stops at the surface.
+            struct FProbe { FString Label; FVector Point; FVector Direction; };
+            TArray<FProbe> Probes;
+            const FVector Forward = Character->GetActorForwardVector(), Up = Character->GetActorUpVector();
+            for (const FGratiaSurfaceCapsule& Capsule : Profile->BodySurface)
+                if (Capsule.Bone.ToString().Contains(TEXT("spine_001")))
+                {
+                    FVector A, B; float R;
+                    if (Surface->GetBoneCapsule(Capsule.Bone, A, B, R)) Probes.Add({TEXT("belly"), (A + B) * 0.5, Forward});
+                    break;
+                }
+            const FName Head = Profile->ResolveBone(TEXT("Head"));
+            if (!Head.IsNone() && Character->CharacterMesh->GetBoneIndex(Head) != INDEX_NONE)
+                Probes.Add({TEXT("head"), Character->CharacterMesh->GetBoneLocation(Head) + Up * 8.0, Forward});
+            for (const auto& SoftZone : SoftBody->GetZones())
+                Probes.Add({SoftZone.Chain.ToString(), SoftZone.Center, (SoftZone.Tip - SoftZone.Center).GetSafeNormal()});
+            for (const FProbe& Probe : Probes)
+            {
+                const FTransform Constrained = Character->Interaction->ConstrainHand(
+                    FTransform(Probe.Point + Probe.Direction * 40.0), FTransform(Probe.Point - Probe.Direction * 5.0), true);
+                FGratiaSurfaceHit Near;
+                const bool bNear = Surface->FindNearest(Constrained.GetLocation(), 100.0f, Near, true);
+                Check(bNear && Near.Gap >= Profile->HandSurface.PalmContactRadiusCm - 0.3f,
+                    FString::Printf(TEXT("palm stops at the %s surface (gap %.2fcm at %s)"), *Probe.Label, bNear ? Near.Gap : -99.0f,
+                        bNear ? *Near.Bone.ToString() : TEXT("nothing")));
+            }
         }
         if (GripIndex >= GripParts.Num()) { Done(); break; }
         const FName Bone = GripParts[GripIndex];
@@ -386,6 +419,8 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
             ++GripIndex; Advance(EPhase::BodyGrip); break;
         }
         const float Thickness = Profile->HandSurface.PalmThicknessCm;
+        const float Squeeze = GripSqueeze.IsValidIndex(GripIndex) ? GripSqueeze[GripIndex] : 0.0f;
+        const float Shrink = Settings.SquishDepthCm * Squeeze;
         if (PhaseSeconds <= Delta)
         {
             // Upper thigh (near the hip): lower down the hanging hand is in front of it.
@@ -398,6 +433,10 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
             // Legs and torso from the front: from the side the hanging arm is nearer.
             if (Out.Size() < 0.5 || !Bone.ToString().Contains(TEXT("arm")))
                 Out = FVector::VectorPlaneProject(Character->GetActorForwardVector(), GripAxis.IsZero() ? Up : GripAxis).GetSafeNormal();
+            // A soft part (breast front, butt back): approach from its own side.
+            if (Squeeze > 0)
+                Out = FVector::DotProduct(Mid - Character->GetActorLocation(), Character->GetActorForwardVector()) >= 0
+                    ? Character->GetActorForwardVector() : -Character->GetActorForwardVector();
             // The idle hands hang in front of the thighs: hold the thigh from behind and outside.
             if (Bone.ToString().Contains(TEXT("thigh")))
             {
@@ -414,22 +453,27 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
             const FVector PalmStart = Mid + Out * (Radius + Thickness + 3.5);
             const FTransform StartPose(Rotation, PalmStart - Rotation.RotateVector(Palm.Point));
             FGratiaSurfaceHit Hit;
-            const bool bFound = Surface->FindNearest(PalmStart, Profile->HandSurface.GripReachCm + Thickness, Hit, false);
+            const bool bFound = Squeeze > 0
+                ? Surface->FindNearest(PalmStart, Profile->HandSurface.GripReachCm + Thickness, Hit, true) && Hit.bSoftZone
+                : Surface->FindNearest(PalmStart, Profile->HandSurface.GripReachCm + Thickness, Hit, false, true);
             // The torso is several slices; any of them is the waist/torso part.
             const FString Name = Bone.ToString();
             const bool bTorso = Name.Contains(TEXT("spine")) || Name.Contains(TEXT("pelvis"));
             const FString Found = bFound ? Hit.Bone.ToString() : FString();
-            const bool bSamePart = bTorso ? (Found.Contains(TEXT("spine")) || Found.Contains(TEXT("pelvis")))
+            const bool bSamePart = Squeeze > 0 ? Found == Name : bTorso ? (Found.Contains(TEXT("spine")) || Found.Contains(TEXT("pelvis")))
                 : Found.Contains(Name.Contains(TEXT("thigh")) ? TEXT("thigh") : TEXT("forearm"));
             Check(bFound && bSamePart, FString::Printf(TEXT("grip near %s detects that part (found %s)"), *Name, bFound ? *Found : TEXT("nothing")));
             if (bFound) GripParts[GripIndex] = Hit.Bone;
+            TArray<FVector4> NearSpheres;
+            TArray<FGratiaConformCapsule> NearCapsules;
+            Surface->GatherConformShapes(PalmStart, 25.0f, NearSpheres, NearCapsules, Shrink);
             TestHand->SetWorldTransform(bFound ? UGratiaBodySurface::SolveWrap(StartPose, Palm, Hit, Thickness,
-                Settings.FingerRadiusCm + Settings.FingerConformMarginCm) : StartPose);
+                Settings.FingerRadiusCm + Settings.FingerConformMarginCm, NearCapsules) : StartPose);
             if (bFound) AimCamera(Hit.Point, Hit.Normal, true);
             HandAnim->bConform = true; HandAnim->FingerRadiusCm = Settings.FingerRadiusCm; HandAnim->ConformMarginCm = Settings.FingerConformMarginCm;
             for (int32 F = 0; F < UGratiaHandAnimInstance::NumFingers; ++F) { HandAnim->FingerInput[F] = 1.0f; HandAnim->FingerAlpha[F] = 0.0f; }
         }
-        Surface->GatherConformShapes(TestHand->GetComponentTransform().TransformPosition(Palm.Point), 30.0f, HandAnim->ConformSpheres, HandAnim->ConformCapsules);
+        Surface->GatherConformShapes(TestHand->GetComponentTransform().TransformPosition(Palm.Point), 30.0f, HandAnim->ConformSpheres, HandAnim->ConformCapsules, Shrink);
         if (PhaseSeconds < 1.3f) break;
         FVector PalmPoint, PalmNormal, PalmFinger;
         UGratiaBodySurface::PalmWorld(TestHand->GetComponentTransform(), Palm, PalmPoint, PalmNormal, PalmFinger);
@@ -455,7 +499,19 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
                 Depth = FMath::Max(Depth, Sphere.W + FingerFlesh - FVector::Distance(Point, FVector(Sphere.X, Sphere.Y, Sphere.Z)));
             if (Depth > Deepest) { Deepest = Depth; DeepestPoint = I; }
         }
-        Shoot(FString::Printf(TEXT("GratiaBodyGrip_%s"), *Bone.ToString()));
+        Shoot(Squeeze > 0 ? FString::Printf(TEXT("GratiaBodyGrip_%s_squeeze%02d"), *Bone.ToString(), FMath::RoundToInt(Squeeze * 10))
+            : FString::Printf(TEXT("GratiaBodyGrip_%s"), *Bone.ToString()));
+        if (Squeeze > 0)
+        {
+            // How far the fingers sink into the (unsqueezed) soft surface.
+            double Sink = -100.0;
+            for (const FVector& Point : Points) Sink = FMath::Max(Sink, Radius - FMath::PointDistToSegment(Point, A, B));
+            CupSinks.Add(Sink);
+            UE_LOG(LogGratiaSoftBodyQA, Display, TEXT("BODY_GRIP_QA cup %s squeeze=%.1f sink=%.2fcm"), *Bone.ToString(), Squeeze, Sink);
+            if (CupSinks.Num() == 2)
+                Check(CupSinks[1] >= CupSinks[0] + 0.5, FString::Printf(TEXT("%s full trigger squeezes deeper than a light one (%.2f vs %.2f cm)"),
+                    *Bone.ToString(), CupSinks[1], CupSinks[0]));
+        }
         // Points are (distal joint, tip) per finger: thumb, index, middle, ring, pinky.
         UE_LOG(LogGratiaSoftBodyQA, Display, TEXT("BODY_GRIP_QA deepest at finger %d %s"), DeepestPoint / 2, DeepestPoint % 2 ? TEXT("tip") : TEXT("joint"));
         UE_LOG(LogGratiaSoftBodyQA, Display, TEXT("BODY_GRIP_QA part=%s radius=%.1fcm palm_gap=%.2fcm facing=%.1fdeg across=%.2f wrapped=%d deepest=%.2fcm %s"),

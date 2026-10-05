@@ -338,6 +338,162 @@ bool UGratiaSoftBodySetupLibrary::MeasureBodySurface(USkeletalMesh* SkeletalMesh
     return !Capsules.IsEmpty();
 }
 
+namespace GratiaSoftBodySetup
+{
+/** Vertex positions per dominant bone (weight >= MinWeight), from the included material slots. */
+TMap<int32, TArray<FVector>> OwnedVertices(USkeletalMesh* SkeletalMesh, const TArray<FName>& IncludeSlots, uint16 MinWeight = 39322)
+{
+    TMap<int32, TArray<FVector>> Buckets;
+    const TArray<FSkeletalMaterial>& Materials = SkeletalMesh->GetMaterials();
+    for (const FSkelMeshSection& Section : SkeletalMesh->GetImportedModel()->LODModels[0].Sections)
+    {
+        const FName Slot = Materials.IsValidIndex(Section.MaterialIndex) ? Materials[Section.MaterialIndex].ImportedMaterialSlotName : NAME_None;
+        if (!IncludeSlots.IsEmpty() && !IncludeSlots.Contains(Slot)) continue;
+        for (const FSoftSkinVertex& Vertex : Section.SoftVertices)
+        {
+            int32 Dominant = INDEX_NONE; uint16 Best = 0;
+            for (int32 I = 0; I < MAX_TOTAL_INFLUENCES; ++I)
+                if (Vertex.InfluenceWeights[I] > Best && Section.BoneMap.IsValidIndex(Vertex.InfluenceBones[I]))
+                { Best = Vertex.InfluenceWeights[I]; Dominant = Section.BoneMap[Vertex.InfluenceBones[I]]; }
+            if (Dominant != INDEX_NONE && Best >= MinWeight) Buckets.FindOrAdd(Dominant).Add(FVector(Vertex.Position));
+        }
+    }
+    return Buckets;
+}
+
+double PercentileOf(TArray<double> Values, double Fraction)
+{
+    if (Values.IsEmpty()) return 0.0;
+    Values.Sort();
+    return Values[FMath::Clamp(int32(Values.Num() * Fraction), 0, Values.Num() - 1)];
+}
+}
+
+bool UGratiaSoftBodySetupLibrary::MeasureSphereSurface(USkeletalMesh* SkeletalMesh, const TArray<FName>& IncludeSlots, const TArray<FName>& Bones,
+    float RadiusPercentile, TArray<FGratiaSurfaceCapsule>& Capsules)
+{
+    using namespace GratiaSoftBodySetup;
+    Capsules.Reset();
+    if (!SkeletalMesh || !SkeletalMesh->GetImportedModel() || SkeletalMesh->GetImportedModel()->LODModels.IsEmpty()) return false;
+    const FReferenceSkeleton& Ref = SkeletalMesh->GetRefSkeleton();
+    const TMap<int32, TArray<FVector>> Buckets = OwnedVertices(SkeletalMesh, IncludeSlots);
+    for (const FName Name : Bones)
+    {
+        const int32 Bone = Ref.FindBoneIndex(Name);
+        const TArray<FVector>* Points = Bone != INDEX_NONE ? Buckets.Find(Bone) : nullptr;
+        if (!Points || Points->Num() < 16) continue;
+        // Algebraic sphere fit |p|^2 + D.p + G = 0 about the centroid (well conditioned).
+        FVector Mean = FVector::ZeroVector;
+        for (const FVector& Point : *Points) Mean += Point;
+        Mean /= Points->Num();
+        double M[4][4] = {}, R[4] = {};
+        for (const FVector& Point : *Points)
+        {
+            const FVector P = Point - Mean;
+            const double Row[4] = {P.X, P.Y, P.Z, 1.0};
+            const double Rhs = -P.SizeSquared();
+            for (int32 I = 0; I < 4; ++I) { R[I] += Row[I] * Rhs; for (int32 J = 0; J < 4; ++J) M[I][J] += Row[I] * Row[J]; }
+        }
+        // Gaussian elimination with partial pivoting.
+        int32 Order[4] = {0, 1, 2, 3};
+        bool bSolved = true;
+        for (int32 C = 0; C < 4 && bSolved; ++C)
+        {
+            int32 Pivot = C;
+            for (int32 I = C + 1; I < 4; ++I) if (FMath::Abs(M[I][C]) > FMath::Abs(M[Pivot][C])) Pivot = I;
+            if (FMath::Abs(M[Pivot][C]) < 1.0e-9) { bSolved = false; break; }
+            for (int32 J = 0; J < 4; ++J) Swap(M[C][J], M[Pivot][J]);
+            Swap(R[C], R[Pivot]);
+            for (int32 I = C + 1; I < 4; ++I)
+            {
+                const double F = M[I][C] / M[C][C];
+                for (int32 J = C; J < 4; ++J) M[I][J] -= F * M[C][J];
+                R[I] -= F * R[C];
+            }
+        }
+        double X[4] = {};
+        for (int32 I = 3; I >= 0 && bSolved; --I)
+        {
+            double Sum = R[I];
+            for (int32 J = I + 1; J < 4; ++J) Sum -= M[I][J] * X[J];
+            X[I] = Sum / M[I][I];
+        }
+        const FVector Center = Mean + FVector(-X[0] / 2, -X[1] / 2, -X[2] / 2);
+        TArray<double> Distances;
+        for (const FVector& Point : *Points) Distances.Add(FVector::Distance(Point, Center));
+        const double Radius = PercentileOf(Distances, FMath::Clamp(RadiusPercentile, 0.05f, 0.95f));
+        if (!bSolved || Center.ContainsNaN() || !(Radius > 0.5) || Radius > 60.0) continue;
+        const FTransform BoneCS = RefComponentTransform(Ref, Bone);
+        FGratiaSurfaceCapsule Capsule;
+        Capsule.Bone = Name;
+        Capsule.StartCm = Capsule.EndCm = BoneCS.InverseTransformPosition(Center);
+        Capsule.RadiusCm = float(Radius);
+        Capsules.Add(Capsule);
+        UE_LOG(LogGratiaSoftBodySetup, Display, TEXT("BODY_SURFACE %s sphere vertices=%d radius_cm=%.2f"), *Name.ToString(), Points->Num(), Capsule.RadiusCm);
+    }
+    return !Capsules.IsEmpty();
+}
+
+bool UGratiaSoftBodySetupLibrary::MeasureTorsoSlices(USkeletalMesh* SkeletalMesh, const TArray<FName>& IncludeSlots, const TArray<FName>& VertexBones,
+    const TArray<FName>& AttachBones, float StepCm, TArray<FGratiaSurfaceCapsule>& Capsules)
+{
+    using namespace GratiaSoftBodySetup;
+    Capsules.Reset();
+    if (!SkeletalMesh || !SkeletalMesh->GetImportedModel() || SkeletalMesh->GetImportedModel()->LODModels.IsEmpty() || StepCm < 1.0f) return false;
+    const FReferenceSkeleton& Ref = SkeletalMesh->GetRefSkeleton();
+    // Every vertex by its dominant bone: belly skin and clothing are blended between bones.
+    const TMap<int32, TArray<FVector>> Buckets = OwnedVertices(SkeletalMesh, IncludeSlots, 0);
+    TArray<FVector> Points;
+    for (const FName Name : VertexBones)
+        if (const TArray<FVector>* Owned = Buckets.Find(Ref.FindBoneIndex(Name))) Points.Append(*Owned);
+    TArray<TPair<int32, FVector>> Attach;
+    for (const FName Name : AttachBones)
+        if (const int32 Bone = Ref.FindBoneIndex(Name); Bone != INDEX_NONE) Attach.Emplace(Bone, RefComponentTransform(Ref, Bone).GetLocation());
+    if (Points.Num() < 50 || Attach.IsEmpty()) return false;
+    TArray<double> Heights;
+    for (const FVector& Point : Points) Heights.Add(Point.Z);
+    const double Bottom = PercentileOf(Heights, 0.02), Top = PercentileOf(Heights, 0.98);
+    UE_LOG(LogGratiaSoftBodySetup, Display, TEXT("BODY_SURFACE torso range z=%.1f..%.1f vertices=%d"), Bottom, Top, Points.Num());
+    for (double Z = Bottom + StepCm * 0.5; Z < Top; Z += StepCm)
+    {
+        TArray<FVector2D> Band;
+        for (const FVector& Point : Points)
+            if (FMath::Abs(Point.Z - Z) <= StepCm * 0.6) Band.Emplace(Point.X, Point.Y);
+        if (Band.Num() < 30) continue;
+        // Principal directions of the ring, then robust extents (5th..95th percentile) on each.
+        FVector2D Mean = FVector2D::ZeroVector;
+        for (const FVector2D& P : Band) Mean += P;
+        Mean /= Band.Num();
+        double Sxx = 0, Sxy = 0, Syy = 0;
+        for (const FVector2D& P : Band) { const FVector2D D = P - Mean; Sxx += D.X * D.X; Sxy += D.X * D.Y; Syy += D.Y * D.Y; }
+        const double Theta = 0.5 * FMath::Atan2(2.0 * Sxy, Sxx - Syy);
+        const FVector2D Wide(FMath::Cos(Theta), FMath::Sin(Theta)), Narrow(-Wide.Y, Wide.X);
+        TArray<double> U, V;
+        for (const FVector2D& P : Band) { U.Add(FVector2D::DotProduct(P - Mean, Wide)); V.Add(FVector2D::DotProduct(P - Mean, Narrow)); }
+        const double U0 = PercentileOf(U, 0.05), U1 = PercentileOf(U, 0.95), V0 = PercentileOf(V, 0.05), V1 = PercentileOf(V, 0.95);
+        double HalfWide = (U1 - U0) * 0.5, HalfNarrow = (V1 - V0) * 0.5;
+        FVector2D Center = Mean + Wide * ((U0 + U1) * 0.5) + Narrow * ((V0 + V1) * 0.5);
+        FVector2D Axis = Wide;
+        if (HalfNarrow > HalfWide) { Swap(HalfWide, HalfNarrow); Axis = Narrow; }
+        const FVector Mid(Center.X, Center.Y, Z);
+        const FVector Along(Axis.X, Axis.Y, 0.0);
+        int32 Best = 0;
+        for (int32 I = 1; I < Attach.Num(); ++I)
+            if (FMath::Abs(Attach[I].Value.Z - Z) < FMath::Abs(Attach[Best].Value.Z - Z)) Best = I;
+        const FTransform BoneCS = RefComponentTransform(Ref, Attach[Best].Key);
+        FGratiaSurfaceCapsule Capsule;
+        Capsule.Bone = Ref.GetBoneName(Attach[Best].Key);
+        Capsule.StartCm = BoneCS.InverseTransformPosition(Mid - Along * (HalfWide - HalfNarrow));
+        Capsule.EndCm = BoneCS.InverseTransformPosition(Mid + Along * (HalfWide - HalfNarrow));
+        Capsule.RadiusCm = float(FMath::Max(HalfNarrow, 1.0));
+        Capsule.WrapAxis = BoneCS.InverseTransformVectorNoScale(FVector::UpVector).GetSafeNormal();
+        Capsules.Add(Capsule);
+        UE_LOG(LogGratiaSoftBodySetup, Display, TEXT("BODY_SURFACE torso z=%.1f bone=%s vertices=%d section=%.1fx%.1f"),
+            Z, *Capsule.Bone.ToString(), Band.Num(), HalfWide * 2, HalfNarrow * 2);
+    }
+    return !Capsules.IsEmpty();
+}
+
 bool UGratiaSoftBodySetupLibrary::BuildBodyColliders(USkeletalMesh* SkeletalMesh, const FString& JSONPath, const TArray<FName>& SoftBones,
     float RangeCm, TArray<FGratiaBodyColliderSphere>& Colliders)
 {

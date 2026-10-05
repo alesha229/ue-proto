@@ -300,6 +300,12 @@ struct GRATIAVR_API FGratiaSurfaceCapsule
      *  slices are capsules across the body's width and wrap around the spine direction. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Body Surface")
     FVector WrapAxis = FVector::ZeroVector;
+    /** A gripping hand may wrap around this part (head, neck and soft parts: no). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Body Surface")
+    bool bGrip = true;
+    /** Soft part (moves with its KawaiiPhysics bone): squeezing fingers may sink into it. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Body Surface")
+    bool bSoft = false;
 };
 
 /** Hands on the body surface: palm collider, leaning onto the surface and wrapping grips. */
@@ -327,6 +333,9 @@ struct GRATIAVR_API FGratiaHandSurfaceSettings
     float GripStartInput = 0.6f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Surface", meta = (ClampMin = "0", ClampMax = "1"))
     float GripReleaseInput = 0.3f;
+    /** Trigger/grip at which the hand cups a soft part; squeeze depth follows the input above it. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Surface", meta = (ClampMin = "0.01", ClampMax = "1"))
+    float CupStartInput = 0.15f;
     /** The wrapped hand lets go when the controller moves this far from it. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Surface", meta = (ClampMin = "2", ClampMax = "60", Units = "cm"))
     float GripBreakDistanceCm = 18.0f;
@@ -403,7 +412,7 @@ struct GRATIAVR_API FGratiaSoftBodySettings
     float PressStrength = 1.0f;
     /** With full grip the fingers may sink this far into a soft zone; the surface yields under them. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press", meta = (ClampMin = "0", ClampMax = "6", Units = "cm"))
-    float SquishDepthCm = 2.5f;
+    float SquishDepthCm = 3.5f;
     /** Volumetric squeeze: the soft bone compresses along its forward axis by up to this
      *  fraction at full press depth (zone radius) and springs back with a wobble. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press", meta = (ClampMin = "0", ClampMax = "0.8"))

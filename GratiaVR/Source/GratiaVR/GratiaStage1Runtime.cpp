@@ -387,18 +387,6 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
         const FTransform Constrained = TargetCharacter.IsValid() && TargetCharacter->Interaction
             ? TargetCharacter->Interaction->ConstrainHand(Hand.LastWorld, Target, bLeft, PalmLocal) : Target;
         const FTransform ContactTarget = ApplyBodySurface(Hand, bLeft, Target, Constrained, DeltaSeconds);
-        const bool bBlocked = !ContactTarget.Equals(Target, 0.01);
-        // Exact original local transform retains the template's late controller update and hand alignment.
-        if (bBlocked)
-        {
-            if (Hand.Visual->GetAttachParent()) Hand.Visual->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
-            Hand.Visual->SetWorldTransform(ContactTarget, false, nullptr, ETeleportType::TeleportPhysics);
-        }
-        else if (Hand.Visual->GetAttachParent() != Hand.OriginalParent.Get())
-        {
-            Hand.Visual->AttachToComponent(Hand.OriginalParent.Get(), FAttachmentTransformRules::KeepWorldTransform, Hand.OriginalSocket);
-        }
-        if (!bBlocked) Hand.Visual->SetRelativeTransform(Hand.OriginalRelative, false, nullptr, ETeleportType::TeleportPhysics);
         VisualWorld = ContactTarget;
         SetHandCollision(Hand, true);
     }
@@ -407,6 +395,7 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
         if (Before != EGratiaHandState::Recovering) Hand.RecoveryStart = Hand.LastWorld;
         VisualWorld = BlendTransform(Hand.RecoveryStart, Target, Hand.Gate.RecoveryAlpha(RecoveryBlendSeconds));
         Hand.Visual->SetWorldTransform(VisualWorld, false, nullptr, ETeleportType::TeleportPhysics);
+        Hand.Smoothed = VisualWorld; Hand.bSmoothedValid = true; Hand.bOffsetValid = false;
     }
     else
     {
@@ -417,9 +406,10 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
             const float Alpha = 1.0f - FMath::Exp(-SafeDelta * FMath::Max(0.1f, ParkingInterpSpeed));
             VisualWorld = BlendTransform(Hand.LastWorld, Parked, Alpha);
             Hand.Visual->SetWorldTransform(VisualWorld, false, nullptr, ETeleportType::TeleportPhysics);
+            Hand.Smoothed = VisualWorld; Hand.bSmoothedValid = true; Hand.bOffsetValid = false;
         }
     }
-    if (IsFiniteTransform(VisualWorld)) Hand.LastWorld = VisualWorld;
+    FTransform Desired = VisualWorld;
     // The opt-in soak supplies its own samples after this update. Parked desktop
     // hands must not keep resetting that scenario's correction-recovery timer.
     if (TargetCharacter.IsValid() && TargetCharacter->Interaction && !Verification->OwnsSyntheticContactSamples())
@@ -447,16 +437,16 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
             SoftBody->SubmitHand(bLeft, VisiblePalm, RawPalm, bAllowed, DeltaSeconds, Grab, Fingers);
             // Inside a soft zone the visible hand sinks by the bounded press depth.
             if (SoftBody->HasPress(bLeft) && Hand.Gate.State == EGratiaHandState::Tracked)
-            {
-                if (Hand.Visual->GetAttachParent()) Hand.Visual->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
-                Hand.Visual->SetWorldLocation(SoftBody->GetPressPoint(bLeft) - (VisiblePalm - VisualWorld.GetLocation()), false, nullptr, ETeleportType::TeleportPhysics);
-            }
+                Desired.SetLocation(SoftBody->GetPressPoint(bLeft) - (VisiblePalm - VisualWorld.GetLocation()));
             // Grip onto a body part gives a short tap; soft-zone vibration follows depth.
             Hand.GripPulse = FMath::Max(0.0f, Hand.GripPulse - DeltaSeconds);
             const float Amplitude = FMath::Max(SoftBody->GetHapticAmplitude(bLeft), Hand.GripPulse > 0 ? 0.45f : 0.0f);
             UpdateHaptics(Hand, bLeft, bAllowed && bXRActive ? Amplitude : 0.0f, Hand.GripPulse > 0 ? 0.3f : SoftBody->GetHapticFrequency(bLeft));
         }
     }
+    if (Hand.Gate.State == EGratiaHandState::Tracked) ApplyVisualHand(Hand, Target, Desired, DeltaSeconds);
+    if (Hand.bSmoothedValid && IsFiniteTransform(Hand.Smoothed)) VisualWorld = Hand.Smoothed;
+    if (IsFiniteTransform(VisualWorld)) Hand.LastWorld = VisualWorld;
     UpdateHandPose(Hand, bLeft, VisualWorld.GetLocation());
     if (Before != Hand.Gate.State)
     {
@@ -471,8 +461,10 @@ void AGratiaStage1Runtime::UpdateHandPose(FHandProxy& Hand, bool bLeft, const FV
     auto* Anim = Hand.HandAnim.Get();
     const float Grasp = HandInput ? HandInput->GetGrasp(bLeft) : 0.0f;
     const float Index = HandInput ? HandInput->GetIndexCurl(bLeft) : 0.0f;
-    // Wrapping grip closes every finger onto the part; near a surface the fingers rest on it.
-    const float Rest = Hand.GripBone.IsNone() ? 0.85f * Hand.SurfaceWeight : 1.0f;
+    // Wrapping grip and cupping close every finger onto the part; near a surface the fingers rest on it.
+    const float Rest = !Hand.GripBone.IsNone() || !Hand.CupBone.IsNone() ? 1.0f : 0.85f * Hand.SurfaceWeight;
+    // Squeeze depth into soft parts follows the trigger/grip while cupping.
+    const float Squeeze = Hand.CupBone.IsNone() ? Grasp : Hand.CupSqueeze;
     // Thumb: 1 is its relaxed pose; contact caps extend it out of the body.
     Anim->FingerInput[0] = Anim->ThumbOpenPose ? 1.0f : FMath::Max(Grasp, Rest);
     Anim->FingerInput[1] = FMath::Max(Index, Rest);
@@ -483,10 +475,74 @@ void AGratiaStage1Runtime::UpdateHandPose(FHandProxy& Hand, bool bLeft, const FV
     // Squeezing (grip) lets the fingers sink into soft zones; the press dent opens under them.
     Anim->ConformCapsules.Reset();
     if (Anim->bConform && TargetCharacter->BodySurface && TargetCharacter->BodySurface->HasSurface())
-        TargetCharacter->BodySurface->GatherConformShapes(Near, 30.0f, Anim->ConformSpheres, Anim->ConformCapsules, Profile->SoftBody.SquishDepthCm * Grasp);
+        TargetCharacter->BodySurface->GatherConformShapes(Near, 30.0f, Anim->ConformSpheres, Anim->ConformCapsules, Profile->SoftBody.SquishDepthCm * Squeeze);
     else if (Anim->bConform && TargetCharacter->SoftBodyInteraction)
-        TargetCharacter->SoftBodyInteraction->GetConformSpheres(Near, 30.0f, Anim->ConformSpheres, Profile->SoftBody.SquishDepthCm * Grasp);
+        TargetCharacter->SoftBodyInteraction->GetConformSpheres(Near, 30.0f, Anim->ConformSpheres, Profile->SoftBody.SquishDepthCm * Squeeze);
     else Anim->ConformSpheres.Reset();
+}
+
+void AGratiaStage1Runtime::ApplyVisualHand(FHandProxy& Hand, const FTransform& Target, const FTransform& Desired, float DeltaSeconds)
+{
+    if (!IsFiniteTransform(Desired)) return;
+    auto Near = [](const FTransform& A, const FTransform& B, double Cm, double Degrees)
+    {
+        return FVector::Distance(A.GetLocation(), B.GetLocation()) <= Cm
+            && FMath::RadiansToDegrees(A.GetRotation().AngularDistance(B.GetRotation())) <= Degrees;
+    };
+    // The visible hand is the controller plus a contact offset (surface, lean, grip, cup, press).
+    // Offset changes explained by the controller's own motion (pushing into the body, a held grip
+    // while the controller moves) are followed exactly: no lag, no extra sinking. Jumps beyond
+    // that (contact shape switch, grip/cup/press on or off) become a residual that eases out
+    // (~35 ms), so the hand neither pops nor trails the controller.
+    const FVector Offset = Desired.GetLocation() - Target.GetLocation();
+    const FQuat OffsetRotation = Desired.GetRotation() * Target.GetRotation().Inverse();
+    if (!Hand.bOffsetValid)
+    {
+        // Continue from what is on screen (recovery, parking, first frame).
+        const FTransform& Shown = Hand.bSmoothedValid ? Hand.Smoothed : Hand.LastWorld;
+        Hand.OffsetResidual = Shown.GetLocation() - Desired.GetLocation();
+        Hand.RotationResidual = Shown.GetRotation() * Desired.GetRotation().Inverse();
+    }
+    else
+    {
+        const double Moved = FVector::Distance(Target.GetLocation(), Hand.PrevTarget.GetLocation());
+        const double Turned = FMath::RadiansToDegrees(Target.GetRotation().AngularDistance(Hand.PrevTarget.GetRotation()));
+        const FVector Jump = Offset - Hand.PrevOffset;
+        if (Jump.Size() > Moved + 0.5) Hand.OffsetResidual -= Jump;
+        if (FMath::RadiansToDegrees(OffsetRotation.AngularDistance(Hand.PrevOffsetRotation)) > Turned + 3.0)
+            Hand.RotationResidual = Hand.RotationResidual * Hand.PrevOffsetRotation * OffsetRotation.Inverse();
+    }
+    Hand.PrevTarget = Target;
+    Hand.PrevOffset = Offset;
+    Hand.PrevOffsetRotation = OffsetRotation;
+    Hand.bOffsetValid = true;
+    const float Step = FMath::IsFinite(DeltaSeconds) ? FMath::Clamp(DeltaSeconds, 0.0f, 0.1f) : 0.0f;
+    const float Alpha = 1.0f - FMath::Exp(-Step / 0.035f);
+    Hand.OffsetResidual = (Hand.OffsetResidual * (1.0f - Alpha)).GetClampedToMaxSize(15.0);
+    Hand.RotationResidual = FQuat::Slerp(Hand.RotationResidual, FQuat::Identity, Alpha).GetNormalized();
+    if (Hand.OffsetResidual.ContainsNaN() || Hand.RotationResidual.ContainsNaN())
+    {
+        Hand.OffsetResidual = FVector::ZeroVector;
+        Hand.RotationResidual = FQuat::Identity;
+    }
+    const bool bSettled = Hand.OffsetResidual.Size() <= 0.05 && FMath::RadiansToDegrees(Hand.RotationResidual.GetAngle()) <= 0.2;
+    // A free hand without contact and residual rides the controller (exact late update).
+    if (bSettled && Near(Desired, Target, 0.05, 0.2))
+    {
+        Hand.OffsetResidual = FVector::ZeroVector;
+        Hand.RotationResidual = FQuat::Identity;
+        Hand.Smoothed = Target;
+        Hand.bSmoothedValid = true;
+        if (Hand.Visual->GetAttachParent() != Hand.OriginalParent.Get())
+            Hand.Visual->AttachToComponent(Hand.OriginalParent.Get(), FAttachmentTransformRules::KeepWorldTransform, Hand.OriginalSocket);
+        Hand.Visual->SetRelativeTransform(Hand.OriginalRelative, false, nullptr, ETeleportType::TeleportPhysics);
+        return;
+    }
+    Hand.Smoothed = FTransform(Hand.RotationResidual * Desired.GetRotation(), Desired.GetLocation() + Hand.OffsetResidual, Desired.GetScale3D());
+    Hand.bSmoothedValid = true;
+    if (!IsFiniteTransform(Hand.Smoothed)) Hand.Smoothed = Desired;
+    if (Hand.Visual->GetAttachParent()) Hand.Visual->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+    Hand.Visual->SetWorldTransform(Hand.Smoothed, false, nullptr, ETeleportType::TeleportPhysics);
 }
 
 void AGratiaStage1Runtime::ReleaseBodyGrip(FHandProxy& Hand, bool bLeft, const TCHAR* Reason)
@@ -500,6 +556,8 @@ void AGratiaStage1Runtime::ReleaseBodyGrip(FHandProxy& Hand, bool bLeft, const T
 FTransform AGratiaStage1Runtime::ApplyBodySurface(FHandProxy& Hand, bool bLeft, const FTransform& Target, const FTransform& Constrained, float DeltaSeconds)
 {
     Hand.SurfaceWeight = 0.0f;
+    const FName WasCupping = Hand.CupBone;
+    Hand.CupBone = NAME_None;
     AGratiaPreviewCharacter* Character = TargetCharacter.Get();
     const UGratiaCharacterProfile* Profile = Character ? Character->CharacterProfile.Get() : nullptr;
     UGratiaBodySurface* Surface = Character ? Character->BodySurface.Get() : nullptr;
@@ -541,15 +599,38 @@ FTransform AGratiaStage1Runtime::ApplyBodySurface(FHandProxy& Hand, bool bLeft, 
     if (Grip <= Settings.GripReleaseInput) Hand.bGripArmed = true;
     FGratiaSurfaceHit Hit;
     const FVector PalmPoint = Constrained.TransformPosition(Palm.Point);
+    // Trigger or grip on a breast/butt cups it: palm on the curve, fingers around it, and the
+    // fingers sink deeper the harder the trigger is pressed. The hand follows the controller and
+    // the soft part follows the hand (soft-body grab), so it is not pinned to the bone.
+    const float Squeeze = FMath::Max(Grip, HandInput ? HandInput->GetTrigger(bLeft) : 0.0f);
+    if (Squeeze >= Settings.CupStartInput
+        && Surface->FindNearest(PalmPoint, Settings.GripReachCm + Settings.PalmThicknessCm, Hit, true) && Hit.bSoftZone)
+    {
+        TArray<FVector4> NearSpheres;
+        TArray<FGratiaConformCapsule> NearCapsules;
+        Surface->GatherConformShapes(PalmPoint, 25.0f, NearSpheres, NearCapsules);
+        const FTransform Cup = UGratiaBodySurface::SolveWrap(Constrained, Palm, Hit, Settings.PalmThicknessCm,
+            Profile->SoftBody.FingerRadiusCm + Profile->SoftBody.FingerConformMarginCm, NearCapsules);
+        if (WasCupping != Hit.Bone) { Hand.CupBlend = 0.0f; Hand.GripPulse = 0.05f; }
+        Hand.CupBone = Hit.Bone;
+        Hand.CupSqueeze = Squeeze;
+        Hand.CupBlend = FMath::Min(1.0f, Hand.CupBlend + DeltaSeconds / FMath::Max(0.01f, Settings.GripBlendSeconds));
+        Hand.SurfaceWeight = 1.0f;
+        return BlendTransform(Constrained, Cup, FMath::SmoothStep(0.0f, 1.0f, Hand.CupBlend));
+    }
+    Hand.CupBlend = 0.0f;
     // Soft zones keep their own trigger/grip grab; limbs and torso are wrapped here.
     if (Hand.bGripArmed && Grip >= Settings.GripStartInput
-        && Surface->FindNearest(PalmPoint, Settings.GripReachCm + Settings.PalmThicknessCm, Hit, false))
+        && Surface->FindNearest(PalmPoint, Settings.GripReachCm + Settings.PalmThicknessCm, Hit, false, true))
     {
         FTransform Bone;
         if (BoneFrame(Hit.Bone, Bone))
         {
+            TArray<FVector4> NearSpheres;
+            TArray<FGratiaConformCapsule> NearCapsules;
+            Surface->GatherConformShapes(PalmPoint, 25.0f, NearSpheres, NearCapsules);
             const FTransform Wrap = UGratiaBodySurface::SolveWrap(Constrained, Palm, Hit, Settings.PalmThicknessCm,
-                Profile->SoftBody.FingerRadiusCm + Profile->SoftBody.FingerConformMarginCm);
+                Profile->SoftBody.FingerRadiusCm + Profile->SoftBody.FingerConformMarginCm, NearCapsules);
             Hand.GripBone = Hit.Bone;
             Hand.GripRelative = Wrap.GetRelativeTransform(Bone);
             Hand.GripFrom = Hand.LastWorld;
@@ -561,11 +642,13 @@ FTransform AGratiaStage1Runtime::ApplyBodySurface(FHandProxy& Hand, bool bLeft, 
             return Hand.GripFrom;
         }
     }
-    if (Settings.AdaptDistanceCm > 0 && Surface->FindNearest(PalmPoint, Settings.AdaptDistanceCm + Settings.PalmThicknessCm, Hit, true))
-    {
-        Hand.SurfaceWeight = 1.0f - FMath::Clamp((Hit.Gap - Settings.PalmThicknessCm) / Settings.AdaptDistanceCm, 0.0f, 1.0f);
-        return UGratiaBodySurface::LeanToSurface(Constrained, Palm, Hit, Hand.SurfaceWeight, Settings.AdaptMaxDegrees, Settings.PalmThicknessCm);
-    }
+    float LeanTarget = 0.0f;
+    const bool bNear = Settings.AdaptDistanceCm > 0 && Surface->FindNearest(PalmPoint, Settings.AdaptDistanceCm + Settings.PalmThicknessCm, Hit, true);
+    if (bNear) LeanTarget = 1.0f - FMath::Clamp((Hit.Gap - Settings.PalmThicknessCm) / Settings.AdaptDistanceCm, 0.0f, 1.0f);
+    Hand.LeanWeight = FMath::FInterpTo(Hand.LeanWeight, LeanTarget, FMath::Clamp(DeltaSeconds, 0.0f, 0.1f), 12.0f);
+    Hand.SurfaceWeight = Hand.LeanWeight;
+    if (bNear && Hand.LeanWeight > 0.01f)
+        return UGratiaBodySurface::LeanToSurface(Constrained, Palm, Hit, Hand.LeanWeight, Settings.AdaptMaxDegrees, Settings.PalmThicknessCm);
     return Constrained;
 }
 

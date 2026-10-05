@@ -24,6 +24,9 @@ struct FGratiaConformCapsule
     FVector A = FVector::ZeroVector;
     FVector B = FVector::ZeroVector;
     float Radius = 0.0f;
+    FName Bone;
+    /** Torso slice (wraps around an explicit axis): adjacent slices form one surface. */
+    bool bSlice = false;
 };
 
 /**

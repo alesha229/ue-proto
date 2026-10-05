@@ -49,6 +49,8 @@ colliders = list(colliders)
 settings = profile.get_editor_property('soft_body')
 settings.set_editor_property('enabled', True)
 settings.set_editor_property('chains', chains)
+# Full trigger/grip lets the fingers sink this deep into a breast/butt (stronger squeeze).
+settings.set_editor_property('squish_depth_cm', 3.5)
 settings.set_editor_property('body_colliders', colliders)
 profile.set_editor_property('soft_body', settings)
 # KawaiiPhysics owns these bones; the rigid secondary path must not simulate them too.

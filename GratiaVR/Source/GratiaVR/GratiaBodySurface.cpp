@@ -29,8 +29,15 @@ void UGratiaBodySurface::Resolve() const
     {
         const int32 Bone = Character->CharacterMesh->GetBoneIndex(Capsule.Bone);
         if (Bone == INDEX_NONE || Capsule.StartCm.ContainsNaN() || Capsule.EndCm.ContainsNaN() || !(Capsule.RadiusCm > 0)) continue;
-        Resolved.Add({Bone, Capsule.Bone, Capsule.StartCm, Capsule.EndCm, Capsule.WrapAxis.GetSafeNormal(), Capsule.RadiusCm});
+        Resolved.Add({Bone, Capsule.Bone, Capsule.StartCm, Capsule.EndCm, Capsule.WrapAxis.GetSafeNormal(), Capsule.RadiusCm, Capsule.bGrip, Capsule.bSoft});
     }
+}
+
+bool UGratiaBodySurface::UseZoneSpheres() const
+{
+    if (!Character.IsValid() || !Character->SoftBodyInteraction || !Character->SoftBodyInteraction->IsEnabled()) return false;
+    for (const FResolved& Capsule : Resolved) if (Capsule.bSoft) return false;
+    return true;
 }
 
 bool UGratiaBodySurface::HasSurface() const
@@ -72,7 +79,7 @@ void UGratiaBodySurface::Evaluate(const FVector& Point, const FVector& A, const 
     Out.Gap = float(Distance - Radius);
 }
 
-bool UGratiaBodySurface::FindNearest(const FVector& Point, float MaxGapCm, FGratiaSurfaceHit& Out, bool bIncludeSoftZones) const
+bool UGratiaBodySurface::FindNearest(const FVector& Point, float MaxGapCm, FGratiaSurfaceHit& Out, bool bIncludeSoftZones, bool bGripTargetsOnly) const
 {
     Resolve();
     if (!Character.IsValid() || !Character->CharacterMesh || Point.ContainsNaN()) return false;
@@ -80,17 +87,19 @@ bool UGratiaBodySurface::FindNearest(const FVector& Point, float MaxGapCm, FGrat
     FGratiaSurfaceHit Hit;
     for (const FResolved& Capsule : Resolved)
     {
+        if ((bGripTargetsOnly && !Capsule.bGrip) || (!bIncludeSoftZones && Capsule.bSoft)) continue;
         FVector A, B; float Radius;
         WorldCapsule(Capsule, A, B, Radius);
         Evaluate(Point, A, B, Radius, Hit);
         if (Hit.Gap <= MaxGapCm && (!bFound || Hit.Gap < Out.Gap))
         {
-            Out = Hit; Out.Bone = Capsule.Name; Out.bSoftZone = false; bFound = true;
+            Out = Hit; Out.Bone = Capsule.Name; Out.bSoftZone = Capsule.bSoft; bFound = true;
             const FVector Wrap = WorldWrap(Capsule);
             if (!Wrap.IsZero()) Out.WrapAxis = Wrap;
+            Out.bSlice = !Capsule.Wrap.IsNearlyZero();
         }
     }
-    if (bIncludeSoftZones && Character->SoftBodyInteraction && Character->SoftBodyInteraction->IsEnabled())
+    if (bIncludeSoftZones && !bGripTargetsOnly && UseZoneSpheres())
     {
         for (const auto& Zone : Character->SoftBodyInteraction->GetZones())
         {
@@ -117,9 +126,10 @@ bool UGratiaBodySurface::FindOnBone(FName Bone, const FVector& Point, FGratiaSur
         WorldCapsule(Capsule, A, B, Radius);
         Evaluate(Point, A, B, Radius, Hit);
         if (bFound && Hit.Gap >= Out.Gap) continue;
-        Out = Hit; Out.Bone = Bone; Out.bSoftZone = false;
+        Out = Hit; Out.Bone = Bone; Out.bSoftZone = Capsule.bSoft;
         const FVector Wrap = WorldWrap(Capsule);
         if (!Wrap.IsZero()) Out.WrapAxis = Wrap;
+        Out.bSlice = !Capsule.Wrap.IsNearlyZero();
         bFound = true;
     }
     return bFound;
@@ -143,7 +153,7 @@ void UGratiaBodySurface::GatherContactShapes(float ExtraRadiusCm, TArray<FGratia
         WorldCapsule(Capsule, A, B, Radius);
         Out.Add(FGratiaContactShape::Capsule(A, B, Radius + ExtraRadiusCm));
     }
-    if (Character->SoftBodyInteraction && Character->SoftBodyInteraction->IsEnabled())
+    if (UseZoneSpheres())
         for (const auto& Zone : Character->SoftBodyInteraction->GetZones())
             Out.Add(FGratiaContactShape::Sphere(Zone.Center, Zone.Radius + ExtraRadiusCm));
 }
@@ -154,15 +164,19 @@ void UGratiaBodySurface::GatherConformShapes(const FVector& Point, float RangeCm
     Spheres.Reset(); Capsules.Reset();
     Resolve();
     if (!Character.IsValid() || !Character->CharacterMesh) return;
+    const double Shrink = FMath::Max(0.0f, SoftZoneShrinkCm);
     for (const FResolved& Capsule : Resolved)
     {
         FGratiaConformCapsule World;
         WorldCapsule(Capsule, World.A, World.B, World.Radius);
+        World.Bone = Capsule.Name;
+        World.bSlice = !Capsule.Wrap.IsNearlyZero();
+        // Squeezing fingers sink into soft parts; the press dent opens under them.
+        if (Capsule.bSoft) World.Radius = float(FMath::Max(World.Radius * 0.35, World.Radius - Shrink));
         if (FMath::PointDistToSegment(Point, World.A, World.B) < RangeCm + World.Radius) Capsules.Add(World);
     }
-    if (Character->SoftBodyInteraction && Character->SoftBodyInteraction->IsEnabled())
+    if (UseZoneSpheres())
     {
-        const double Shrink = FMath::Max(0.0f, SoftZoneShrinkCm);
         for (const auto& Zone : Character->SoftBodyInteraction->GetZones())
             if (FVector::Distance(Point, Zone.Center) < RangeCm + Zone.Radius)
                 Spheres.Emplace(Zone.Center.X, Zone.Center.Y, Zone.Center.Z, FMath::Max(Zone.Radius * 0.35, Zone.Radius - Shrink));
@@ -177,7 +191,7 @@ void UGratiaBodySurface::PalmWorld(const FTransform& Hand, const FGratiaPalmFram
 }
 
 FTransform UGratiaBodySurface::SolveWrap(const FTransform& Hand, const FGratiaPalmFrame& Palm, const FGratiaSurfaceHit& Hit, float PalmThicknessCm,
-    float FingerClearanceCm)
+    float FingerClearanceCm, TConstArrayView<FGratiaConformCapsule> Neighbours)
 {
     FVector Point, Normal, Finger;
     PalmWorld(Hand, Palm, Point, Normal, Finger);
@@ -196,17 +210,37 @@ FTransform UGratiaBodySurface::SolveWrap(const FTransform& Hand, const FGratiaPa
     const FVector PalmPoint = Hit.Point + Hit.Normal * PalmThicknessCm;
     Out.SetLocation(PalmPoint - Out.TransformVector(Palm.Point));
     // The open hand is relaxed (fingers bent to the palm side): rest it on its lowest point so
-    // nothing starts inside the part; the fingers then curl until they touch it.
-    for (int32 Iteration = 0; Iteration < 4; ++Iteration)
+    // nothing starts inside the part or its overlapping neighbours (the body is their union);
+    // the fingers then curl until they touch it.
+    // Only neighbours overlapping the gripped capsule are the same surface (torso slices);
+    // other parts (her arm beside the waist) stop the curling fingers instead.
+    TArray<FGratiaConformCapsule, TInlineAllocator<8>> Merged;
+    for (const FGratiaConformCapsule& Other : Neighbours)
     {
-        double Lift = 0.0;
-        for (const FVector& Rest : Palm.RestPoints)
-        {
-            const FVector World = Out.TransformPosition(Rest);
-            Lift = FMath::Max(Lift, Hit.Radius + FingerClearanceCm - FMath::PointDistToSegment(World, Hit.SegmentA, Hit.SegmentB));
-        }
+        FVector OnHit, OnOther;
+        FMath::SegmentDistToSegmentSafe(Hit.SegmentA, Hit.SegmentB, Other.A, Other.B, OnHit, OnOther);
+        // Same-bone pieces and adjacent torso slices are one surface; other parts are not.
+        const bool bSameSurface = Other.Bone == Hit.Bone || (Hit.bSlice && Other.bSlice);
+        if (bSameSurface && FVector::Distance(OnHit, OnOther) < Hit.Radius + Other.Radius - 0.5) Merged.Add(Other);
+    }
+    auto Depth = [&](const FVector& World, double Clearance, bool bUnion)
+    {
+        double Value = Hit.Radius + Clearance - FMath::PointDistToSegment(World, Hit.SegmentA, Hit.SegmentB);
+        if (bUnion)
+            for (const FGratiaConformCapsule& Other : Merged)
+                Value = FMath::Max(Value, Other.Radius + Clearance - FMath::PointDistToSegment(World, Other.A, Other.B));
+        return Value;
+    };
+    double Lifted = 0.0;
+    for (int32 Iteration = 0; Iteration < 6 && Lifted < 6.0; ++Iteration)
+    {
+        // The palm stays outside the merged surface; finger caps handle steps between slices.
+        double Lift = Depth(Out.TransformPosition(Palm.Point), PalmThicknessCm, true);
+        for (const FVector& Rest : Palm.RestPoints) Lift = FMath::Max(Lift, Depth(Out.TransformPosition(Rest), FingerClearanceCm, true));
         if (Lift <= 0.01) break;
+        Lift = FMath::Min(Lift, 6.0 - Lifted);
         Out.AddToTranslation(Hit.Normal * Lift);
+        Lifted += Lift;
     }
     return Out.ContainsNaN() ? Hand : Out;
 }

@@ -19,6 +19,7 @@ struct FGratiaSurfaceHit
     FVector Axis = FVector::ZeroVector;    // capsule segment direction (zero for spheres)
     FVector WrapAxis = FVector::ZeroVector; // axis a gripping hand wraps around
     FVector SegmentA = FVector::ZeroVector, SegmentB = FVector::ZeroVector;
+    bool bSlice = false;
     float Radius = 0.0f;
     float Gap = 0.0f;                      // query point to surface, negative inside
     bool bSoftZone = false;
@@ -38,8 +39,9 @@ public:
     UGratiaBodySurface();
 
     bool HasSurface() const;
-    /** Nearest surface within MaxGapCm of Point (gap measured to the surface). */
-    bool FindNearest(const FVector& Point, float MaxGapCm, FGratiaSurfaceHit& Out, bool bIncludeSoftZones = true) const;
+    /** Nearest surface within MaxGapCm of Point (gap measured to the surface). Grip queries
+     *  skip parts that are not grip targets (head, neck, soft parts). */
+    bool FindNearest(const FVector& Point, float MaxGapCm, FGratiaSurfaceHit& Out, bool bIncludeSoftZones = true, bool bGripTargetsOnly = false) const;
     /** Capsule hit for a named bone (QA and diagnostics). */
     bool FindOnBone(FName Bone, const FVector& Point, FGratiaSurfaceHit& Out) const;
     /** World segment and radius of a bone's capsule. */
@@ -53,7 +55,7 @@ public:
     /** Hand transform that wraps the palm around the hit part: palm on the surface, fingers
      *  across the part's axis (keeping the closer of the two directions). */
     static FTransform SolveWrap(const FTransform& Hand, const FGratiaPalmFrame& Palm, const FGratiaSurfaceHit& Hit, float PalmThicknessCm,
-        float FingerClearanceCm);
+        float FingerClearanceCm, TConstArrayView<FGratiaConformCapsule> Neighbours = {});
     /** Partly turns the palm toward the surface (Weight 0..1, limited angle) and draws it closer. */
     static FTransform LeanToSurface(const FTransform& Hand, const FGratiaPalmFrame& Palm, const FGratiaSurfaceHit& Hit, float Weight,
         float MaxDegrees, float PalmThicknessCm);
@@ -67,7 +69,9 @@ protected:
     virtual void BeginPlay() override;
 
 private:
-    struct FResolved { int32 Bone = INDEX_NONE; FName Name; FVector Start, End, Wrap; float Radius = 0; };
+    struct FResolved { int32 Bone = INDEX_NONE; FName Name; FVector Start, End, Wrap; float Radius = 0; bool bGrip = true; bool bSoft = false; };
+    /** Soft-part capsules replace the coarse soft-body zone spheres when present. */
+    bool UseZoneSpheres() const;
     void Resolve() const;
     void WorldCapsule(const FResolved& Capsule, FVector& A, FVector& B, float& Radius) const;
     FVector WorldWrap(const FResolved& Capsule) const;

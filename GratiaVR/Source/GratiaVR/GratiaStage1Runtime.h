@@ -211,10 +211,27 @@ private:
         float GripPulse = 0.0f;
         /** 0..1 how much the free hand leans onto a nearby surface (fingers rest on it). */
         float SurfaceWeight = 0.0f;
+        /** Cupping a soft part (breast/butt): blend in, and the squeeze amount (trigger/grip). */
+        FName CupBone;
+        float CupBlend = 0.0f;
+        float CupSqueeze = 0.0f;
+        /** Visible hand after the final smoothing stage (contact/lean/grip/cup/press changes). */
+        FTransform Smoothed = FTransform::Identity;
+        bool bSmoothedValid = false;
+        /** Contact offset from the controller last frame, and the part of its jumps still easing out. */
+        FTransform PrevTarget = FTransform::Identity;
+        FVector PrevOffset = FVector::ZeroVector;
+        FQuat PrevOffsetRotation = FQuat::Identity;
+        FVector OffsetResidual = FVector::ZeroVector;
+        FQuat RotationResidual = FQuat::Identity;
+        bool bOffsetValid = false;
+        float LeanWeight = 0.0f;
     };
     /** Body-surface hand pose for a tracked hand: wrap grip, hold, release, or lean onto the body. */
     FTransform ApplyBodySurface(FHandProxy& Hand, bool bLeft, const FTransform& Target, const FTransform& Constrained, float DeltaSeconds);
     void ReleaseBodyGrip(FHandProxy& Hand, bool bLeft, const TCHAR* Reason);
+    /** Applies the desired visible hand smoothly; a free hand rides the controller directly. */
+    void ApplyVisualHand(FHandProxy& Hand, const FTransform& Target, const FTransform& Desired, float DeltaSeconds);
     void UpdateHandPose(FHandProxy& Hand, bool bLeft, const FVector& Near);
     void UpdateHaptics(FHandProxy& Hand, bool bLeft, float Amplitude, float Frequency);
 
