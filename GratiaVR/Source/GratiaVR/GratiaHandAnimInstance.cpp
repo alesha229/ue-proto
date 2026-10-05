@@ -10,7 +10,7 @@
 
 namespace
 {
-const TCHAR* FingerNames[UGratiaHandAnimInstance::NumFingers] = {TEXT("thumb"), TEXT("index"), TEXT("middle"), TEXT("ring"), TEXT("pinky")};
+const TCHAR* GratiaHandFingerNames[UGratiaHandAnimInstance::NumFingers] = {TEXT("thumb"), TEXT("index"), TEXT("middle"), TEXT("ring"), TEXT("pinky")};
 
 struct FGratiaHandProxy : public FAnimInstanceProxy
 {
@@ -48,11 +48,11 @@ struct FGratiaHandProxy : public FAnimInstanceProxy
             const FString Name = Ref.GetBoneName(Bones.MakeMeshPoseIndex(Index).GetInt()).ToString().ToLower();
             for (int32 F = 0; F < UGratiaHandAnimInstance::NumFingers; ++F)
             {
-                if (!Name.StartsWith(FingerNames[F])) continue;
+                if (!Name.StartsWith(GratiaHandFingerNames[F])) continue;
                 BoneFinger[Index.GetInt()] = F;
                 if (!Name.EndsWith(Side)) break;
                 for (int32 J = 0; J < 3; ++J)
-                    if (Name == FString::Printf(TEXT("%s_0%d%s"), FingerNames[F], J + 1, Side)) Joints[F][J] = Index.GetInt();
+                    if (Name == FString::Printf(TEXT("%s_0%d%s"), GratiaHandFingerNames[F], J + 1, Side)) Joints[F][J] = Index.GetInt();
             }
         }
     }

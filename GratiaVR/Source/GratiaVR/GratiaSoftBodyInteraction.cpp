@@ -12,7 +12,7 @@ DEFINE_LOG_CATEGORY_STATIC(LogGratiaSoftBody, Log, All);
 
 namespace
 {
-FVector AxisVector(EGratiaBoneAxis Axis)
+FVector GratiaSoftBodyAxisVector(EGratiaBoneAxis Axis)
 {
     switch (Axis)
     {
@@ -25,7 +25,7 @@ FVector AxisVector(EGratiaBoneAxis Axis)
     }
 }
 
-FTransform RefComponentTransform(const FReferenceSkeleton& Ref, int32 Index)
+FTransform GratiaSoftBodyRefTransform(const FReferenceSkeleton& Ref, int32 Index)
 {
     FTransform Result = Ref.GetRefBonePose()[Index];
     for (int32 Parent = Ref.GetParentIndex(Index); Parent != INDEX_NONE; Parent = Ref.GetParentIndex(Parent))
@@ -93,7 +93,7 @@ void UGratiaSoftBodyInteraction::UpdateZones()
         {
             const int32 Bone = Ref.FindBoneIndex(Sphere.Bone);
             if (Bone == INDEX_NONE) continue;
-            ColliderOffsets.Emplace(Bone, RefComponentTransform(Ref, Bone).InverseTransformPosition(Sphere.RefCenterCm));
+            ColliderOffsets.Emplace(Bone, GratiaSoftBodyRefTransform(Ref, Bone).InverseTransformPosition(Sphere.RefCenterCm));
             ColliderRadii.Add(Sphere.RadiusCm);
         }
     }
@@ -107,7 +107,7 @@ void UGratiaSoftBodyInteraction::UpdateZones()
             if (Index == INDEX_NONE) continue;
             const FTransform World = Mesh->GetBoneTransform(Index);
             // Bones are scaled by the FBX import; direction uses rotation only, lengths are cm.
-            const FVector Direction = World.GetRotation().RotateVector(AxisVector(Chain.ForwardAxis));
+            const FVector Direction = World.GetRotation().RotateVector(GratiaSoftBodyAxisVector(Chain.ForwardAxis));
             FZone Zone;
             Zone.Chain = Chain.Name; Zone.Bone = Bone; Zone.ChainIndex = ChainIndex;
             Zone.Tip = World.GetLocation() + Direction * Chain.DummyBoneLengthCm * Scale;

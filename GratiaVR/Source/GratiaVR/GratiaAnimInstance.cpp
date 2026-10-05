@@ -30,7 +30,7 @@ struct FGratiaKawaiiChain
     uint16 BoneSerial = 0;
 };
 
-constexpr int32 MaxHandSpheres = 24;
+constexpr int32 GratiaKawaiiMaxHandSpheres = 24;
 
 EBoneForwardAxis ToKawaiiAxis(EGratiaBoneAxis Axis)
 {
@@ -45,7 +45,7 @@ EBoneForwardAxis ToKawaiiAxis(EGratiaBoneAxis Axis)
     }
 }
 
-FTransform RefComponentTransform(const FReferenceSkeleton& Ref, int32 Index)
+FTransform GratiaKawaiiRefTransform(const FReferenceSkeleton& Ref, int32 Index)
 {
     FTransform Result = Ref.GetRefBonePose()[Index];
     for (int32 Parent = Ref.GetParentIndex(Index); Parent != INDEX_NONE; Parent = Ref.GetParentIndex(Parent))
@@ -121,14 +121,14 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
                 if (Bone == INDEX_NONE) continue;
                 FSphericalLimit Limit;
                 Limit.DrivingBone = FBoneReference(Sphere.Bone);
-                Limit.OffsetLocation = RefComponentTransform(Ref, Bone).InverseTransformPosition(Sphere.RefCenterCm);
+                Limit.OffsetLocation = GratiaKawaiiRefTransform(Ref, Bone).InverseTransformPosition(Sphere.RefCenterCm);
                 Limit.Radius = Sphere.RadiusCm;
                 Limit.LimitType = ESphericalLimitType::Outer;
                 Node.SphericalLimits.Add(Limit);
             }
             // Hand/finger slots are driven from the root bone and moved every update.
             Chain.FirstHandLimit = Node.SphericalLimits.Num();
-            for (int32 I = 0; I < MaxHandSpheres; ++I)
+            for (int32 I = 0; I < GratiaKawaiiMaxHandSpheres; ++I)
             {
                 FSphericalLimit Limit;
                 Limit.DrivingBone = FBoneReference(Ref.GetBoneName(0));
@@ -248,7 +248,7 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
         {
             const FTransform Root = GetSkelMeshComponent()->GetComponentSpaceTransforms()[0];
             for (FGratiaKawaiiChain& Chain : Kawaii)
-                for (int32 I = 0; I < MaxHandSpheres; ++I)
+                for (int32 I = 0; I < GratiaKawaiiMaxHandSpheres; ++I)
                 {
                     FSphericalLimit& Limit = Chain.Node->SphericalLimits[Chain.FirstHandLimit + I];
                     const bool bActive = Instance->SoftBodyInput.HandSpheres.IsValidIndex(I);
