@@ -49,7 +49,7 @@ namespace
         TEXT("LeftFoot"), TEXT("RightFoot"), TEXT("Root")
     };
 
-    bool IsFiniteTransform(const FTransform& Transform)
+    bool VerificationIsFiniteTransform(const FTransform& Transform)
     {
         return !Transform.ContainsNaN() && Transform.GetRotation().IsNormalized();
     }
@@ -148,7 +148,7 @@ void UGratiaRuntimeVerification::RunWorldChecks()
     TestCheck(Runtime.bPawnReady, TEXT("Template pawn has camera, common tracking origin and both hand proxies"));
     TestCheck(Runtime.PlayerController.IsValid() && Runtime.PlayerController->GetHUD() && Runtime.PlayerController->GetHUD()->IsA<AGratiaStage1HUD>(),
         TEXT("Stage 1 HUD is active"));
-    TestCheck(Runtime.Camera.IsValid() && IsFiniteTransform(Runtime.Camera->GetComponentTransform()), TEXT("Camera transform is finite"));
+    TestCheck(Runtime.Camera.IsValid() && VerificationIsFiniteTransform(Runtime.Camera->GetComponentTransform()), TEXT("Camera transform is finite"));
     TestCheck(!Runtime.Camera.IsValid() || Runtime.bXRActive || FMath::IsNearlyEqual(Runtime.Camera->GetRelativeLocation().Z,
         Runtime.OriginalCameraRelative.GetLocation().Z + Runtime.DesktopEyeHeightCm, 0.1), TEXT("Desktop preview camera height is applied when XR is inactive"));
     int32 MotionControllers = 0;
@@ -286,10 +286,10 @@ void UGratiaRuntimeVerification::RunCharacterWorldChecks()
         }
         const bool bPresent = Component->GetBoneIndex(Bone) != INDEX_NONE;
         const FTransform Transform = Component->GetSocketTransform(Bone, RTS_Component);
-        bBonesFinite &= bPresent && IsFiniteTransform(Transform);
+        bBonesFinite &= bPresent && VerificationIsFiniteTransform(Transform);
         InitialCharacterBones.Add(Transform);
     }
-    TestCheck(bBonesFinite && IsFiniteTransform(Character->GetActorTransform()),
+    TestCheck(bBonesFinite && VerificationIsFiniteTransform(Character->GetActorTransform()),
         TEXT("All mapped observation bones and the character actor have finite transforms"));
     if (Profile->bRequirePlantedIdle)
         TestCheck(!Profile->ResolveBone(TEXT("LeftFoot")).IsNone() && !Profile->ResolveBone(TEXT("RightFoot")).IsNone()
@@ -325,8 +325,8 @@ void UGratiaRuntimeVerification::SampleCharacterAnimation(bool bFinish)
     {
         if (ObservedCharacterBones[Index].IsNone()) continue;
         const FTransform Current = Component->GetSocketTransform(ObservedCharacterBones[Index], RTS_Component);
-        bFinite &= IsFiniteTransform(Current);
-        if (!IsFiniteTransform(Current)) continue;
+        bFinite &= VerificationIsFiniteTransform(Current);
+        if (!VerificationIsFiniteTransform(Current)) continue;
         const FTransform& Baseline = InitialCharacterBones[Index];
         const double Distance = FVector::Distance(Current.GetLocation(), Baseline.GetLocation());
         const double Angle = FMath::RadiansToDegrees(Current.GetRotation().AngularDistance(Baseline.GetRotation()));
@@ -347,7 +347,7 @@ void UGratiaRuntimeVerification::SampleCharacterAnimation(bool bFinish)
         }
     }
     const FTransform ActorTransform = Runtime.TargetCharacter->GetActorTransform();
-    bFinite &= IsFiniteTransform(ActorTransform);
+    bFinite &= VerificationIsFiniteTransform(ActorTransform);
     MaxRootDriftCm = FMath::Max(MaxRootDriftCm, FVector::Distance(ActorTransform.GetLocation(), InitialCharacterActor.GetLocation()));
     MaxRootDriftDegrees = FMath::Max(MaxRootDriftDegrees,
         FMath::RadiansToDegrees(ActorTransform.GetRotation().AngularDistance(InitialCharacterActor.GetRotation())));
@@ -454,7 +454,7 @@ void UGratiaRuntimeVerification::RunSelfChecks()
             bLeft ? TEXT("Left hand query contact can be enabled") : TEXT("Right hand query contact can be enabled"));
         Runtime.UpdateHand(Hand, bLeft, 0.016f);
         TestCheck(!Runtime.IsHandInteractionAllowed(bLeft), bLeft ? TEXT("Left lost hand forbids contact") : TEXT("Right lost hand forbids contact"));
-        TestCheck(Hand.Visual.IsValid() && !Hand.Visual->GetAttachParent() && IsFiniteTransform(Hand.Visual->GetComponentTransform()),
+        TestCheck(Hand.Visual.IsValid() && !Hand.Visual->GetAttachParent() && VerificationIsFiniteTransform(Hand.Visual->GetComponentTransform()),
             bLeft ? TEXT("Left proxy is detached safely from stale controller poses") : TEXT("Right proxy is detached safely from stale controller poses"));
         bool bCollisionDisabled = true;
         for (const AGratiaStage1Runtime::FCollisionSnapshot& Snapshot : Hand.Collisions)
@@ -649,7 +649,7 @@ void UGratiaRuntimeVerification::RunReactionResourceQA(float DeltaSeconds)
             {
                 FTransform HeadAtTime = FTransform::Identity;
                 Expected->GetBoneTransform(HeadAtTime, FSkeletonPoseBoneIndex(HeadIndex), Context, false);
-                bCurvesFinite &= IsFiniteTransform(HeadAtTime) && IsFiniteTransform(HeadStart);
+                bCurvesFinite &= VerificationIsFiniteTransform(HeadAtTime) && VerificationIsFiniteTransform(HeadStart);
                 ReactionQAHeadRotationDegrees = FMath::Max(ReactionQAHeadRotationDegrees,
                     float(FMath::RadiansToDegrees(HeadStart.GetRotation().AngularDistance(HeadAtTime.GetRotation()))));
             }
@@ -1164,7 +1164,7 @@ void UGratiaRuntimeVerification::RunSoakAndMetrics(float DeltaSeconds)
         if (Character->CharacterMesh)
         {
             for (const FTransform& Bone : Character->CharacterMesh->GetComponentSpaceTransforms())
-                if (!IsFiniteTransform(Bone)) bTestFailed = true;
+                if (!VerificationIsFiniteTransform(Bone)) bTestFailed = true;
         }
         else bTestFailed = true;
     }
