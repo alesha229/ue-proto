@@ -6,6 +6,6 @@ public class GratiaVREditorTools : ModuleRules
     {
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
         PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine" });
-        PrivateDependencyModuleNames.AddRange(new[] { "GratiaVR", "UnrealEd", "PhysicsUtilities", "PhysicsCore", "AssetRegistry", "ClothingSystemRuntimeCommon", "ClothingSystemRuntimeInterface", "ClothingSystemEditor", "ChaosCloth", "Chaos", "ChaosCore", "Json", "JsonUtilities" });
+        PrivateDependencyModuleNames.AddRange(new[] { "GratiaVR", "UnrealEd", "PhysicsUtilities", "PhysicsCore", "AssetRegistry", "Chaos", "ChaosCore", "Json", "JsonUtilities" });
     }
 }

@@ -7,6 +7,25 @@
 class AGratiaPreviewCharacter;
 class UGratiaCharacterProfile;
 
+/** Spring grab of one soft-body root bone (VRChat PhysBone style), component space. */
+struct FGratiaSoftBodyGrab
+{
+    FName RootBone;
+    FVector TargetCS = FVector::ZeroVector;
+    float Movement = 0.5f;
+    float MaxStretchCm = 6.0f;
+};
+
+/** Game-thread input for the KawaiiPhysics soft body; copied to the proxy in PreUpdate. */
+struct FGratiaSoftBodyAnimInput
+{
+    /** Hand and finger collision spheres: component-space centre (XYZ) and radius (W). */
+    TArray<FVector4> HandSpheres;
+    TArray<FGratiaSoftBodyGrab> Grabs;
+    /** Set for one update after teleport/profile/quality changes. */
+    bool bReset = false;
+};
+
 /** Copy on Event Blueprint Update Animation; do not dereference gameplay actors on worker threads. */
 USTRUCT(BlueprintType)
 struct GRATIAVR_API FGratiaAnimationSnapshot
@@ -75,6 +94,12 @@ public:
     uint32 LastReactionSerial = 0;
     bool IsReactionCuePlaying() const { return ReactionClip && ReactionTime >= 0.0f && ReactionTime < ReactionClipDuration; }
     float ReactionClipDuration = 0.0f;
+    /** KawaiiPhysics soft body enabled by profile, capability and body-motion setting. */
+    bool bSoftBody = false;
+    FGratiaSoftBodyAnimInput SoftBodyInput;
+    /** Number of KawaiiPhysics chains evaluated last frame (diagnostics/QA). */
+    int32 GetActiveSoftBodyChainCount() const { return ActiveSoftBodyChains; }
+    int32 ActiveSoftBodyChains = 0;
 protected:
     virtual FAnimInstanceProxy* CreateAnimInstanceProxy() override;
 };

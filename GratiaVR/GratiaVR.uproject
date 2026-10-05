@@ -5,7 +5,7 @@
   "Description": "Gratia PC VR prototype — stage 1",
   "Plugins": [
     {
-      "Name": "ChaosCloth",
+      "Name": "KawaiiPhysics",
       "Enabled": true
     },
     {

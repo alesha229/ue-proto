@@ -16,12 +16,20 @@ public:
     UGratiaHandInput();
     void UpdateInput();
     float GetTrigger(bool bLeft) const;
+    /** XR template hand actions; fall back to the trigger when the action is unavailable. */
+    float GetGrasp(bool bLeft) const;
+    float GetIndexCurl(bool bLeft) const;
     FString GetDiagnostics() const;
 protected:
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
 private:
     UPROPERTY() TObjectPtr<UInputAction> LeftAction;
     UPROPERTY() TObjectPtr<UInputAction> RightAction;
+    UPROPERTY() TObjectPtr<UInputAction> GraspLeft;
+    UPROPERTY() TObjectPtr<UInputAction> GraspRight;
+    UPROPERTY() TObjectPtr<UInputAction> IndexLeft;
+    UPROPERTY() TObjectPtr<UInputAction> IndexRight;
+    float ReadAction(UInputAction* Action, bool bLeft) const;
     UPROPERTY() TObjectPtr<UInputMappingContext> Mapping;
     UPROPERTY() TObjectPtr<UEnhancedInputComponent> Input;
     TWeakObjectPtr<APlayerController> Controller;

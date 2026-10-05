@@ -15,6 +15,11 @@ UGratiaHandInput::UGratiaHandInput()
     static ConstructorHelpers::FObjectFinder<UInputAction> Right(TEXT("/Game/Gratia/Input/IA_GrabRight.IA_GrabRight"));
     static ConstructorHelpers::FObjectFinder<UInputMappingContext> Context(TEXT("/Game/Gratia/Input/IMC_GratiaLocomotion.IMC_GratiaLocomotion"));
     LeftAction = Left.Object; RightAction = Right.Object; Mapping = Context.Object;
+    static ConstructorHelpers::FObjectFinder<UInputAction> GL(TEXT("/Game/XRFramework/Input/Actions/Hands/IA_Hand_Grasp_Left.IA_Hand_Grasp_Left"));
+    static ConstructorHelpers::FObjectFinder<UInputAction> GR(TEXT("/Game/XRFramework/Input/Actions/Hands/IA_Hand_Grasp_Right.IA_Hand_Grasp_Right"));
+    static ConstructorHelpers::FObjectFinder<UInputAction> IL(TEXT("/Game/XRFramework/Input/Actions/Hands/IA_Hand_IndexCurl_Left.IA_Hand_IndexCurl_Left"));
+    static ConstructorHelpers::FObjectFinder<UInputAction> IR(TEXT("/Game/XRFramework/Input/Actions/Hands/IA_Hand_IndexCurl_Right.IA_Hand_IndexCurl_Right"));
+    GraspLeft = GL.Object; GraspRight = GR.Object; IndexLeft = IL.Object; IndexRight = IR.Object;
 }
 void UGratiaHandInput::UpdateInput()
 {
@@ -29,6 +34,8 @@ void UGratiaHandInput::UpdateInput()
             Input = NewObject<UEnhancedInputComponent>(PC, TEXT("GratiaHandActions"));
             Input->Priority = 70; Input->bBlockInput = false;
             Input->BindActionValue(LeftAction); Input->BindActionValue(RightAction);
+            for (UInputAction* Action : {GraspLeft.Get(), GraspRight.Get(), IndexLeft.Get(), IndexRight.Get()})
+                if (Action) Input->BindActionValue(Action);
             Input->RegisterComponent(); PC->PushInputComponent(Input);
         }
     }
@@ -41,6 +48,16 @@ float UGratiaHandInput::GetTrigger(bool bLeft) const
     const float Value = bReady && Action ? Input->GetBoundActionValue(Action).Get<float>() : 0;
     return FMath::IsFinite(Value) ? FMath::Clamp(Value, 0.0f, 1.0f) : 0;
 }
+float UGratiaHandInput::ReadAction(UInputAction* Action, bool bLeft) const
+{
+    if (!bReady || !Action || !Input) return GetTrigger(bLeft);
+    const FInputActionValue Value = Input->GetBoundActionValue(Action);
+    const float Scalar = Value.GetValueType() == EInputActionValueType::Boolean ? (Value.Get<bool>() ? 1.0f : 0.0f) : Value.Get<float>();
+    // Desktop Z/X drive the trigger only; use it so the hand pose can be tested there.
+    return FMath::IsFinite(Scalar) ? FMath::Max(FMath::Clamp(Scalar, 0.0f, 1.0f), GetTrigger(bLeft)) : GetTrigger(bLeft);
+}
+float UGratiaHandInput::GetGrasp(bool bLeft) const { return ReadAction(bLeft ? GraspLeft.Get() : GraspRight.Get(), bLeft); }
+float UGratiaHandInput::GetIndexCurl(bool bLeft) const { return ReadAction(bLeft ? IndexLeft.Get() : IndexRight.Get(), bLeft); }
 FString UGratiaHandInput::GetDiagnostics() const
 {
     return FString::Printf(TEXT("Grab input: %s L=%.2f R=%.2f"), bReady ? TEXT("ready") : TEXT("missing player/action/context"), GetTrigger(true), GetTrigger(false));

@@ -36,10 +36,8 @@ IA_GrabLeft/Right используют trigger Axis1D; Z/X — только desk
    `configure_character_stage.py`: явные ссылки карты на профиль, цель и куб контакта.
 5. `setup_gratia_locomotion.py`: обновление Input Actions/context и регистрация
    OpenXR vector2-привязок; проверка всех зарегистрированных ключей перед сохранением.
-6. `export_source_cloth_cages.py` / `audit_source_cloth_motion.py`: через живой
-   Blender MCP экспорт исходных мягких клеток и наблюдение source simulation.
-   После сборки editor-модуля `port_source_cloth_cages.py` переносит их в native
-   Chaos Clothing Asset и профиль. Подробнее ниже.
+6. `export_source_cloth_cages.py` (через живой Blender MCP) экспортирует коллайдеры
+   Body/Head collision; `setup_soft_body.py` настраивает KawaiiPhysics в профиле. Подробнее ниже.
 7. `Build-Stage1.ps1`: versioned editor/runtime build и самостоятельный Windows-пакет.
    Не изменять Source/Config/Scripts/Content между stamp и окончанием сборки.
 8. `Test-Stage1.ps1`, `Test-CharacterProfiles.ps1`, `Test-CharacterPoses.ps1`,
@@ -51,24 +49,18 @@ IA_GrabLeft/Right используют trigger Axis1D; Z/X — только desk
 редактора. Python, PowerShell и MCP не требуются готовой игре. Импорт не запускается,
 пока игровые файлы открыты другим редактором или выполняется cook/package.
 
-## Активный перенос исходной мягкой поверхности
+## Мягкие части: KawaiiPhysics (активный путь)
 
-Повторяет физическую коллекцию Blender `Phys/BodyPhys` (HairPhys в источнике
-исключена и не переносится). `export_source_cloth_cages.py` (schema 2) и
-`audit_source_cloth_motion.py` выполняются только через живой Blender MCP в MVP-копии.
-Экспорт сохраняет клетки TitsPhys/AssPhys/ThighsPhys (топология, Pin, веса костей,
-настройки Cloth каждой клетки: масса, tension/shear/bending, pin и internal springs,
-pressure, gravity, collision/self-collision) и коллайдеры Body collision / Head collision.
-Эталон смещений источника: `evidence/04/blender_cloth_offset_reference.json`.
-
-После сборки editor-модуля `port_source_cloth_cages.py` создаёт mesh-owned
-`UGratiaSourceClothingAsset`: значения каждой клетки — weight maps Chaos (tension,
-shear, bending, pressure, anim drive из pin/internal springs); коллайдеры — сферы,
-вписанные в convex-оболочки по костям (только достижимые частицами). Калибровка
-Blender→Chaos: `GRATIA_CLOTH_HALF_POINT` (0.12) и `GRATIA_CLOTH_PRESSURE_SCALE` (0.01).
-Привязка render-секций хранится в ассете и восстанавливается при пересборке меша;
-порт проверяет её после пересборки. `-GratiaClothQA` проверяет нажим/хват/сброс;
-обязательна проверка конкретного пакета и отдельный VR-журнал.
+С 5 октября 2026 мягкие грудь и ягодицы — цепочки KawaiiPhysics 1.21.0 (плагин в
+`GratiaVR/Plugins/KawaiiPhysics`, MIT), а не Chaos Cloth. Схема как у VRChat PhysBones:
+кости с пружиной и коллизией, сферы ладони/пальцев толкают их, триггер тянет кончик.
+`setup_soft_body.py` (editor commandlet) заполняет `DA_Gratia.SoftBody`: по коже меша
+измеряет ось/длину/зону контакта каждой кости, а из Blender Body/Head collision
+(`export_source_cloth_cages.py`, schema 2, через Blender MCP) строит сферы коллайдеров
+тела. Физические значения цепочек — данные профиля, правятся в Details.
+`Test-CharacterSoftBody.ps1` запускает `-GratiaSoftBodyQA` в готовом пакете.
+Скрипты Chaos Cloth (`port_source_cloth_cages.py`, `Test-CharacterCloth.ps1`) удалены;
+`audit_source_cloth_motion.py` оставлен как исторический замер источника.
 
 ## Исторические миграции
 

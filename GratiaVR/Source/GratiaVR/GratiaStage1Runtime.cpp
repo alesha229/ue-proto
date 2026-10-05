@@ -5,7 +5,8 @@
 #include "GratiaInteraction.h"
 #include "GratiaMenu.h"
 #include "GratiaSecondaryMotion.h"
-#include "GratiaClothInteraction.h"
+#include "GratiaSoftBodyInteraction.h"
+#include "GratiaHandAnimInstance.h"
 #include "GratiaBuildInfo.h"
 #include "GratiaHandInput.h"
 
@@ -85,6 +86,8 @@ void AGratiaStage1Runtime::BeginPlay()
 
 void AGratiaStage1Runtime::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+    UpdateHaptics(LeftHand, true, 0.0f, 0.0f);
+    UpdateHaptics(RightHand, false, 0.0f, 0.0f);
     RestoreHand(LeftHand);
     RestoreHand(RightHand);
     if (Camera.IsValid() && bDesktopCameraApplied)
@@ -102,7 +105,7 @@ void AGratiaStage1Runtime::SetTargetCharacter(AGratiaPreviewCharacter* Character
         TargetCharacter->Interaction->SetSceneContactActor(nullptr);
         TargetCharacter->Interaction->ResetState();
         if (TargetCharacter->SecondaryMotion) TargetCharacter->SecondaryMotion->ClearHands();
-        if (TargetCharacter->ClothInteraction) TargetCharacter->ClothInteraction->ClearHands();
+        if (TargetCharacter->SoftBodyInteraction) TargetCharacter->SoftBodyInteraction->ClearHands();
     }
     TargetCharacter = Character;
     if (Menu) Menu->SetCharacter(Character);
@@ -258,6 +261,21 @@ void AGratiaStage1Runtime::BindHand(FHandProxy& Hand, FName ControllerName, FNam
     }
 
     AddTickPrerequisiteComponent(Hand.Controller.Get());
+    // Replace the template hand graph with the native per-finger pose so fingers can
+    // stop on and wrap around soft parts; keep the template graph if poses are missing.
+    if (auto* HandMesh = Cast<USkeletalMeshComponent>(Hand.Visual.Get()))
+    {
+        UClass* PreviousClass = HandMesh->GetAnimClass();
+        HandMesh->SetAnimInstanceClass(UGratiaHandAnimInstance::StaticClass());
+        auto* HandAnim = Cast<UGratiaHandAnimInstance>(HandMesh->GetAnimInstance());
+        if (HandAnim) HandAnim->bLeftHand = &Hand == &LeftHand;
+        if (HandAnim && HandAnim->LoadDefaultPoses()) Hand.HandAnim = HandAnim;
+        else
+        {
+            UE_LOG(LogGratiaStage1, Warning, TEXT("Hand poses unavailable for %s; template hand animation kept, no finger conform"), *VisualName.ToString());
+            HandMesh->SetAnimInstanceClass(PreviousClass);
+        }
+    }
     Hand.OriginalParent = Hand.Visual->GetAttachParent();
     Hand.OriginalSocket = Hand.Visual->GetAttachSocketName();
     Hand.OriginalRelative = Hand.Visual->GetRelativeTransform();
@@ -404,16 +422,59 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
             TargetCharacter->SecondaryMotion->SubmitHand(bLeft, VisualWorld.GetLocation(),
                 TargetCharacter->Interaction->IsHandSampleReady(bLeft) && (!Menu || !Menu->bOpen), DeltaSeconds,
                 HandInput ? HandInput->GetTrigger(bLeft) : 0.0f);
-        if (TargetCharacter->ClothInteraction && !Verification->OwnsSyntheticContactSamples())
-            TargetCharacter->ClothInteraction->SubmitHand(bLeft, VisualWorld.GetLocation(), Target.GetLocation(),
-                TargetCharacter->Interaction->IsHandSampleReady(bLeft) && (!Menu || !Menu->bOpen), DeltaSeconds,
-                HandInput ? HandInput->GetTrigger(bLeft) : 0.0f);
+        if (TargetCharacter->SoftBodyInteraction)
+        {
+            auto* SoftBody = TargetCharacter->SoftBodyInteraction.Get();
+            TArray<FVector> Fingers;
+            if (Hand.HandAnim.IsValid()) Hand.HandAnim->GetFingerPoints(Fingers);
+            const bool bAllowed = TargetCharacter->Interaction->IsHandSampleReady(bLeft) && (!Menu || !Menu->bOpen);
+            SoftBody->SubmitHand(bLeft, VisualWorld.GetLocation(), Target.GetLocation(), bAllowed, DeltaSeconds,
+                HandInput ? HandInput->GetTrigger(bLeft) : 0.0f, Fingers);
+            // Inside a soft zone the visible hand sinks by the bounded press depth.
+            if (SoftBody->HasPress(bLeft) && Hand.Gate.State == EGratiaHandState::Tracked)
+            {
+                if (Hand.Visual->GetAttachParent()) Hand.Visual->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+                Hand.Visual->SetWorldLocation(SoftBody->GetPressPoint(bLeft), false, nullptr, ETeleportType::TeleportPhysics);
+            }
+            UpdateHaptics(Hand, bLeft, bAllowed && bXRActive ? SoftBody->GetHapticAmplitude(bLeft) : 0.0f, SoftBody->GetHapticFrequency(bLeft));
+        }
     }
+    UpdateHandPose(Hand, bLeft, VisualWorld.GetLocation());
     if (Before != Hand.Gate.State)
     {
         UE_LOG(LogGratiaStage1, Display, TEXT("%s hand: %s (forced loss=%s)"), bLeft ? TEXT("Left") : TEXT("Right"),
             HandStateLabel(Hand.Gate.State), Hand.bForceLoss ? TEXT("yes") : TEXT("no"));
     }
+}
+
+void AGratiaStage1Runtime::UpdateHandPose(FHandProxy& Hand, bool bLeft, const FVector& Near)
+{
+    if (!Hand.HandAnim.IsValid()) return;
+    auto* Anim = Hand.HandAnim.Get();
+    const float Grasp = HandInput ? HandInput->GetGrasp(bLeft) : 0.0f;
+    const float Index = HandInput ? HandInput->GetIndexCurl(bLeft) : 0.0f;
+    Anim->FingerInput[0] = Grasp; Anim->FingerInput[1] = Index;
+    Anim->FingerInput[2] = Anim->FingerInput[3] = Anim->FingerInput[4] = Grasp;
+    const auto* Profile = TargetCharacter.IsValid() ? TargetCharacter->CharacterProfile.Get() : nullptr;
+    Anim->bConform = Profile && Profile->SoftBody.bFingerConform && Hand.Gate.CanInteract();
+    if (Profile) { Anim->FingerRadiusCm = Profile->SoftBody.FingerRadiusCm; Anim->ConformMarginCm = Profile->SoftBody.FingerConformMarginCm; }
+    if (Anim->bConform && TargetCharacter->SoftBodyInteraction) TargetCharacter->SoftBodyInteraction->GetConformSpheres(Near, 30.0f, Anim->ConformSpheres);
+    else Anim->ConformSpheres.Reset();
+}
+
+void AGratiaStage1Runtime::UpdateHaptics(FHandProxy& Hand, bool bLeft, float Amplitude, float Frequency)
+{
+    APlayerController* PC = PlayerController.Get();
+    if (!PC) return;
+    const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+    Amplitude = FMath::IsFinite(Amplitude) ? FMath::Clamp(Amplitude, 0.0f, 1.0f) : 0.0f;
+    Frequency = FMath::IsFinite(Frequency) ? FMath::Clamp(Frequency, 0.0f, 1.0f) : 0.0f;
+    // OpenXR haptics expire on their own; refresh while active, change only on a real difference.
+    const bool bChanged = FMath::Abs(Amplitude - Hand.SentHapticAmplitude) > 0.02f || FMath::Abs(Frequency - Hand.SentHapticFrequency) > 0.05f;
+    const bool bKeepAlive = Amplitude > 0.0f && Now - Hand.SentHapticTime > 0.25;
+    if (!bChanged && !bKeepAlive) return;
+    PC->SetHapticsByValue(Frequency, Amplitude, bLeft ? EControllerHand::Left : EControllerHand::Right);
+    Hand.SentHapticAmplitude = Amplitude; Hand.SentHapticFrequency = Frequency; Hand.SentHapticTime = Now;
 }
 
 void AGratiaStage1Runtime::UpdateDesktopCamera()
@@ -511,7 +572,10 @@ FString AGratiaStage1Runtime::GetStatusText() const
         TargetCharacter.IsValid() ? *TargetCharacter->Interaction->GetContactDiagnostics() : TEXT("Character target missing"),
         HandInput ? *HandInput->GetDiagnostics() : TEXT("Hand input missing"),
         TargetCharacter.IsValid() && TargetCharacter->SecondaryMotion ? *TargetCharacter->SecondaryMotion->GetHandDiagnostics() : TEXT("Physics missing"),
-        TargetCharacter.IsValid() && TargetCharacter->ClothInteraction ? *TargetCharacter->ClothInteraction->GetDiagnostics() : TEXT("Cloth missing"), TEXT(GRATIA_BUILD_ID));
+        TargetCharacter.IsValid() && TargetCharacter->SoftBodyInteraction ? *(TargetCharacter->SoftBodyInteraction->GetDiagnostics()
+            + TEXT("\nHands: L ") + (LeftHand.HandAnim.IsValid() ? LeftHand.HandAnim->GetDiagnostics() : FString(TEXT("default")))
+            + TEXT(" | R ") + (RightHand.HandAnim.IsValid() ? RightHand.HandAnim->GetDiagnostics() : FString(TEXT("default"))))
+            : TEXT("Soft body missing"), TEXT(GRATIA_BUILD_ID));
 }
 
 void AGratiaStage1Runtime::RunRequestedTests(float DeltaSeconds)

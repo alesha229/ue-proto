@@ -234,28 +234,26 @@ bool UGratiaCharacterProfile::ValidateProfile(TArray<FString>& Errors, TArray<FS
     const float HandNonnegative[] = {HandPhysics.Stiffness, HandPhysics.Damping, HandPhysics.MaxForce, HandPhysics.GrabStiffness, HandPhysics.GrabDamping};
     for (float Value : HandNonnegative)
         if (!FMath::IsFinite(Value) || Value < 0.0f) Errors.Add(TEXT("Hand physics force settings must be finite and nonnegative."));
-    if (ClothSettings.bEnabled)
+    if (SoftBody.bEnabled)
     {
-        if (SourceClothCages.IsEmpty()) Errors.Add(TEXT("Source cloth enabled without authored cages."));
-        const float Positive[] = {ClothSettings.HandRadiusCm, ClothSettings.MaxParticleOffsetCm,
-            ClothSettings.GrabRadiusCm, ClothSettings.GrabBreakDistanceCm, ClothSettings.MaxHandTravelCm,
-            ClothSettings.MaxHandSpeedCmPerSecond, ClothSettings.MaxGrabSpeedCmPerSecond};
-        for (float Value : Positive)
-            if (!FMath::IsFinite(Value) || Value <= 0) Errors.Add(TEXT("Source cloth geometry/speed limits must be finite and positive."));
-        if (!FMath::IsFinite(ClothSettings.GrabStiffness) || ClothSettings.GrabStiffness < 0
-            || !FMath::IsFinite(ClothSettings.GrabVelocityBlend) || ClothSettings.GrabVelocityBlend < 0 || ClothSettings.GrabVelocityBlend > 1)
-            Errors.Add(TEXT("Source cloth grab settings are invalid."));
-        for (const auto& Cage : SourceClothCages)
-            if (Cage.AssetName.IsNone() || Cage.ExpectedParticleCount <= 0 || Cage.Group < 1 || Cage.Group > 4)
-                Errors.Add(TEXT("Source cloth cage definition is invalid."));
-        for (const auto& Region : SourceClothRegions)
+        if (SoftBody.Chains.IsEmpty()) Errors.Add(TEXT("Soft body enabled without chains."));
+        for (const FGratiaSoftBodyChain& Chain : SoftBody.Chains)
         {
-            const auto* Cage = SourceClothCages.FindByPredicate([&Region](const auto& Value) { return Value.AssetName == Region.AssetName; });
-            if (Region.Name.IsNone() || !Cage || Region.FirstParticle < 0 || Region.ParticleCount <= 0
-                || int64(Region.FirstParticle) + Region.ParticleCount > (Cage ? Cage->ExpectedParticleCount : 0)
-                || Ref.FindBoneIndex(ResolveBone(Region.AnchorSemantic)) == INDEX_NONE)
-                Errors.Add(TEXT("Source cloth observation region is invalid."));
+            if (Chain.Name.IsNone() || Chain.RootBones.IsEmpty()) Errors.Add(TEXT("Soft body chain needs a name and root bones."));
+            for (const FName Bone : Chain.RootBones)
+                if (Ref.FindBoneIndex(Bone) == INDEX_NONE) Errors.Add(FString::Printf(TEXT("Soft body root bone %s is missing."), *Bone.ToString()));
+            const float Values[] = {Chain.DummyBoneLengthCm, Chain.ContactRadiusCm, Chain.CollisionRadiusCm, Chain.Damping, Chain.Stiffness,
+                Chain.WorldDampingLocation, Chain.WorldDampingRotation, Chain.LimitAngleDegrees, Chain.GravityScale, Chain.GrabMovement, Chain.MaxGrabStretchCm};
+            for (float Value : Values)
+                if (!FMath::IsFinite(Value) || Value < 0) Errors.Add(TEXT("Soft body chain values must be finite and nonnegative."));
         }
+        for (const FGratiaBodyColliderSphere& Sphere : SoftBody.BodyColliders)
+            if (Ref.FindBoneIndex(Sphere.Bone) == INDEX_NONE || !FMath::IsFinite(Sphere.RadiusCm) || Sphere.RadiusCm <= 0 || Sphere.RefCenterCm.ContainsNaN())
+                Errors.Add(TEXT("Soft body collider sphere is invalid."));
+        const float Positive[] = {SoftBody.PalmRadiusCm, SoftBody.FingerRadiusCm, SoftBody.GrabBreakDistanceCm,
+            SoftBody.MaxHandSpeedCmPerSecond, SoftBody.HapticFullDepthCm, SoftBody.HapticDepthExponent};
+        for (float Value : Positive)
+            if (!FMath::IsFinite(Value) || Value <= 0) Errors.Add(TEXT("Soft body hand/haptic values must be finite and positive."));
     }
     return Errors.IsEmpty();
 }

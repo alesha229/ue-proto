@@ -212,66 +212,123 @@ struct GRATIAVR_API FGratiaHandPhysicsSettings
     float GrabBreakDistanceCm = 15.0f;
 };
 
-USTRUCT(BlueprintType)
-struct GRATIAVR_API FGratiaSourceClothCage
+/** Bone axis that points from a soft-body bone head toward its tip. */
+UENUM(BlueprintType)
+enum class EGratiaBoneAxis : uint8
 {
-    GENERATED_BODY()
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth")
-    FName AssetName;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "1", ClampMax = "4"))
-    uint8 Group = 3;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0"))
-    int32 ExpectedParticleCount = 0;
+    XPositive, XNegative, YPositive, YNegative, ZPositive, ZNegative
 };
 
+/**
+ * One KawaiiPhysics chain set (for example both breasts). Each root bone is simulated
+ * with a tip dummy of DummyBoneLengthCm, VRChat PhysBones style: pull/spring to pose,
+ * collision with body and hand spheres, and a spring grab.
+ */
 USTRUCT(BlueprintType)
-struct GRATIAVR_API FGratiaSourceClothRegion
+struct GRATIAVR_API FGratiaSoftBodyChain
 {
     GENERATED_BODY()
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body")
     FName Name;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth")
-    FName AssetName;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0"))
-    int32 FirstParticle = 0;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "1"))
-    int32 ParticleCount = 1;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth")
-    FName AnchorSemantic;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body")
+    TArray<FName> RootBones;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body")
+    EGratiaBoneAxis ForwardAxis = EGratiaBoneAxis::XPositive;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body", meta = (ClampMin = "0.5", Units = "cm"))
+    float DummyBoneLengthCm = 8.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Kawaii", meta = (ClampMin = "0", ClampMax = "1"))
+    float Damping = 0.1f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Kawaii", meta = (ClampMin = "0", ClampMax = "1"))
+    float Stiffness = 0.05f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Kawaii", meta = (ClampMin = "0", ClampMax = "1"))
+    float WorldDampingLocation = 0.8f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Kawaii", meta = (ClampMin = "0", ClampMax = "1"))
+    float WorldDampingRotation = 0.8f;
+    /** Kawaii collision radius of the simulated tip against body and hand spheres. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Kawaii", meta = (ClampMin = "0", Units = "cm"))
+    float CollisionRadiusCm = 3.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Kawaii", meta = (ClampMin = "0", ClampMax = "90"))
+    float LimitAngleDegrees = 30.0f;
+    /** Fraction of world gravity (980 cm/s^2). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Kawaii", meta = (ClampMin = "0", ClampMax = "2"))
+    float GravityScale = 0.2f;
+    /** Touch / haptic / finger-conform volume around the bone, centred along it. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Contact", meta = (ClampMin = "0.5", Units = "cm"))
+    float ContactRadiusCm = 7.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Contact", meta = (ClampMin = "0", ClampMax = "1.5"))
+    float ContactCenterAlongBone = 0.5f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Grab")
+    bool bAllowGrab = true;
+    /** 0: spring pull toward the hand, 1: tip follows the hand immediately (VRChat Grab Movement). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Grab", meta = (ClampMin = "0", ClampMax = "1"))
+    float GrabMovement = 0.5f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Grab", meta = (ClampMin = "0", Units = "cm"))
+    float MaxGrabStretchCm = 6.0f;
+};
+
+/** Source body collision approximated by spheres that follow a skinning bone. */
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaBodyColliderSphere
+{
+    GENERATED_BODY()
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body")
+    FName Bone;
+    /** Centre in component space at the reference pose. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body", meta = (Units = "cm"))
+    FVector RefCenterCm = FVector::ZeroVector;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body", meta = (ClampMin = "0.1", Units = "cm"))
+    float RadiusCm = 5.0f;
 };
 
 USTRUCT(BlueprintType)
-struct GRATIAVR_API FGratiaClothSettings
+struct GRATIAVR_API FGratiaSoftBodySettings
 {
     GENERATED_BODY()
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body")
     bool bEnabled = false;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth")
-    bool bAllowGrab = true;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.1"))
-    float HandRadiusCm = 6.0f;
-    /** Rigid contact proxies stop the visible hand outside the soft surface. The cloth
-     *  collider may follow the raw controller target at most this far past the visible hand. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.0", ClampMax = "10.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body", meta = (TitleProperty = "Name"))
+    TArray<FGratiaSoftBodyChain> Chains;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body")
+    TArray<FGratiaBodyColliderSphere> BodyColliders;
+    /** Rigid contact proxies stop the visible hand outside a soft zone; inside a zone the
+     *  hand may follow the raw controller at most this much deeper (soft tissue yields). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Hands", meta = (ClampMin = "0", ClampMax = "10", Units = "cm"))
     float SoftPressDepthCm = 4.0f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.1"))
-    float MaxParticleOffsetCm = 8.0f;
-    /** Grab search distance beyond the hand collider surface (HandRadiusCm). The hand
-     *  collider pushes particles to its surface, so the search must reach past it. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.1"))
-    float GrabRadiusCm = 3.0f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.1"))
-    float GrabBreakDistanceCm = 15.0f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.1"))
-    float MaxHandTravelCm = 35.0f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.1"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Hands", meta = (ClampMin = "0.5", Units = "cm"))
+    float PalmRadiusCm = 4.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Hands", meta = (ClampMin = "0.2", Units = "cm"))
+    float FingerRadiusCm = 1.1f;
+    /** Grab search distance beyond the contact volume surface. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Hands", meta = (ClampMin = "0", Units = "cm"))
+    float GrabRadiusCm = 4.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Hands", meta = (ClampMin = "1", Units = "cm"))
+    float GrabBreakDistanceCm = 20.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Hands", meta = (ClampMin = "1"))
     float MaxHandSpeedCmPerSecond = 500.0f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.0"))
-    float GrabStiffness = 25.0f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-    float GrabVelocityBlend = 0.6f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.1"))
-    float MaxGrabSpeedCmPerSecond = 200.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Hands")
+    bool bFingerConform = true;
+    /** Finger joints stop this far outside a contact or body sphere. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Hands", meta = (ClampMin = "0", Units = "cm"))
+    float FingerConformMarginCm = 0.2f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Haptics")
+    bool bHaptics = true;
+    /** Penetration depth at which vibration reaches HapticMaxAmplitude. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Haptics", meta = (ClampMin = "0.1", Units = "cm"))
+    float HapticFullDepthCm = 5.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Haptics", meta = (ClampMin = "0", ClampMax = "1"))
+    float HapticMaxAmplitude = 0.85f;
+    /** Shapes the depth response: amplitude = max * (depth / full)^exponent. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Haptics", meta = (ClampMin = "0.2", ClampMax = "4"))
+    float HapticDepthExponent = 1.4f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Haptics", meta = (ClampMin = "0", ClampMax = "1"))
+    float HapticMinFrequency = 0.15f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Haptics", meta = (ClampMin = "0", ClampMax = "1"))
+    float HapticMaxFrequency = 0.6f;
+    /** Short tap when a hand first touches a soft zone. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Haptics", meta = (ClampMin = "0", ClampMax = "1"))
+    float HapticContactPulse = 0.35f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Haptics", meta = (ClampMin = "0", ClampMax = "0.5", Units = "s"))
+    float HapticPulseSeconds = 0.06f;
 };
 
 USTRUCT(BlueprintType)
@@ -365,12 +422,9 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Physics")
     FGratiaHandPhysicsSettings HandPhysics;
 
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Source Cloth")
-    FGratiaClothSettings ClothSettings;
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Source Cloth")
-    TArray<FGratiaSourceClothCage> SourceClothCages;
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Source Cloth")
-    TArray<FGratiaSourceClothRegion> SourceClothRegions;
+    /** Soft body parts (KawaiiPhysics), hand contact, grab, finger conform and haptics. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Soft Body")
+    FGratiaSoftBodySettings SoftBody;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion")
     TArray<FGratiaSecondaryBoneDefinition> SecondaryBones;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion")

@@ -10,8 +10,8 @@ class UGratiaInteraction;
 class UGratiaSecondaryMotion;
 class UGratiaCharacterProfile;
 class UGratiaReactionPresentation;
-class UGratiaClothInteraction;
-class UGratiaClothVerification;
+class UGratiaSoftBodyInteraction;
+class UGratiaSoftBodyVerification;
 
 UENUM(BlueprintType)
 enum class EGratiaPreviewPose : uint8
@@ -60,9 +60,9 @@ public:
     UPROPERTY(VisibleAnywhere, Category = "Gratia|Physics")
     TObjectPtr<UGratiaSecondaryMotion> SecondaryMotion;
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Gratia|Physics")
-    TObjectPtr<UGratiaClothInteraction> ClothInteraction;
+    TObjectPtr<UGratiaSoftBodyInteraction> SoftBodyInteraction;
     UPROPERTY(VisibleAnywhere, Category = "Verification")
-    TObjectPtr<UGratiaClothVerification> ClothVerification;
+    TObjectPtr<UGratiaSoftBodyVerification> SoftBodyVerification;
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Gratia|Preview")
     EGratiaPreviewPose PreviewPose = EGratiaPreviewPose::Idle;

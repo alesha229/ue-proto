@@ -198,7 +198,13 @@ private:
         FGratiaTrackingGate Gate;
         bool bCollisionsEnabled = false;
         bool bForceLoss = false;
+        TWeakObjectPtr<class UGratiaHandAnimInstance> HandAnim;
+        float SentHapticAmplitude = 0.0f;
+        float SentHapticFrequency = 0.0f;
+        double SentHapticTime = -1.0;
     };
+    void UpdateHandPose(FHandProxy& Hand, bool bLeft, const FVector& Near);
+    void UpdateHaptics(FHandProxy& Hand, bool bLeft, float Amplitude, float Frequency);
 
     TWeakObjectPtr<APlayerController> PlayerController;
     TWeakObjectPtr<APawn> PlayerPawn;
