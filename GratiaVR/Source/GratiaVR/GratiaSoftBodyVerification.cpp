@@ -74,6 +74,20 @@ FVector UGratiaSoftBodyVerification::CurrentTip() const
     return Zones.IsValidIndex(ZoneIndex) ? Character->GetActorTransform().InverseTransformPosition(Zones[ZoneIndex].Tip) : FVector::ZeroVector;
 }
 
+TArray<FVector> UGratiaSoftBodyVerification::TipsInParentFrame() const
+{
+    TArray<FVector> Result;
+    const auto* Mesh = Character->CharacterMesh.Get();
+    const double Scale = Mesh->GetComponentTransform().GetScale3D().GetAbsMax();
+    for (const auto& Zone : Character->SoftBodyInteraction->GetZones())
+    {
+        const int32 Parent = Mesh->GetBoneIndex(Mesh->GetParentBone(Zone.Bone));
+        const FTransform Frame = Parent == INDEX_NONE ? Mesh->GetComponentTransform() : Mesh->GetBoneTransform(Parent);
+        Result.Add(FTransform(Frame.GetRotation(), Frame.GetLocation()).InverseTransformPosition(Zone.Tip) / Scale);
+    }
+    return Result;
+}
+
 void UGratiaSoftBodyVerification::Submit(const FVector& Hand, float Delta, float Trigger, bool bAllowed)
 {
     static const TArray<FVector> NoFingers;
@@ -104,6 +118,8 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
         if (!Check(Settings.bEnabled, TEXT("profile enables KawaiiPhysics soft body"))
             || !Check(SoftBody->RunChecks(Failure), Failure.IsEmpty() ? TEXT("zones resolve and KawaiiPhysics chains evaluate") : Failure)
             || !Check(!Zones.IsEmpty(), TEXT("soft body zones exist"))) { Finish(); return; }
+        // Settled with physics on and no hands: compared later with the plain animation pose.
+        RestTipsLocal = TipsInParentFrame();
         Advance(EPhase::Baseline);
         break;
     }
@@ -267,6 +283,13 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
         if (PhaseSeconds < 0.5f) break;
         const auto* Anim = Cast<UGratiaAnimInstance>(Character->CharacterMesh->GetAnimInstance());
         Check(Anim && !Anim->bSoftBody && Anim->GetActiveSoftBodyChainCount() == 0, TEXT("body motion setting disables KawaiiPhysics chains"));
+        // Physics off = animation pose. At rest the soft parts must stay on it, so the skin
+        // keeps its authored place under the clothing (no gravity sag or collider push).
+        const TArray<FVector> PoseTips = TipsInParentFrame();
+        double RestOffset = PoseTips.Num() == RestTipsLocal.Num() ? 0.0 : 1.0e3;
+        for (int32 I = 0; I < PoseTips.Num() && I < RestTipsLocal.Num(); ++I)
+            RestOffset = FMath::Max(RestOffset, FVector::Distance(PoseTips[I], RestTipsLocal[I]));
+        Check(RestOffset <= 0.3, FString::Printf(TEXT("at rest soft parts stay on the animation pose (max %.2fcm, limit 0.30)"), RestOffset));
         Character->Interaction->bBodyMotion = true;
         Advance(EPhase::Resumed);
         break;
@@ -277,6 +300,39 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
         if (PhaseSeconds < 1.0f) break;
         FString Failure;
         Check(SoftBody->RunChecks(Failure), Failure.IsEmpty() ? TEXT("body motion re-enables KawaiiPhysics chains") : Failure);
+        RestTipsLocal = TipsInParentFrame();
+        if (Settings.Chains.ContainsByPredicate([](const FGratiaSoftBodyChain& Chain) { return Chain.GravityScale > 0.0f; }))
+        {
+            // Lean the whole character forward: gravity relative to the pose must now act.
+            SavedRotation = Character->GetActorRotation();
+            Character->SetActorRotation(SavedRotation + FRotator(-35, 0, 0));
+            Advance(EPhase::Tilt);
+        }
+        else Finish();
+        break;
+    }
+    case EPhase::Tilt:
+    {
+        Submit(FVector(0, 0, -1.0e5), Delta, 0, false);
+        if (PhaseSeconds < 1.5f) break;
+        const TArray<FVector> Tilted = TipsInParentFrame();
+        double Moved = 0.0;
+        for (int32 I = 0; I < Tilted.Num() && I < RestTipsLocal.Num(); ++I)
+            Moved = FMath::Max(Moved, FVector::Distance(Tilted[I], RestTipsLocal[I]));
+        Check(Moved >= 0.1, FString::Printf(TEXT("gravity moves soft parts when the body leans 35 degrees (%.2fcm, min 0.10; rest noise <0.02)"), Moved));
+        Character->SetActorRotation(SavedRotation);
+        Advance(EPhase::Upright);
+        break;
+    }
+    case EPhase::Upright:
+    {
+        Submit(FVector(0, 0, -1.0e5), Delta, 0, false);
+        if (PhaseSeconds < 2.0f) break;
+        const TArray<FVector> Back = TipsInParentFrame();
+        double Offset = 0.0;
+        for (int32 I = 0; I < Back.Num() && I < RestTipsLocal.Num(); ++I)
+            Offset = FMath::Max(Offset, FVector::Distance(Back[I], RestTipsLocal[I]));
+        Check(Offset <= 0.3, FString::Printf(TEXT("upright again, soft parts return to the pose (%.2fcm, limit 0.30)"), Offset));
         Finish();
         break;
     }

@@ -28,12 +28,14 @@ protected:
     virtual void TickComponent(float Delta, ELevelTick Type, FActorComponentTickFunction* Tick) override;
 
 private:
-    enum class EPhase : uint8 { Settle, Baseline, Approach, Press, Arm, Grab, Pull, Release, Lost, NextZone, Conform, Disabled, Resumed };
+    enum class EPhase : uint8 { Settle, Baseline, Approach, Press, Arm, Grab, Pull, Release, Lost, NextZone, Conform, Disabled, Resumed, Tilt, Upright };
     bool Check(bool bPass, const FString& Description);
     void Advance(EPhase Next) { Phase = Next; PhaseSeconds = 0; }
     void Finish();
     void Submit(const FVector& Hand, float Delta, float Trigger, bool bAllowed = true);
     FVector CurrentTip() const;
+    /** Zone tip in its parent bone frame (cm): independent of idle body motion. */
+    TArray<FVector> TipsInParentFrame() const;
 
     TWeakObjectPtr<AGratiaPreviewCharacter> Character;
     UPROPERTY() TObjectPtr<USkeletalMeshComponent> TestHand;
@@ -46,6 +48,8 @@ private:
     int32 BaselineSamples = 0;
     double PressTipCm = 0, PullTipCm = 0, ReturnTipCm = 0;
     TArray<FVector2D> DepthAmplitude;
+    TArray<FVector> RestTipsLocal;
+    FRotator SavedRotation = FRotator::ZeroRotator;
     bool bSawGrab = false;
     int32 ConformedFingers = 0;
 };

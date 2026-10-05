@@ -1,11 +1,11 @@
 param([int]$TimeoutSeconds = 120, [ValidateSet('01','02','03','04')][string]$EvidenceStage = '04')
 $ErrorActionPreference = 'Stop'
 $workspaceRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$exePath = Join-Path $workspaceRoot 'Builds\Stage1\Windows\GratiaVR\Binaries\Win64\GratiaVR.exe'
+$exePath = Join-Path $workspaceRoot 'Builds\Windows\GratiaVR\Binaries\Win64\GratiaVR.exe'
 $evidenceRoot = Join-Path $workspaceRoot ('evidence\' + $EvidenceStage)
 if (-not (Test-Path -LiteralPath $exePath)) { throw "Packaged executable missing: $exePath" }
 New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
-$manifestPath = Join-Path $workspaceRoot 'Builds\Stage1\Windows\build_manifest.json'
+$manifestPath = Join-Path $workspaceRoot 'Builds\Windows\build_manifest.json'
 if (-not (Test-Path -LiteralPath $manifestPath)) { throw 'Versioned build manifest missing; run Build-Stage1.ps1 first' }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 $exeHash = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash

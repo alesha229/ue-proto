@@ -1,11 +1,11 @@
 param([int]$TimeoutSeconds = 120, [ValidateSet('03','04')][string]$EvidenceStage = '04')
 $ErrorActionPreference = 'Stop'
 $workspaceRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$exePath = Join-Path $workspaceRoot 'Builds\Stage1\Windows\GratiaVR\Binaries\Win64\GratiaVR.exe'
+$exePath = Join-Path $workspaceRoot 'Builds\Windows\GratiaVR\Binaries\Win64\GratiaVR.exe'
 $evidenceRoot = Join-Path $workspaceRoot ('evidence\' + $EvidenceStage)
-$shotRoot = Join-Path $workspaceRoot 'Builds\Stage1\Windows\GratiaVR\Saved\Screenshots\Windows'
+$shotRoot = Join-Path $workspaceRoot 'Builds\Windows\GratiaVR\Saved\Screenshots\Windows'
 $results = @()
-$manifest = Get-Content -LiteralPath (Join-Path $workspaceRoot 'Builds\Stage1\Windows\build_manifest.json') -Raw | ConvertFrom-Json
+$manifest = Get-Content -LiteralPath (Join-Path $workspaceRoot 'Builds\Windows\build_manifest.json') -Raw | ConvertFrom-Json
 $exeHash = (Get-FileHash -LiteralPath $exePath).Hash
 if ($exeHash -ne $manifest.executable_sha256) { throw 'Executable differs from manifest' }
 New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null

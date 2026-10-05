@@ -1,7 +1,7 @@
 param([ValidateRange(1, 600)][int]$TimeoutSeconds = 90, [ValidateSet('04')][string]$EvidenceStage = '04')
 $ErrorActionPreference = 'Stop'
 $workspaceRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$archiveRoot = Join-Path $workspaceRoot 'Builds\Stage1\Windows'
+$archiveRoot = Join-Path $workspaceRoot 'Builds\Windows'
 $exePath = Join-Path $archiveRoot 'GratiaVR\Binaries\Win64\GratiaVR.exe'
 $manifestPath = Join-Path $archiveRoot 'build_manifest.json'
 $evidenceRoot = Join-Path $workspaceRoot ('evidence\' + $EvidenceStage)

@@ -14,6 +14,7 @@ Builds/
 
 # Evidence and machine-local runtimes, not project source
 evidence/
+Archive/
 **/__pycache__/
 *.pyc
 *.log

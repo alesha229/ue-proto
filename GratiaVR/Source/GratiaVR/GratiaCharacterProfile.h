@@ -249,7 +249,9 @@ struct GRATIAVR_API FGratiaSoftBodyChain
     float CollisionRadiusCm = 3.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Kawaii", meta = (ClampMin = "0", ClampMax = "90"))
     float LimitAngleDegrees = 30.0f;
-    /** Fraction of world gravity (980 cm/s^2). */
+    /** Fraction of world gravity (980 cm/s^2). Applied relative to the authored pose: the rest shape
+     * already includes gravity, so the bone sags only when the body tilts away from its reference
+     * orientation (no constant sag pushing skin through clothing). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Kawaii", meta = (ClampMin = "0", ClampMax = "2"))
     float GravityScale = 0.2f;
     /** Touch / haptic / finger-conform volume around the bone, centred along it. */

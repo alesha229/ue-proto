@@ -36,6 +36,12 @@ def main():
     parser.add_argument("--verify", action="store_true")
     args = parser.parse_args()
     source_paths = [p for folder in ("Source", "Config", "Scripts") for p in (PROJECT / folder).rglob("*")]
+    # Project plugins are compiled into this executable; fingerprint their
+    # authored sources/settings as well, excluding generated build products.
+    for plugin in (PROJECT / "Plugins").iterdir() if (PROJECT / "Plugins").is_dir() else ():
+        source_paths.extend(plugin.glob("*.uplugin"))
+        for folder in ("Source", "Config", "Resources"):
+            source_paths.extend((plugin / folder).rglob("*"))
     source_paths.append(PROJECT / "GratiaVR.uproject")
     source_hash, source_count = fingerprint(source_paths)
     asset_hash, asset_count = fingerprint((PROJECT / "Content").rglob("*"))

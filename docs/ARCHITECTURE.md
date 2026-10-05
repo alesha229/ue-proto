@@ -118,9 +118,9 @@ Git хранит исходники/настройки/документы. Git L
 Для клона нужны Git LFS и `git lfs pull`; движок задаётся параметром `-EngineRoot`.
 
 `GratiaVR/Scripts/Build-Stage1.ps1` создаёт build stamp перед компиляцией и manifest
-`Builds/Stage1/Windows/build_manifest.json`: commit/dirty state, engine, UTC,
+`Builds/Windows/build_manifest.json`: commit/dirty state, engine, UTC,
 SHA-256 исходников/настроек/скриптов/ассетов и итогового exe. После упаковки
-проверяется, что входные файлы не изменились и каждый архивированный файл совпадает
+проверяется, что входные файлы не изменились и каждый файл пакета совпадает
 со staged-файлом по SHA-256; список записан в `package_files`. Build id виден в логе и F1.
 Прямой Build.bat подходит для разработки; versioned package выпускается через Build-Stage1.
 

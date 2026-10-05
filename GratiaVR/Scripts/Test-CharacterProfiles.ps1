@@ -1,7 +1,7 @@
 param([int]$TimeoutSeconds = 120)
 $ErrorActionPreference = 'Stop'
 $workspaceRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$archiveRoot = Join-Path $workspaceRoot 'Builds\Stage1\Windows'
+$archiveRoot = Join-Path $workspaceRoot 'Builds\Windows'
 $exePath = Join-Path $archiveRoot 'GratiaVR\Binaries\Win64\GratiaVR.exe'
 $manifestPath = Join-Path $archiveRoot 'build_manifest.json'
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json

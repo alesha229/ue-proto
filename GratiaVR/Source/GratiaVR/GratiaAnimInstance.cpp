@@ -26,6 +26,10 @@ struct FGratiaKawaiiChain
     TUniquePtr<FGratiaKawaiiNode> Node;
     TArray<FName> Roots;
     int32 FirstHandLimit = 0;
+    /** Gravity relative to the authored pose: parent bone of the first root and its reference rotation. */
+    int32 GravityParent = INDEX_NONE;
+    FQuat GravityParentRef = FQuat::Identity;
+    float GravityCmPerSecond2 = 0.0f;
     bool bInitialized = false;
     uint16 BoneSerial = 0;
 };
@@ -111,7 +115,14 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
             Node.PhysicsSettings.WorldDampingRotation = Definition.WorldDampingRotation;
             Node.PhysicsSettings.Radius = Definition.CollisionRadiusCm;
             Node.PhysicsSettings.LimitAngle = Definition.LimitAngleDegrees;
-            Node.Gravity = FVector(0, 0, -980.0 * Definition.GravityScale);
+            // The authored rest shape already includes gravity. The node gets only the change
+            // of gravity in the chain parent's frame (set every update), so standing in the
+            // reference orientation adds no sag that would push skin through clothing.
+            Node.Gravity = FVector::ZeroVector;
+            Node.bUseWorldSpaceGravity = false;
+            Chain.GravityCmPerSecond2 = 980.0f * Definition.GravityScale;
+            Chain.GravityParent = Ref.GetParentIndex(Ref.FindBoneIndex(Roots[0]));
+            if (Chain.GravityParent != INDEX_NONE) Chain.GravityParentRef = GratiaKawaiiRefTransform(Ref, Chain.GravityParent).GetRotation();
             Node.TargetFramerate = 90;
             Node.bUpdatePhysicsSettingsInGame = true;
             // Source body collision follows its skinning bones.
@@ -246,7 +257,21 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
         Grabs = Instance->SoftBodyInput.Grabs;
         if (bSoftBody && GetSkelMeshComponent() && !GetSkelMeshComponent()->GetComponentSpaceTransforms().IsEmpty())
         {
-            const FTransform Root = GetSkelMeshComponent()->GetComponentSpaceTransforms()[0];
+            const TArray<FTransform>& Pose = GetSkelMeshComponent()->GetComponentSpaceTransforms();
+            const FTransform Root = Pose[0];
+            const FVector Down = GetSkelMeshComponent()->GetComponentTransform().InverseTransformVectorNoScale(FVector(0, 0, -1));
+            for (FGratiaKawaiiChain& Chain : Kawaii)
+            {
+                // Component-space gravity minus the gravity already present in the authored pose
+                // (reference: upright component, parent bone at its reference rotation).
+                FVector Gravity = FVector::ZeroVector;
+                if (Chain.GravityCmPerSecond2 > 0.0f && Pose.IsValidIndex(Chain.GravityParent))
+                {
+                    const FQuat Delta = Pose[Chain.GravityParent].GetRotation() * Chain.GravityParentRef.Inverse();
+                    Gravity = (Down - Delta.RotateVector(FVector(0, 0, -1))) * Chain.GravityCmPerSecond2;
+                }
+                Chain.Node->Gravity = Gravity.ContainsNaN() ? FVector::ZeroVector : Gravity;
+            }
             for (FGratiaKawaiiChain& Chain : Kawaii)
                 for (int32 I = 0; I < GratiaKawaiiMaxHandSpheres; ++I)
                 {
