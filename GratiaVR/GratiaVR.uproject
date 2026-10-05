@@ -5,6 +5,10 @@
   "Description": "Gratia PC VR prototype — stage 1",
   "Plugins": [
     {
+      "Name": "ChaosCloth",
+      "Enabled": true
+    },
+    {
       "Name": "AndroidFileServer",
       "Enabled": false
     },

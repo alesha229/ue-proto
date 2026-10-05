@@ -19,6 +19,11 @@ The profile owns model-specific references and names:
   These are conservative starting approximations, not certified surface matches.
 - Audited secondary-bone groups, physical-drive settings, local spring settings,
   and Low/Medium/High simulation budgets.
+- HandPhysics pressure/grab radii, stiffness, damping, aggregate force limits,
+  speed/travel limits and grab break distance. MaxSecondaryCollisionSizeCm
+  bounds the world collision size checked by runtime QA (including actor scale).
+- ClothSettings, SourceClothCages and SourceClothRegions for native soft-surface
+  simulation, hand collision/grab limits, expected particle counts and semantic anchors.
 - Capability flags that explicitly describe unavailable optional features.
 - Forward/up axes and gaze limits.
 - Optional model-specific regression counts.
@@ -78,6 +83,39 @@ GetSecondaryGroupSettings and FindSecondaryBone expose the profile's
 secondary metadata. Groups are 1 hair, 2 cloth/decor, 3 local body and 4
 ears/tail. Keep chain anchors and planted body parts animation-controlled.
 
+## Native source cloth — implemented, QA pending
+
+The 5 October 2026 port places TitsPhys, AssPhys and ThighsPhys in one
+mesh-owned `GratiaSourceCloth_BodyCages` asset: 3112 source vertices and 206 full
+pins. SourceClothCages identifies its name, group 3 and expected particle count;
+SourceClothRegions records each source range and a semantic animation anchor.
+These are profile data, not runtime character-name lookups.
+
+`port_source_cloth_cages.py` enables ClothSettings and disables safe rigid-body
+simulation for group 3. Hair, clothing/decor accessories and ears/tail retain
+their existing bone path and Low/Medium/High caps. Native body cloth currently
+uses the same cage particle count at all three qualities; it has no particle LOD
+budget. `bBodyMotion`, `bPhysicalMotion` and ClothSettings.bEnabled control it.
+Do not read the old four-body group-3 cap as a cloth particle budget.
+
+ClothSettings exposes hand/grab radii, break distance, maximum hand travel/speed,
+grab stiffness/velocity blending and an emergency particle-offset limit. Native
+material/pin/pressure settings live on the embedded clothing asset and remain
+editable in Unreal's clothing editor. Artist tuning requires new QA evidence.
+
+Only source cages enabled in Blender render are ported. Hair's Tail main/Tail R
+SurfaceDeform paths are disabled in the source and remain excluded. The solver
+and units differ from Blender, so settings are an adaptation rather than 1:1
+simulation. Active cloth vertices blend away ordinary positional corrective
+morph offsets; excluded face/hand vertices keep their original skinning/morph
+path and morph assets are retained. SurfaceDeform overlaps use the nearest
+eligible cage and strongest mask, rather than serial modifiers.
+
+Source-cage import, actual visible deformation, both hands and reset behavior
+still require editor/package QA for a specific build. Headset acceptance is
+separate. A profile with no source cloth must leave ClothSettings disabled;
+absence of cages or particles is diagnosed, not treated as successful simulation.
+
 AnimationClass can select a future character-specific animation Blueprint.
 The current native single-node path controls preview clips and procedural
 reactions. The generated native profiles leave AnimationClass empty so clip
@@ -127,5 +165,11 @@ asynchronous loading through Asset Manager as a separate measured change.
 5. Review materials from every side after textures have loaded. Validate
    tracking, input, hand alignment and performance separately in the headset.
 
-Counts such as Gratia's 246 bones, 59 morphs and 176 physics bodies are regression
+Counts such as Gratia's 246 bones, 67 morphs and 176 physics bodies are regression
 expectations for DA_Gratia; they are never requirements for another model.
+
+PhysicsAsset shape dimensions must use the bone's local units. FBX bones with
+scale 100 require converting centimetre dimensions before storage; otherwise
+small hair/cloth colliders become metre-sized. The Gratia repair script updates
+only audited secondary bodies, preserves constraints and stores an idempotent
+BoneLocalV2 marker. Inspect world bounds when importing another skeleton.

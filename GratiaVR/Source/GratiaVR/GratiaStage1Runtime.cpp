@@ -5,6 +5,7 @@
 #include "GratiaInteraction.h"
 #include "GratiaMenu.h"
 #include "GratiaSecondaryMotion.h"
+#include "GratiaClothInteraction.h"
 #include "GratiaBuildInfo.h"
 #include "GratiaHandInput.h"
 
@@ -101,6 +102,7 @@ void AGratiaStage1Runtime::SetTargetCharacter(AGratiaPreviewCharacter* Character
         TargetCharacter->Interaction->SetSceneContactActor(nullptr);
         TargetCharacter->Interaction->ResetState();
         if (TargetCharacter->SecondaryMotion) TargetCharacter->SecondaryMotion->ClearHands();
+        if (TargetCharacter->ClothInteraction) TargetCharacter->ClothInteraction->ClearHands();
     }
     TargetCharacter = Character;
     if (Menu) Menu->SetCharacter(Character);
@@ -402,6 +404,10 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
             TargetCharacter->SecondaryMotion->SubmitHand(bLeft, VisualWorld.GetLocation(),
                 TargetCharacter->Interaction->IsHandSampleReady(bLeft) && (!Menu || !Menu->bOpen), DeltaSeconds,
                 HandInput ? HandInput->GetTrigger(bLeft) : 0.0f);
+        if (TargetCharacter->ClothInteraction && !Verification->OwnsSyntheticContactSamples())
+            TargetCharacter->ClothInteraction->SubmitHand(bLeft, VisualWorld.GetLocation(), Target.GetLocation(),
+                TargetCharacter->Interaction->IsHandSampleReady(bLeft) && (!Menu || !Menu->bOpen), DeltaSeconds,
+                HandInput ? HandInput->GetTrigger(bLeft) : 0.0f);
     }
     if (Before != Hand.Gate.State)
     {
@@ -497,14 +503,15 @@ void AGratiaStage1Runtime::SetForcedTrackingLoss(bool bLeftHand, bool bForceLoss
 FString AGratiaStage1Runtime::GetStatusText() const
 {
     const int32 Bodies = TargetCharacter.IsValid() && TargetCharacter->SecondaryMotion ? TargetCharacter->SecondaryMotion->GetActiveBodyCount() : 0;
-    return FString::Printf(TEXT("GRATIA VR | %s | %s\nR: recenter | PgUp/PgDn: height | Home: reset\nF1: debug | F4 / Y/B: settings | F8/F9: tracking loss\nFrame ~%.1f ms / ~%.0f FPS | GT %.1f / RT %.1f / GPU %.1f ms\nL: %s | R: %s | Physics: %d\nHeight: %+.0f cm | Pawn: %s\nEngine timings; SteamVR delivery measured separately\n%s\n%s\n%s\n%s\nBuild: %s"),
+    return FString::Printf(TEXT("GRATIA VR | %s | %s\nR: recenter | PgUp/PgDn: height | Home: reset\nF1: debug | F4 / Y/B: settings | F8/F9: tracking loss\nFrame ~%.1f ms / ~%.0f FPS | GT %.1f / RT %.1f / GPU %.1f ms\nL: %s | R: %s | Physics: %d\nHeight: %+.0f cm | Pawn: %s\nEngine timings; SteamVR delivery measured separately\n%s\n%s\n%s\n%s\n%s\nBuild: %s"),
         bXRActive ? TEXT("XR") : TEXT("DESKTOP"), Menu ? *Menu->QualityLabel() : TEXT("Medium"),
         EstimatedFrameMs, EstimatedFPS, GameThreadMs, RenderThreadMs, GPUFrameMs,
         HandStateLabel(LeftHandState), HandStateLabel(RightHandState), Bodies, HeightOffsetCm, bPawnReady ? TEXT("READY") : TEXT("MISSING COMPONENTS"),
         Locomotion ? *Locomotion->GetDiagnosticText() : TEXT("Movement missing"),
         TargetCharacter.IsValid() ? *TargetCharacter->Interaction->GetContactDiagnostics() : TEXT("Character target missing"),
         HandInput ? *HandInput->GetDiagnostics() : TEXT("Hand input missing"),
-        TargetCharacter.IsValid() && TargetCharacter->SecondaryMotion ? *TargetCharacter->SecondaryMotion->GetHandDiagnostics() : TEXT("Physics missing"), TEXT(GRATIA_BUILD_ID));
+        TargetCharacter.IsValid() && TargetCharacter->SecondaryMotion ? *TargetCharacter->SecondaryMotion->GetHandDiagnostics() : TEXT("Physics missing"),
+        TargetCharacter.IsValid() && TargetCharacter->ClothInteraction ? *TargetCharacter->ClothInteraction->GetDiagnostics() : TEXT("Cloth missing"), TEXT(GRATIA_BUILD_ID));
 }
 
 void AGratiaStage1Runtime::RunRequestedTests(float DeltaSeconds)

@@ -234,5 +234,28 @@ bool UGratiaCharacterProfile::ValidateProfile(TArray<FString>& Errors, TArray<FS
     const float HandNonnegative[] = {HandPhysics.Stiffness, HandPhysics.Damping, HandPhysics.MaxForce, HandPhysics.GrabStiffness, HandPhysics.GrabDamping};
     for (float Value : HandNonnegative)
         if (!FMath::IsFinite(Value) || Value < 0.0f) Errors.Add(TEXT("Hand physics force settings must be finite and nonnegative."));
+    if (ClothSettings.bEnabled)
+    {
+        if (SourceClothCages.IsEmpty()) Errors.Add(TEXT("Source cloth enabled without authored cages."));
+        const float Positive[] = {ClothSettings.HandRadiusCm, ClothSettings.MaxParticleOffsetCm,
+            ClothSettings.GrabRadiusCm, ClothSettings.GrabBreakDistanceCm, ClothSettings.MaxHandTravelCm,
+            ClothSettings.MaxHandSpeedCmPerSecond, ClothSettings.MaxGrabSpeedCmPerSecond};
+        for (float Value : Positive)
+            if (!FMath::IsFinite(Value) || Value <= 0) Errors.Add(TEXT("Source cloth geometry/speed limits must be finite and positive."));
+        if (!FMath::IsFinite(ClothSettings.GrabStiffness) || ClothSettings.GrabStiffness < 0
+            || !FMath::IsFinite(ClothSettings.GrabVelocityBlend) || ClothSettings.GrabVelocityBlend < 0 || ClothSettings.GrabVelocityBlend > 1)
+            Errors.Add(TEXT("Source cloth grab settings are invalid."));
+        for (const auto& Cage : SourceClothCages)
+            if (Cage.AssetName.IsNone() || Cage.ExpectedParticleCount <= 0 || Cage.Group < 1 || Cage.Group > 4)
+                Errors.Add(TEXT("Source cloth cage definition is invalid."));
+        for (const auto& Region : SourceClothRegions)
+        {
+            const auto* Cage = SourceClothCages.FindByPredicate([&Region](const auto& Value) { return Value.AssetName == Region.AssetName; });
+            if (Region.Name.IsNone() || !Cage || Region.FirstParticle < 0 || Region.ParticleCount <= 0
+                || int64(Region.FirstParticle) + Region.ParticleCount > (Cage ? Cage->ExpectedParticleCount : 0)
+                || Ref.FindBoneIndex(ResolveBone(Region.AnchorSemantic)) == INDEX_NONE)
+                Errors.Add(TEXT("Source cloth observation region is invalid."));
+        }
+    }
     return Errors.IsEmpty();
 }

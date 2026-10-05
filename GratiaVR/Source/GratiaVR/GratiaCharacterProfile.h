@@ -213,6 +213,66 @@ struct GRATIAVR_API FGratiaHandPhysicsSettings
 };
 
 USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaSourceClothCage
+{
+    GENERATED_BODY()
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth")
+    FName AssetName;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "1", ClampMax = "4"))
+    uint8 Group = 3;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0"))
+    int32 ExpectedParticleCount = 0;
+};
+
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaSourceClothRegion
+{
+    GENERATED_BODY()
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth")
+    FName Name;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth")
+    FName AssetName;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0"))
+    int32 FirstParticle = 0;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "1"))
+    int32 ParticleCount = 1;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth")
+    FName AnchorSemantic;
+};
+
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaClothSettings
+{
+    GENERATED_BODY()
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth")
+    bool bEnabled = false;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth")
+    bool bAllowGrab = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.1"))
+    float HandRadiusCm = 6.0f;
+    /** Rigid contact proxies stop the visible hand outside the soft surface. The cloth
+     *  collider may follow the raw controller target at most this far past the visible hand. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.0", ClampMax = "10.0"))
+    float SoftPressDepthCm = 4.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.1"))
+    float MaxParticleOffsetCm = 8.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.1"))
+    float GrabRadiusCm = 6.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.1"))
+    float GrabBreakDistanceCm = 15.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.1"))
+    float MaxHandTravelCm = 35.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.1"))
+    float MaxHandSpeedCmPerSecond = 500.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.0"))
+    float GrabStiffness = 25.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+    float GrabVelocityBlend = 0.6f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.1"))
+    float MaxGrabSpeedCmPerSecond = 200.0f;
+};
+
+USTRUCT(BlueprintType)
 struct GRATIAVR_API FGratiaCharacterCapabilities
 {
     GENERATED_BODY()
@@ -302,6 +362,13 @@ public:
     FGratiaContactSettings ContactSettings;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Physics")
     FGratiaHandPhysicsSettings HandPhysics;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Source Cloth")
+    FGratiaClothSettings ClothSettings;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Source Cloth")
+    TArray<FGratiaSourceClothCage> SourceClothCages;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Source Cloth")
+    TArray<FGratiaSourceClothRegion> SourceClothRegions;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion")
     TArray<FGratiaSecondaryBoneDefinition> SecondaryBones;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion")

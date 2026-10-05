@@ -7,6 +7,7 @@
 #include "GratiaReactionPresentation.h"
 #include "GratiaMenu.h"
 #include "GratiaSecondaryMotion.h"
+#include "GratiaClothInteraction.h"
 #include "GratiaCharacterProfile.h"
 #include "GratiaContactSolver.h"
 #include "GratiaAnimInstance.h"
@@ -69,6 +70,7 @@ AGratiaStage1Runtime& UGratiaRuntimeVerification::GetRuntime() const
 void UGratiaRuntimeVerification::ConfigureFromCommandLine()
 {
     bSmokeTest = FParse::Param(FCommandLine::Get(), TEXT("GratiaSmokeTest"));
+    bClothQA = FParse::Param(FCommandLine::Get(), TEXT("GratiaClothQA"));
     bSelfTest = FParse::Param(FCommandLine::Get(), TEXT("GratiaSelfTest"));
     bReactionQAEnabled = FParse::Value(FCommandLine::Get(), TEXT("GratiaReactionZone="), ReactionQAZone);
     FParse::Value(FCommandLine::Get(), TEXT("GratiaExpectedReactionClip="), ReactionQAExpectedClip);
@@ -1161,6 +1163,7 @@ void UGratiaRuntimeVerification::RunSoakAndMetrics(float DeltaSeconds)
                 TestSkip(TEXT("Soak profile has Contacts disabled; no synthetic contact cycles are generated"));
         }
         if (Character->SecondaryMotion && Character->SecondaryMotion->HasFault()) bTestFailed = true;
+        if (Character->ClothInteraction && Character->ClothInteraction->HasFault()) bTestFailed = true;
         if (Character->CharacterMesh)
         {
             for (const FTransform& Bone : Character->CharacterMesh->GetComponentSpaceTransforms())

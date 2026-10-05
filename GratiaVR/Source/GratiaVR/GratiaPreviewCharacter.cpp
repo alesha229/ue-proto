@@ -4,6 +4,8 @@
 #include "GratiaAnimInstance.h"
 #include "GratiaSecondaryMotion.h"
 #include "GratiaCharacterProfile.h"
+#include "GratiaClothInteraction.h"
+#include "GratiaClothVerification.h"
 
 #include "Animation/AnimSequence.h"
 #include "Animation/AnimSingleNodeInstance.h"
@@ -30,6 +32,8 @@ AGratiaPreviewCharacter::AGratiaPreviewCharacter()
     Interaction = CreateDefaultSubobject<UGratiaInteraction>(TEXT("Interaction"));
     ReactionPresentation = CreateDefaultSubobject<UGratiaReactionPresentation>(TEXT("ReactionPresentation"));
     SecondaryMotion = CreateDefaultSubobject<UGratiaSecondaryMotion>(TEXT("SecondaryMotion"));
+    ClothInteraction = CreateDefaultSubobject<UGratiaClothInteraction>(TEXT("ClothInteraction"));
+    ClothVerification = CreateDefaultSubobject<UGratiaClothVerification>(TEXT("ClothVerification"));
     CharacterMesh->SetCollisionEnabled(ECollisionEnabled::PhysicsOnly);
     CharacterMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
     CharacterMesh->SetGenerateOverlapEvents(false);
@@ -174,6 +178,7 @@ UAnimSequence* AGratiaPreviewCharacter::GetPreviewAnimation(EGratiaPreviewPose P
 void AGratiaPreviewCharacter::SetPreviewPose(EGratiaPreviewPose Pose)
 {
     PreviewPose = Pose;
+    if (ClothInteraction) ClothInteraction->ResetCloth();
     BlinkElapsed = -1.0f;
     UntilNextBlink = 2.2f;
     CharacterMesh->ClearMorphTargets();

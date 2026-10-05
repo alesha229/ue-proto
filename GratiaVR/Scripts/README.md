@@ -36,9 +36,13 @@ IA_GrabLeft/Right используют trigger Axis1D; Z/X — только desk
    `configure_character_stage.py`: явные ссылки карты на профиль, цель и куб контакта.
 5. `setup_gratia_locomotion.py`: обновление Input Actions/context и регистрация
    OpenXR vector2-привязок; проверка всех зарегистрированных ключей перед сохранением.
-6. `Build-Stage1.ps1`: versioned editor/runtime build и самостоятельный Windows-пакет.
+6. `export_source_cloth_cages.py` / `audit_source_cloth_motion.py`: через живой
+   Blender MCP экспорт исходных мягких клеток и наблюдение source simulation.
+   После сборки editor-модуля `port_source_cloth_cages.py` переносит их в native
+   Chaos Clothing Asset и профиль. Подробнее ниже.
+7. `Build-Stage1.ps1`: versioned editor/runtime build и самостоятельный Windows-пакет.
    Не изменять Source/Config/Scripts/Content между stamp и окончанием сборки.
-7. `Test-Stage1.ps1`, `Test-CharacterProfiles.ps1`, `Test-CharacterPoses.ps1`,
+8. `Test-Stage1.ps1`, `Test-CharacterProfiles.ps1`, `Test-CharacterPoses.ps1`,
    `Test-CharacterViews.ps1`, `Test-CharacterReactions.ps1`: проверки именно готового
    пакета с привязкой к manifest. `Verify-Project.ps1` запускает основной набор.
    Аппаратные VR-проверки записываются отдельно.
@@ -46,6 +50,29 @@ IA_GrabLeft/Right используют trigger Axis1D; Z/X — только desk
 Импорт/настройка Unreal выполняются через PythonScript commandlet установленного
 редактора. Python, PowerShell и MCP не требуются готовой игре. Импорт не запускается,
 пока игровые файлы открыты другим редактором или выполняется cook/package.
+
+## Активный перенос исходной мягкой поверхности
+
+Реализовано 5 октября 2026; редакторская и packaged QA пока ожидаются.
+`export_source_cloth_cages.py` и
+`audit_source_cloth_motion.py` выполняются только через живой Blender MCP в MVP-копии.
+Первый сохраняет исходные клетки, Pin, bone weights и точные SurfaceDeform-маски;
+второй временно включает их viewport-представление и восстанавливает состояние.
+После сборки editor-модуля `port_source_cloth_cages.py` создаёт native Chaos Cloth
+в существующем skeletal mesh из трёх включённых клеток TitsPhys/AssPhys/ThighsPhys
+(3112 вершин, 206 full pins), сохраняет skeleton/material/morph ресурсы и отключает
+дублирующую rigid-body симуляцию группы тела. Перед импортом сохраняется резервная
+копия меша/профиля. Повторный запуск меняет только собственные cloth assets;
+source pins, материалы и маски экспортируются в `Exports/Gratia/GameRig/source_cloth_cages.json`.
+`-GratiaClothQA` проверяет частицы и видимые вершины при синтетическом нажиме,
+хвате и сбросе; обязательна проверка конкретного нового пакета и отдельный VR-журнал.
+Import marker подтверждает только выполнение скрипта.
+
+Chaos требует адаптации source stiffness/pressure/internal springs. Активные
+cloth-вершины подавляют обычные positional corrective morphs, исключённые лицо/руки
+сохраняют skinning/morph path. Hair SurfaceDeform выключены в source render и
+не переносятся. Native body cloth пока одинаков при Low/Medium/High;
+костные группы аксессуаров продолжают использовать профильные quality caps.
 
 ## Исторические миграции
 
