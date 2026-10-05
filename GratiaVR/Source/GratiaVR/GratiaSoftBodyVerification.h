@@ -7,6 +7,7 @@
 class AGratiaPreviewCharacter;
 class USkeletalMeshComponent;
 class UGratiaHandAnimInstance;
+class ACameraActor;
 
 /**
  * Opt-in desktop QA (-GratiaSoftBodyQA) of KawaiiPhysics soft parts with synthetic hands:
@@ -28,7 +29,7 @@ protected:
     virtual void TickComponent(float Delta, ELevelTick Type, FActorComponentTickFunction* Tick) override;
 
 private:
-    enum class EPhase : uint8 { Settle, Baseline, Approach, Press, Arm, Grab, Pull, Release, Lost, NextZone, Conform, Disabled, Resumed, Tilt, Upright };
+    enum class EPhase : uint8 { Settle, Baseline, Approach, Press, Squeeze, Arm, Grab, Pull, Release, Lost, NextZone, Conform, Disabled, Resumed, Tilt, Upright };
     bool Check(bool bPass, const FString& Description);
     void Advance(EPhase Next) { Phase = Next; PhaseSeconds = 0; }
     void Finish();
@@ -36,9 +37,14 @@ private:
     FVector CurrentTip() const;
     /** Zone tip in its parent bone frame (cm): independent of idle body motion. */
     TArray<FVector> TipsInParentFrame() const;
+    /** Desktop capture of the pressed zone with the surface dent on/off (pixel diff in the test script). */
+    void AimCamera(const FVector& Center, const FVector& OutwardDir);
+    void Shoot(const FString& Name);
 
     TWeakObjectPtr<AGratiaPreviewCharacter> Character;
     UPROPERTY() TObjectPtr<USkeletalMeshComponent> TestHand;
+    UPROPERTY() TObjectPtr<ACameraActor> ShotCamera;
+    bool bShotOn = false, bShotOff = false;
     EPhase Phase = EPhase::Settle;
     float Elapsed = 0, PhaseSeconds = 0;
     int32 ZoneIndex = 0;

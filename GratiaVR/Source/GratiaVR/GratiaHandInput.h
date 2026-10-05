@@ -18,6 +18,8 @@ public:
     float GetTrigger(bool bLeft) const;
     /** XR template hand actions; fall back to the trigger when the action is unavailable. */
     float GetGrasp(bool bLeft) const;
+    /** Grip squeeze (IA_GripLeft/Right in IMC_GratiaLocomotion; desktop C/V). */
+    float GetGrip(bool bLeft) const;
     float GetIndexCurl(bool bLeft) const;
     FString GetDiagnostics() const;
 protected:
@@ -25,6 +27,8 @@ protected:
 private:
     UPROPERTY() TObjectPtr<UInputAction> LeftAction;
     UPROPERTY() TObjectPtr<UInputAction> RightAction;
+    UPROPERTY() TObjectPtr<UInputAction> GripLeft;
+    UPROPERTY() TObjectPtr<UInputAction> GripRight;
     UPROPERTY() TObjectPtr<UInputAction> GraspLeft;
     UPROPERTY() TObjectPtr<UInputAction> GraspRight;
     UPROPERTY() TObjectPtr<UInputAction> IndexLeft;

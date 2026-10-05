@@ -84,6 +84,7 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
     bool bSoftBody = false;
     bool bSoftBodyReset = false;
     TArray<FGratiaSoftBodyGrab> Grabs;
+    TArray<TPair<FName, FVector>> Scales;
     int32* ActiveChainsOut = nullptr;
 
     void BuildSoftBody(const UGratiaCharacterProfile* Profile, const USkeletalMesh* Mesh, UAnimInstance* InInstance)
@@ -203,6 +204,16 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
             ++Active;
         }
         FCSPose<FCompactPose>::ConvertComponentPosesToLocalPoses(ComponentPose.Pose, Output.Pose);
+        // Squeeze: scale the simulated root bone in its own space (skin compresses toward the body).
+        const FBoneContainer& Bones = Output.Pose.GetBoneContainer();
+        for (const TPair<FName, FVector>& Scale : Scales)
+        {
+            const int32 MeshIndex = Bones.GetPoseBoneIndexForBoneName(Scale.Key);
+            if (MeshIndex == INDEX_NONE || Scale.Value.ContainsNaN()) continue;
+            const FCompactPoseBoneIndex Index = Bones.MakeCompactPoseIndex(FMeshPoseBoneIndex(MeshIndex));
+            if (Index.GetInt() == INDEX_NONE) continue;
+            Output.Pose[Index].SetScale3D(Output.Pose[Index].GetScale3D() * Scale.Value);
+        }
         if (ActiveChainsOut) *ActiveChainsOut = Active;
     }
 
@@ -255,6 +266,7 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
         bSoftBodyReset |= Instance->SoftBodyInput.bReset;
         Instance->SoftBodyInput.bReset = false;
         Grabs = Instance->SoftBodyInput.Grabs;
+        Scales = Instance->SoftBodyInput.Scales;
         if (bSoftBody && GetSkelMeshComponent() && !GetSkelMeshComponent()->GetComponentSpaceTransforms().IsEmpty())
         {
             const TArray<FTransform>& Pose = GetSkelMeshComponent()->GetComponentSpaceTransforms();

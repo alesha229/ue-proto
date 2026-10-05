@@ -15,6 +15,8 @@ if ($exeHash -ne $manifest.executable_sha256) { throw 'Executable differs from b
 New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
 $logPath = Join-Path $evidenceRoot 'packaged_soft_body_qa.log'
 $resultPath = Join-Path $evidenceRoot 'packaged_soft_body_result.json'
+$shotRoot = Join-Path $archiveRoot 'GratiaVR\Saved\Screenshots\Windows'
+if (Test-Path -LiteralPath $shotRoot) { Get-ChildItem -LiteralPath $shotRoot -Filter 'GratiaSoftPress_*.png' | Remove-Item -Force }
 $began = [DateTimeOffset]::UtcNow
 # A normal RHI keeps the packaged animation and hand mesh paths identical to play;
 # NullRHI is not used for this rendered desktop run.
@@ -33,16 +35,48 @@ $buildMatched = $logText.Contains('BUILD id=' + $manifest.build_id)
 $markerPassed = $logText.Contains('GRATIA_SOFT_BODY_QA PASS')
 $failureDetected = $logText -match 'GRATIA_SOFT_BODY_QA FAIL|TEST FAIL:|SOFT_BODY_FAULT|Fatal error:|Assertion failed:|Unhandled Exception|LowLevelFatalError'
 $materialsPassed = -not ($logText -match 'missing usage flag SkeletalMesh|Failed to compile Material|Default Material will be used in game')
-$pass = -not $timedOut -and $gameProcess.ExitCode -eq 0 -and $freshLog -and $buildMatched -and $markerPassed -and -not $failureDetected -and $materialsPassed
+# Press captures per zone (same camera): rest -> pressed must visibly change; the surface
+# dent alone is the difference between pressed with and without the material offset.
+Add-Type -AssemblyName System.Drawing
+function Get-ChangedPercent([string]$PathA, [string]$PathB) {
+    $a = [System.Drawing.Bitmap]::new($PathA); $b = [System.Drawing.Bitmap]::new($PathB)
+    try {
+        $changed = 0; $total = 0
+        for ($y = 0; $y -lt [Math]::Min($a.Height, $b.Height); $y += 4) {
+            for ($x = 0; $x -lt [Math]::Min($a.Width, $b.Width); $x += 4) {
+                $p = $a.GetPixel($x, $y); $q = $b.GetPixel($x, $y); $total++
+                if ([Math]::Max([Math]::Abs($p.R - $q.R), [Math]::Max([Math]::Abs($p.G - $q.G), [Math]::Abs($p.B - $q.B))) -gt 10) { $changed++ }
+            }
+        }
+        return [Math]::Round(100.0 * $changed / [Math]::Max(1, $total), 2)
+    } finally { $a.Dispose(); $b.Dispose() }
+}
+$press = @()
+foreach ($zone in ([regex]::Matches($logText, 'SOFT_BODY_QA_ZONE (\S+)') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)) {
+    $files = @{}
+    foreach ($state in 'rest', 'on', 'off') { $files[$state] = Join-Path $shotRoot ("GratiaSoftPress_{0}_{1}.png" -f $zone, $state) }
+    $present = ($files.Values | Where-Object { Test-Path -LiteralPath $_ }).Count -eq 3
+    $entry = [ordered]@{ zone = $zone; captures = $present; press_changed_percent = $null; dent_changed_percent = $null }
+    if ($present) {
+        $entry.press_changed_percent = Get-ChangedPercent $files['rest'] $files['on']
+        $entry.dent_changed_percent = Get-ChangedPercent $files['off'] $files['on']
+        foreach ($state in 'rest', 'on', 'off') { Copy-Item -LiteralPath $files[$state] -Destination (Join-Path $evidenceRoot ("soft_press_{0}_{1}.png" -f $zone, $state)) -Force }
+    }
+    $press += [pscustomobject]$entry
+}
+$pressPassed = $press.Count -ge 1 -and -not ($press | Where-Object { -not $_.captures -or $_.press_changed_percent -lt 1.0 -or $_.dent_changed_percent -le 0 })
+$pass = -not $timedOut -and $gameProcess.ExitCode -eq 0 -and $freshLog -and $buildMatched -and $markerPassed -and -not $failureDetected -and $materialsPassed -and $pressPassed
 [pscustomobject]@{
     build_id = $manifest.build_id; executable = $exePath; executable_sha256 = $exeHash; manifest_sha256 = $manifestHash
     source_sha256 = $manifest.source_sha256; assets_sha256 = $manifest.assets_sha256
     began_utc = $began.ToString('o'); finished_utc = [DateTimeOffset]::UtcNow.ToString('o')
     exit_code = $gameProcess.ExitCode; timed_out = $timedOut; passed = $pass; fresh_log = $freshLog
     build_matched = $buildMatched; marker_passed = $markerPassed; failure_detected = $failureDetected; materials_passed = $materialsPassed
+    press_captures_passed = $pressPassed; press = $press
     check_count = ([regex]::Matches($logText, 'SOFT_BODY_QA_CHECK PASS')).Count
     log = $logPath; source = 'synthetic-soft-body-QA'; real_vr_acceptance = $false; nullrhi = $false
 } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $resultPath -Encoding utf8
 if ($timedOut) { throw "Packaged soft body QA timed out after $TimeoutSeconds seconds. See $logPath" }
 if (-not $pass) { throw "Packaged soft body QA failed. See $logPath" }
+$press | ForEach-Object { Write-Output ("Press {0}: rest->pressed {1}% of frame, dent on/off {2}%" -f $_.zone, $_.press_changed_percent, $_.dent_changed_percent) }
 Write-Output "KawaiiPhysics soft body QA PASS for build $($manifest.build_id) (rendered desktop test; real VR input remains unverified)"

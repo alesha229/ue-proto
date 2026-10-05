@@ -27,12 +27,15 @@ public:
         FVector Center = FVector::ZeroVector;
         FVector Tip = FVector::ZeroVector;
         float Radius = 0.0f;
+        /** Forward axis of the soft bone in its own space. */
+        FVector Axis = FVector::XAxisVector;
     };
 
     UGratiaSoftBodyInteraction();
 
-    /** Visible: proxy-constrained hand. Raw: controller target. Fingers: world finger points. */
-    void SubmitHand(bool bLeft, const FVector& Visible, const FVector& Raw, bool bAllowed, float Delta, float Trigger,
+    /** Visible: proxy-constrained palm centre. Raw: controller target of the palm centre.
+     *  Grab: max of trigger and grip. Fingers: world finger points of the visible hand. */
+    void SubmitHand(bool bLeft, const FVector& Visible, const FVector& Raw, bool bAllowed, float Delta, float Grab,
         const TArray<FVector>& Fingers);
     void ClearHands();
     UFUNCTION(BlueprintCallable, Category = "Soft Body") void ResetSoftBody();
@@ -45,8 +48,17 @@ public:
     float GetHapticFrequency(bool bLeft) const { return Hands[bLeft ? 0 : 1].Frequency; }
     FName GetGrabbedBone(bool bLeft) const { return Hands[bLeft ? 0 : 1].GrabBone; }
     const TArray<FZone>& GetZones() const { return Zones; }
-    /** World-space spheres the fingers wrap around: soft zones and body colliders near Point. */
-    void GetConformSpheres(const FVector& Point, float Range, TArray<FVector4>& OutWorld) const;
+    /** World-space spheres the fingers wrap around: soft zones and body colliders near Point.
+     *  Soft zones shrink by ZoneShrinkCm so a squeezing hand sinks into them. */
+    void GetConformSpheres(const FVector& Point, float Range, TArray<FVector4>& OutWorld, float ZoneShrinkCm = 0.0f) const;
+    /** Palm/finger spheres written to the press collection last tick (diagnostics/QA). */
+    int32 GetPressSphereCount() const { return PressSpheres; }
+    /** Current squeeze of a soft bone (0 rest, SquashAmount at full press depth). */
+    float GetSquash(FName Bone) const { const FVector2D* State = Squash.Find(Bone); return State ? float(State->X) : 0.0f; }
+
+    /** Surface press deformation of skin and clothing (material offset); QA can switch it off. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body")
+    bool bPressDeformation = true;
     bool HasFault() const { return bFault; }
     bool RunChecks(FString& Failure);
     FString GetDiagnostics() const;
@@ -80,6 +92,7 @@ private:
     void SetFault(const FString& Reason);
     void ReleaseGrab(FHand& Hand) { Hand.GrabBone = NAME_None; }
     void PushToAnimation(bool bReset);
+    void PushPress();
 
     TWeakObjectPtr<AGratiaPreviewCharacter> Character;
     TWeakObjectPtr<const UGratiaCharacterProfile> LastProfile;
@@ -92,4 +105,10 @@ private:
     FString FaultReason;
     double NextDiagnosticTime = 0.0;
     uint64 ZonesFrame = 0;
+    int32 PressSpheres = 0;
+    /** Squeeze spring per soft bone: amount and its velocity. */
+    TMap<FName, FVector2D> Squash;
+    void UpdateSquash(float Delta);
+    bool bPressCleared = false;
+    bool bWarnedZoneSlots = false;
 };

@@ -24,7 +24,10 @@ walk.set_editor_property('accumulation_behavior', unreal.InputActionAccumulation
 context.unmap_all()
 grab_left = asset('IA_GrabLeft', unreal.InputAction)
 grab_right = asset('IA_GrabRight', unreal.InputAction)
-for action in (grab_left, grab_right):
+# Grip squeezes the hand around soft parts (and also grabs); triggers keep the grab.
+grip_left = asset('IA_GripLeft', unreal.InputAction)
+grip_right = asset('IA_GripRight', unreal.InputAction)
+for action in (grab_left, grab_right, grip_left, grip_right):
     action.set_editor_property('value_type', unreal.InputActionValueType.AXIS1D)
     action.set_editor_property('consume_input', True)
 bindings = []
@@ -62,8 +65,19 @@ for prefix, stick in xr_sticks:
     mapping(block, f'{prefix}_Right_{stick}_Y')
     mapping(grab_left, f'{prefix}_Left_Trigger_Axis')
     mapping(grab_right, f'{prefix}_Right_Trigger_Axis')
+    for side, action in (('Left', grip_left), ('Right', grip_right)):
+        # Analog grip where the controller has one, otherwise its grip button.
+        for suffix in ('Grip_Axis', 'Grip_Click'):
+            key = f'{prefix}_{side}_{suffix}'
+            probe = unreal.Key()
+            probe.set_editor_property('key_name', key)
+            if unreal.InputLibrary.key_is_valid(probe):
+                mapping(action, key)
+                break
 mapping(grab_left, 'Z')
 mapping(grab_right, 'X')
+mapping(grip_left, 'C')
+mapping(grip_right, 'V')
 mapping(walk, 'Gamepad_LeftX')
 mapping(walk, 'Gamepad_LeftY', y=True)
 mapping(turn, 'Gamepad_RightX')
@@ -118,7 +132,7 @@ for prefix, left_previous in [('OculusTouch', 'X'), ('ValveIndex', 'A')]:
 mapping(next_action, 'Down')
 mapping(next_action, 'Up', negative=True)
 mapping(apply_action, 'Enter')
-for item in [walk, turn, block, grab_left, grab_right, toggle, next_action, apply_action, movement_context, context]:
+for item in [walk, turn, block, grab_left, grab_right, grip_left, grip_right, toggle, next_action, apply_action, movement_context, context]:
     description = 'action_description' if isinstance(item, unreal.InputAction) else 'context_description'
     item.set_editor_property(description, item.get_name())
     assert library.save_loaded_asset(item, only_if_is_dirty=False)

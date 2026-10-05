@@ -22,6 +22,8 @@ struct FGratiaSoftBodyAnimInput
     /** Hand and finger collision spheres: component-space centre (XYZ) and radius (W). */
     TArray<FVector4> HandSpheres;
     TArray<FGratiaSoftBodyGrab> Grabs;
+    /** Root bone -> local scale applied after the simulation (squeeze along the forward axis). */
+    TArray<TPair<FName, FVector>> Scales;
     /** Set for one update after teleport/profile/quality changes. */
     bool bReset = false;
 };

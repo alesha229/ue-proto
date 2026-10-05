@@ -183,6 +183,18 @@ void UGratiaHandAnimInstance::GetFingerPoints(TArray<FVector>& OutWorld) const
     }
 }
 
+bool UGratiaHandAnimInstance::GetPalmPoint(FVector& OutWorld) const
+{
+    const USkeletalMeshComponent* Mesh = GetSkelMeshComponent();
+    if (!Mesh || !bSamplesReady.load()) return false;
+    // Knuckles of index..pinky; the hand root is the wrist.
+    FVector Knuckles = FVector::ZeroVector;
+    for (int32 F = 1; F < NumFingers; ++F) Knuckles += Samples[F][0][0];
+    Knuckles /= double(NumFingers - 1);
+    OutWorld = Mesh->GetComponentTransform().TransformPosition(Knuckles * 0.6);
+    return !OutWorld.ContainsNaN();
+}
+
 FString UGratiaHandAnimInstance::GetDiagnostics() const
 {
     return FString::Printf(TEXT("curl T%.2f I%.2f M%.2f R%.2f P%.2f cap T%.2f I%.2f M%.2f R%.2f P%.2f%s"),

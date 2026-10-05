@@ -6,7 +6,17 @@
 #include "GratiaInteraction.h"
 #include "GratiaPreviewCharacter.h"
 #include "GratiaSoftBodyInteraction.h"
+#include "Camera/CameraActor.h"
+#include "Camera/CameraComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Engine/Engine.h"
+#include "GameFramework/PlayerController.h"
+#include "Kismet/GameplayStatics.h"
+#include "Misc/Paths.h"
+#include "UnrealClient.h"
+#if WITH_EDITOR
+#include "ShaderCompiler.h"
+#endif
 #include "Engine/SkeletalMesh.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -88,6 +98,31 @@ TArray<FVector> UGratiaSoftBodyVerification::TipsInParentFrame() const
     return Result;
 }
 
+void UGratiaSoftBodyVerification::AimCamera(const FVector& Center, const FVector& OutwardDir)
+{
+    APlayerController* Controller = UGameplayStatics::GetPlayerController(this, 0);
+    if (!Controller || !FApp::CanEverRender()) return;
+    if (!ShotCamera) ShotCamera = GetWorld()->SpawnActor<ACameraActor>();
+    if (!ShotCamera) return;
+    // Side view: the press shows in the silhouette (flattening, dent, spread).
+    const FVector Up = Character->GetActorUpVector();
+    FVector Side = FVector::CrossProduct(Up, OutwardDir).GetSafeNormal();
+    // Look from the body's outer side so the other soft part does not hide this one.
+    if (FVector::DotProduct(Side, Center - Character->GetActorLocation()) < 0) Side = -Side;
+    const FVector Focus = Center + OutwardDir * 4.0;
+    const FVector Eye = Focus + Side * 48.0 + OutwardDir * 12.0 + Up * 4.0;
+    ShotCamera->SetActorLocationAndRotation(Eye, (Focus - Eye).Rotation());
+    ShotCamera->GetCameraComponent()->FieldOfView = 55.0f;
+    Controller->SetViewTarget(ShotCamera);
+}
+
+void UGratiaSoftBodyVerification::Shoot(const FString& Name)
+{
+    if (!FApp::CanEverRender() || !GEngine || !GEngine->GameViewport) return;
+    FScreenshotRequest::RequestScreenshot(FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Screenshots/Windows"), Name + TEXT(".png")), false, false);
+    UE_LOG(LogGratiaSoftBodyQA, Display, TEXT("SOFT_BODY_QA_SHOT %s"), *Name);
+}
+
 void UGratiaSoftBodyVerification::Submit(const FVector& Hand, float Delta, float Trigger, bool bAllowed)
 {
     static const TArray<FVector> NoFingers;
@@ -113,6 +148,15 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
     {
     case EPhase::Settle:
     {
+#if WITH_EDITOR
+        // Editor runs compile material shaders asynchronously (default material meanwhile);
+        // wait so captures and timing use the real character materials.
+        if (GShaderCompilingManager && GShaderCompilingManager->IsCompiling())
+        {
+            Elapsed = PhaseSeconds = 0;
+            break;
+        }
+#endif
         if (PhaseSeconds < 2.5f) break;
         FString Failure;
         if (!Check(Settings.bEnabled, TEXT("profile enables KawaiiPhysics soft body"))
@@ -125,7 +169,11 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
     }
     case EPhase::Baseline:
         if (!Zone) { Advance(EPhase::Conform); break; }
-        if (PhaseSeconds <= Delta) { BaselineTip = FVector::ZeroVector; BaselineSamples = 0; DepthAmplitude.Reset(); bSawGrab = false; PressTipCm = PullTipCm = 0; }
+        if (PhaseSeconds <= Delta)
+        {
+            BaselineTip = FVector::ZeroVector; BaselineSamples = 0; DepthAmplitude.Reset(); bSawGrab = false; PressTipCm = PullTipCm = 0;
+            AimCamera(Zone->Center, (Zone->Tip - Zone->Center).GetSafeNormal());
+        }
         Submit(FVector(0, 0, -1.0e5), Delta, 0, false);
         BaselineTip += CurrentTip(); ++BaselineSamples;
         if (PhaseSeconds < 0.5f) break;
@@ -134,6 +182,7 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
         Start = Zone->Center + Outward * (Zone->Radius + Settings.PalmRadiusCm + 6);
         Pressed = Zone->Center + Outward * (Zone->Radius + Settings.PalmRadiusCm - Settings.HapticFullDepthCm);
         UE_LOG(LogGratiaSoftBodyQA, Display, TEXT("SOFT_BODY_QA_ZONE %s bone=%s radius=%.2f"), *Zone->Chain.ToString(), *Zone->Bone.ToString(), Zone->Radius);
+        Shoot(FString::Printf(TEXT("GratiaSoftPress_%s_rest"), *Zone->Chain.ToString()));
         Advance(EPhase::Approach);
         break;
     case EPhase::Approach:
@@ -168,6 +217,31 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
         Check(bMonotonic && LastDepth >= 1.0 && FMath::IsNearlyEqual(LastAmplitude, Expected, 0.05),
             FString::Printf(TEXT("%s vibration rises with depth: %.2f at %.1fcm (expected %.2f)"), *Zone->Chain.ToString(), LastAmplitude, LastDepth, Expected));
         Check(PressTipCm >= 0.3, FString::Printf(TEXT("%s pressed tip moved %.2fcm (min 0.3)"), *Zone->Bone.ToString(), PressTipCm));
+        Advance(EPhase::Squeeze);
+        break;
+    }
+    case EPhase::Squeeze:
+    {
+        // Same hold, surface press on then off: the image difference is the dent alone.
+        Submit(Pressed, Delta, 0);
+        if (!bShotOn && PhaseSeconds >= 0.3f)
+        {
+            Check(SoftBody->GetSquash(Zone->Bone) >= 0.05f,
+                FString::Printf(TEXT("%s squeezes under the press (squash %.2f, min 0.05)"), *Zone->Chain.ToString(), SoftBody->GetSquash(Zone->Bone)));
+            Check(SoftBody->GetPressSphereCount() >= 1 && Settings.PressCollection,
+                FString::Printf(TEXT("%s palm and finger spheres reach the press collection (%d)"), *Zone->Chain.ToString(), SoftBody->GetPressSphereCount()));
+            Shoot(FString::Printf(TEXT("GratiaSoftPress_%s_on"), *Zone->Chain.ToString()));
+            bShotOn = true;
+        }
+        if (bShotOn && PhaseSeconds >= 0.45f) SoftBody->bPressDeformation = false;
+        if (!bShotOff && PhaseSeconds >= 0.65f)
+        {
+            Shoot(FString::Printf(TEXT("GratiaSoftPress_%s_off"), *Zone->Chain.ToString()));
+            bShotOff = true;
+        }
+        if (PhaseSeconds < 0.8f) break;
+        SoftBody->bPressDeformation = true;
+        bShotOn = bShotOff = false;
         Advance(EPhase::Arm);
         break;
     }
@@ -212,8 +286,12 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
         }
         break;
     case EPhase::NextZone:
+        if (PhaseSeconds <= Delta)
+            Check(SoftBody->GetPressSphereCount() == 0, TEXT("a lost hand leaves no press spheres"));
         Submit(FVector(0, 0, -1.0e5), Delta, 0, false);
         if (PhaseSeconds < 0.8f) break;
+        if (Zone) Check(FMath::Abs(SoftBody->GetSquash(Zone->Bone)) <= 0.03f,
+            FString::Printf(TEXT("%s springs back after the hand leaves (squash %.3f)"), *Zone->Chain.ToString(), SoftBody->GetSquash(Zone->Bone)));
         UE_LOG(LogGratiaSoftBodyQA, Display, TEXT("SOFT_BODY_QA_RESULT %s press_tip=%.2fcm pull_tip=%.2fcm return=%.2fcm"),
             Zone ? *Zone->Bone.ToString() : TEXT("?"), PressTipCm, PullTipCm, ReturnTipCm);
         ++ZoneIndex;

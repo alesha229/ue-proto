@@ -9,6 +9,7 @@ class UAnimSequence;
 class UAnimInstance;
 class UPhysicsAsset;
 class USoundBase;
+class UMaterialParameterCollection;
 
 UENUM(BlueprintType)
 enum class EGratiaCollisionProxyShape : uint8
@@ -331,6 +332,38 @@ struct GRATIAVR_API FGratiaSoftBodySettings
     float HapticContactPulse = 0.35f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Haptics", meta = (ClampMin = "0", ClampMax = "0.5", Units = "s"))
     float HapticPulseSeconds = 0.06f;
+    /** Surface press of skin and clothing (material vertex offset). Receives hand spheres
+     *  Sphere00..Sphere23, soft zones Zone0..Zone3 and Config (softness, -, zone falloff,
+     *  strength). Materials reference the same collection; empty disables the press. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press")
+    TObjectPtr<UMaterialParameterCollection> PressCollection;
+    /** Palm sphere of the surface dent (the palm itself; PalmRadiusCm is the contact/haptics volume). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press", meta = (ClampMin = "0.5", ClampMax = "8", Units = "cm"))
+    float PressPalmRadiusCm = 2.5f;
+    /** Width of the smooth dent rim around each palm/finger sphere. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press", meta = (ClampMin = "0.1", ClampMax = "10", Units = "cm"))
+    float PressSoftnessCm = 1.5f;
+    /** Press mask radius = soft zone contact radius x this scale, plus PressZoneFalloffCm. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press", meta = (ClampMin = "0.5", ClampMax = "4"))
+    float PressZoneScale = 1.6f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press", meta = (ClampMin = "0.1", ClampMax = "20", Units = "cm"))
+    float PressZoneFalloffCm = 4.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press", meta = (ClampMin = "0", ClampMax = "1"))
+    float PressStrength = 1.0f;
+    /** With full grip the fingers may sink this far into a soft zone; the surface yields under them. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press", meta = (ClampMin = "0", ClampMax = "6", Units = "cm"))
+    float SquishDepthCm = 2.5f;
+    /** Volumetric squeeze: the soft bone compresses along its forward axis by up to this
+     *  fraction at full press depth (zone radius) and springs back with a wobble. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press", meta = (ClampMin = "0", ClampMax = "0.8"))
+    float SquashAmount = 0.45f;
+    /** Sideways spread while compressed (0 none, 1 volume preserving). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press", meta = (ClampMin = "0", ClampMax = "1"))
+    float SquashBulge = 0.5f;
+    /** Hand sphere size for pushing the KawaiiPhysics bone; below 1 the surface yields
+     *  (press dent and squash) before the whole soft part swings away. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press", meta = (ClampMin = "0", ClampMax = "1"))
+    float HandPushFraction = 0.5f;
 };
 
 USTRUCT(BlueprintType)

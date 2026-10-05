@@ -426,15 +426,23 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
         {
             auto* SoftBody = TargetCharacter->SoftBodyInteraction.Get();
             TArray<FVector> Fingers;
-            if (Hand.HandAnim.IsValid()) Hand.HandAnim->GetFingerPoints(Fingers);
+            // Press, grab and the surface dent work from the palm centre, not the wrist (hand root).
+            FVector PalmLocal = FVector::ZeroVector, Palm;
+            if (Hand.HandAnim.IsValid())
+            {
+                Hand.HandAnim->GetFingerPoints(Fingers);
+                if (Hand.HandAnim->GetPalmPoint(Palm)) PalmLocal = VisualWorld.InverseTransformPositionNoScale(Palm);
+            }
+            const FVector VisiblePalm = VisualWorld.TransformPositionNoScale(PalmLocal);
+            const FVector RawPalm = Target.TransformPositionNoScale(PalmLocal);
             const bool bAllowed = TargetCharacter->Interaction->IsHandSampleReady(bLeft) && (!Menu || !Menu->bOpen);
-            SoftBody->SubmitHand(bLeft, VisualWorld.GetLocation(), Target.GetLocation(), bAllowed, DeltaSeconds,
-                HandInput ? HandInput->GetTrigger(bLeft) : 0.0f, Fingers);
+            const float Grab = HandInput ? FMath::Max(HandInput->GetTrigger(bLeft), HandInput->GetGrip(bLeft)) : 0.0f;
+            SoftBody->SubmitHand(bLeft, VisiblePalm, RawPalm, bAllowed, DeltaSeconds, Grab, Fingers);
             // Inside a soft zone the visible hand sinks by the bounded press depth.
             if (SoftBody->HasPress(bLeft) && Hand.Gate.State == EGratiaHandState::Tracked)
             {
                 if (Hand.Visual->GetAttachParent()) Hand.Visual->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
-                Hand.Visual->SetWorldLocation(SoftBody->GetPressPoint(bLeft), false, nullptr, ETeleportType::TeleportPhysics);
+                Hand.Visual->SetWorldLocation(SoftBody->GetPressPoint(bLeft) - (VisiblePalm - VisualWorld.GetLocation()), false, nullptr, ETeleportType::TeleportPhysics);
             }
             UpdateHaptics(Hand, bLeft, bAllowed && bXRActive ? SoftBody->GetHapticAmplitude(bLeft) : 0.0f, SoftBody->GetHapticFrequency(bLeft));
         }
@@ -458,7 +466,9 @@ void AGratiaStage1Runtime::UpdateHandPose(FHandProxy& Hand, bool bLeft, const FV
     const auto* Profile = TargetCharacter.IsValid() ? TargetCharacter->CharacterProfile.Get() : nullptr;
     Anim->bConform = Profile && Profile->SoftBody.bFingerConform && Hand.Gate.CanInteract();
     if (Profile) { Anim->FingerRadiusCm = Profile->SoftBody.FingerRadiusCm; Anim->ConformMarginCm = Profile->SoftBody.FingerConformMarginCm; }
-    if (Anim->bConform && TargetCharacter->SoftBodyInteraction) TargetCharacter->SoftBodyInteraction->GetConformSpheres(Near, 30.0f, Anim->ConformSpheres);
+    // Squeezing (grip) lets the fingers sink into soft zones; the press dent opens under them.
+    if (Anim->bConform && TargetCharacter->SoftBodyInteraction)
+        TargetCharacter->SoftBodyInteraction->GetConformSpheres(Near, 30.0f, Anim->ConformSpheres, Profile->SoftBody.SquishDepthCm * Grasp);
     else Anim->ConformSpheres.Reset();
 }
 

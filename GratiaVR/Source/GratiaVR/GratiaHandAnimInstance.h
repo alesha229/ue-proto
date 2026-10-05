@@ -47,6 +47,8 @@ public:
     bool HasConformSamples() const { return bSamplesReady.load(); }
     /** World-space distal finger joints and tips at the current curl (empty until sampled). */
     void GetFingerPoints(TArray<FVector>& OutWorld) const;
+    /** World-space palm centre (between wrist and knuckles); false until sampled. */
+    bool GetPalmPoint(FVector& OutWorld) const;
     FString GetDiagnostics() const;
 
     virtual void NativeUpdateAnimation(float DeltaSeconds) override;
