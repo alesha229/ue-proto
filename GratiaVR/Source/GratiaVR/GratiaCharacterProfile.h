@@ -283,6 +283,57 @@ struct GRATIAVR_API FGratiaBodyColliderSphere
     float RadiusCm = 5.0f;
 };
 
+/** Capsule fitted to the visible skin/clothing around one bone (reference pose, bone space). */
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaSurfaceCapsule
+{
+    GENERATED_BODY()
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Body Surface")
+    FName Bone;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Body Surface", meta = (Units = "cm"))
+    FVector StartCm = FVector::ZeroVector;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Body Surface", meta = (Units = "cm"))
+    FVector EndCm = FVector::ZeroVector;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Body Surface", meta = (ClampMin = "0.2", Units = "cm"))
+    float RadiusCm = 3.0f;
+    /** Bone-space axis a gripping hand wraps around; zero = along the capsule (limbs). Torso
+     *  slices are capsules across the body's width and wrap around the spine direction. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Body Surface")
+    FVector WrapAxis = FVector::ZeroVector;
+};
+
+/** Hands on the body surface: palm collider, leaning onto the surface and wrapping grips. */
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaHandSurfaceSettings
+{
+    GENERATED_BODY()
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Surface")
+    bool bEnabled = true;
+    /** Palm collider radius against BodySurface (replaces the wrist sphere of ContactSettings). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Surface", meta = (ClampMin = "0.2", ClampMax = "6", Units = "cm"))
+    float PalmContactRadiusCm = 1.5f;
+    /** Palm centre to palm skin; a gripping palm centre stays this far from the surface. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Surface", meta = (ClampMin = "0", ClampMax = "5", Units = "cm"))
+    float PalmThicknessCm = 1.4f;
+    /** Within this gap the hand turns its palm to the surface and the fingers lie on it. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Surface", meta = (ClampMin = "0", ClampMax = "15", Units = "cm"))
+    float AdaptDistanceCm = 4.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Surface", meta = (ClampMin = "0", ClampMax = "90", Units = "deg"))
+    float AdaptMaxDegrees = 45.0f;
+    /** Grip within this gap of a body part wraps the hand around it. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Surface", meta = (ClampMin = "0", ClampMax = "20", Units = "cm"))
+    float GripReachCm = 7.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Surface", meta = (ClampMin = "0.05", ClampMax = "1"))
+    float GripStartInput = 0.6f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Surface", meta = (ClampMin = "0", ClampMax = "1"))
+    float GripReleaseInput = 0.3f;
+    /** The wrapped hand lets go when the controller moves this far from it. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Surface", meta = (ClampMin = "2", ClampMax = "60", Units = "cm"))
+    float GripBreakDistanceCm = 18.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Surface", meta = (ClampMin = "0", ClampMax = "1", Units = "s"))
+    float GripBlendSeconds = 0.12f;
+};
+
 USTRUCT(BlueprintType)
 struct GRATIAVR_API FGratiaSoftBodySettings
 {
@@ -452,6 +503,12 @@ public:
     TArray<FGratiaContactZoneDefinition> ContactZones;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Collision")
     TArray<FGratiaCollisionProxyDefinition> CollisionProxies;
+    /** Skin-fitted capsules (editor: GratiaSoftBodySetupLibrary::MeasureBodySurface). When set,
+     *  the palm collides with them instead of CollisionProxies, and grips wrap around them. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Collision", meta = (TitleProperty = "Bone"))
+    TArray<FGratiaSurfaceCapsule> BodySurface;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Collision")
+    FGratiaHandSurfaceSettings HandSurface;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact")
     FGratiaContactSettings ContactSettings;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Physics")

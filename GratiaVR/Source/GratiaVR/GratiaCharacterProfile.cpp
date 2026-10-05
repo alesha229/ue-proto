@@ -255,5 +255,18 @@ bool UGratiaCharacterProfile::ValidateProfile(TArray<FString>& Errors, TArray<FS
         for (float Value : Positive)
             if (!FMath::IsFinite(Value) || Value <= 0) Errors.Add(TEXT("Soft body hand/haptic values must be finite and positive."));
     }
+    for (const FGratiaSurfaceCapsule& Capsule : BodySurface)
+    {
+        if (Ref.FindBoneIndex(Capsule.Bone) == INDEX_NONE)
+            Errors.Add(FString::Printf(TEXT("Body surface capsule refers to missing bone %s."), *Capsule.Bone.ToString()));
+        if (Capsule.StartCm.ContainsNaN() || Capsule.EndCm.ContainsNaN() || !FMath::IsFinite(Capsule.RadiusCm) || Capsule.RadiusCm <= 0)
+            Errors.Add(FString::Printf(TEXT("Body surface capsule %s needs finite ends and a positive radius."), *Capsule.Bone.ToString()));
+    }
+    const float HandSurfaceValues[] = {HandSurface.PalmContactRadiusCm, HandSurface.PalmThicknessCm, HandSurface.AdaptDistanceCm,
+        HandSurface.GripReachCm, HandSurface.GripBreakDistanceCm, HandSurface.GripBlendSeconds};
+    for (const float Value : HandSurfaceValues)
+        if (!FMath::IsFinite(Value) || Value < 0) Errors.Add(TEXT("Hand surface distances and times must be finite and non-negative."));
+    if (HandSurface.GripReleaseInput >= HandSurface.GripStartInput)
+        Errors.Add(TEXT("Hand surface grip release input must be below the start input."));
     return Errors.IsEmpty();
 }

@@ -1,4 +1,5 @@
 #include "GratiaPreviewCharacter.h"
+#include "GratiaBodySurface.h"
 #include "GratiaInteraction.h"
 #include "GratiaReactionPresentation.h"
 #include "GratiaAnimInstance.h"
@@ -34,6 +35,7 @@ AGratiaPreviewCharacter::AGratiaPreviewCharacter()
     SecondaryMotion = CreateDefaultSubobject<UGratiaSecondaryMotion>(TEXT("SecondaryMotion"));
     SoftBodyInteraction = CreateDefaultSubobject<UGratiaSoftBodyInteraction>(TEXT("SoftBodyInteraction"));
     SoftBodyVerification = CreateDefaultSubobject<UGratiaSoftBodyVerification>(TEXT("SoftBodyVerification"));
+    BodySurface = CreateDefaultSubobject<UGratiaBodySurface>(TEXT("BodySurface"));
     CharacterMesh->SetCollisionEnabled(ECollisionEnabled::PhysicsOnly);
     CharacterMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
     CharacterMesh->SetGenerateOverlapEvents(false);

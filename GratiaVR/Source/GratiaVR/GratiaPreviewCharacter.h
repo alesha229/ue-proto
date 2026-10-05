@@ -12,6 +12,7 @@ class UGratiaCharacterProfile;
 class UGratiaReactionPresentation;
 class UGratiaSoftBodyInteraction;
 class UGratiaSoftBodyVerification;
+class UGratiaBodySurface;
 
 UENUM(BlueprintType)
 enum class EGratiaPreviewPose : uint8
@@ -63,6 +64,9 @@ public:
     TObjectPtr<UGratiaSoftBodyInteraction> SoftBodyInteraction;
     UPROPERTY(VisibleAnywhere, Category = "Verification")
     TObjectPtr<UGratiaSoftBodyVerification> SoftBodyVerification;
+    /** Touchable body surface for hands: palm collider, leaning onto the body, wrapping grips. */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Gratia|Physics")
+    TObjectPtr<UGratiaBodySurface> BodySurface;
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Gratia|Preview")
     EGratiaPreviewPose PreviewPose = EGratiaPreviewPose::Idle;

@@ -26,6 +26,16 @@ public:
      * Converts exported source collision objects (schema 2 "colliders") into spheres
      * inscribed in per-bone convex hulls, keeping only those within RangeCm of a soft bone.
      */
+    /**
+     * Fits one capsule per bone to the visible surface it skins (vertices whose dominant
+     * weight >= 0.5, only sections with IncludeSlots materials when given): axis along the
+     * bone (or the skin's principal axis), centre line through the skin, radius at the
+     * RadiusPercentile of distances. Bones with fewer than MinVertices are skipped.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
+    static bool MeasureBodySurface(USkeletalMesh* SkeletalMesh, const TArray<FName>& IncludeSlots, const TArray<FName>& ExcludeBones,
+        int32 MinVertices, float RadiusPercentile, TArray<FGratiaSurfaceCapsule>& Capsules);
+
     UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
     static bool BuildBodyColliders(USkeletalMesh* SkeletalMesh, const FString& JSONPath, const TArray<FName>& SoftBones,
         float RangeCm, TArray<FGratiaBodyColliderSphere>& Colliders);

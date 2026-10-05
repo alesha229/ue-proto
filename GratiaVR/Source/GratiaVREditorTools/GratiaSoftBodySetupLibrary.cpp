@@ -176,6 +176,168 @@ bool UGratiaSoftBodySetupLibrary::MeasureSoftBone(USkeletalMesh* SkeletalMesh, F
     return true;
 }
 
+bool UGratiaSoftBodySetupLibrary::MeasureBodySurface(USkeletalMesh* SkeletalMesh, const TArray<FName>& IncludeSlots,
+    const TArray<FName>& ExcludeBones, int32 MinVertices, float RadiusPercentile, TArray<FGratiaSurfaceCapsule>& Capsules)
+{
+    using namespace GratiaSoftBodySetup;
+    Capsules.Reset();
+    if (!SkeletalMesh || !SkeletalMesh->GetImportedModel() || SkeletalMesh->GetImportedModel()->LODModels.IsEmpty()) return false;
+    const FReferenceSkeleton& Ref = SkeletalMesh->GetRefSkeleton();
+    const TArray<FSkeletalMaterial>& Materials = SkeletalMesh->GetMaterials();
+    TMap<int32, TArray<FVector>> Buckets;
+    for (const FSkelMeshSection& Section : SkeletalMesh->GetImportedModel()->LODModels[0].Sections)
+    {
+        const FName Slot = Materials.IsValidIndex(Section.MaterialIndex) ? Materials[Section.MaterialIndex].ImportedMaterialSlotName : NAME_None;
+        if (!IncludeSlots.IsEmpty() && !IncludeSlots.Contains(Slot)) continue;
+        for (const FSoftSkinVertex& Vertex : Section.SoftVertices)
+        {
+            int32 Dominant = INDEX_NONE; uint16 Best = 0;
+            for (int32 I = 0; I < MAX_TOTAL_INFLUENCES; ++I)
+                if (Vertex.InfluenceWeights[I] > Best && Section.BoneMap.IsValidIndex(Vertex.InfluenceBones[I]))
+                { Best = Vertex.InfluenceWeights[I]; Dominant = Section.BoneMap[Vertex.InfluenceBones[I]]; }
+            // Strongly owned vertices only (>= 0.6): blended transitions (hip into thigh)
+            // would make the capsule fat.
+            if (Dominant != INDEX_NONE && Best >= 39322) Buckets.FindOrAdd(Dominant).Add(FVector(Vertex.Position));
+        }
+    }
+    auto Percentile = [](TArray<double> Values, double Fraction)
+    {
+        Values.Sort();
+        return Values[FMath::Clamp(int32(Values.Num() * Fraction), 0, Values.Num() - 1)];
+    };
+    for (const TPair<int32, TArray<FVector>>& Bucket : Buckets)
+    {
+        const FName Name = Ref.GetBoneName(Bucket.Key);
+        const TArray<FVector>& Points = Bucket.Value;
+        if (ExcludeBones.Contains(Name) || Points.Num() < MinVertices) continue;
+        const FTransform BoneCS = RefComponentTransform(Ref, Bucket.Key);
+        const FVector Origin = BoneCS.GetLocation();
+        // Along the bone toward the child that continues the main chain (most descendants:
+        // thigh -> shin, not a stocking bow); otherwise the skin's principal axis.
+        FVector Direction = FVector::ZeroVector;
+        int32 BestDescendants = -1;
+        for (int32 Child = 0; Child < Ref.GetNum(); ++Child)
+        {
+            if (Ref.GetParentIndex(Child) != Bucket.Key) continue;
+            int32 Descendants = 0;
+            for (int32 Other = Child + 1; Other < Ref.GetNum(); ++Other)
+                for (int32 Parent = Ref.GetParentIndex(Other); Parent != INDEX_NONE; Parent = Ref.GetParentIndex(Parent))
+                    if (Parent == Child) { ++Descendants; break; }
+            const FVector Offset = RefComponentTransform(Ref, Child).GetLocation() - Origin;
+            if (Offset.Size() < 1.0) continue;
+            if (Descendants > BestDescendants || (Descendants == BestDescendants && Offset.Size() > Direction.Size()))
+            { BestDescendants = Descendants; Direction = Offset; }
+        }
+        if (Direction.Size() < 1.0)
+        {
+            FVector Mean = FVector::ZeroVector;
+            for (const FVector& Point : Points) Mean += Point;
+            Mean /= Points.Num();
+            FMatrix Covariance(EForceInit::ForceInitToZero);
+            for (const FVector& Point : Points)
+            {
+                const FVector D = Point - Mean;
+                for (int32 R = 0; R < 3; ++R) for (int32 C = 0; C < 3; ++C) Covariance.M[R][C] += D[R] * D[C];
+            }
+            Direction = FVector(1, 1, 1);
+            for (int32 Iteration = 0; Iteration < 32; ++Iteration)
+                Direction = FVector(Covariance.TransformVector(Direction)).GetSafeNormal();
+        }
+        Direction = Direction.GetSafeNormal();
+        if (Direction.IsNearlyZero()) continue;
+        FVector Center = FVector::ZeroVector;
+        TArray<double> Along;
+        for (const FVector& Point : Points)
+        {
+            const FVector Relative = Point - Origin;
+            const double T = FVector::DotProduct(Relative, Direction);
+            Along.Add(T);
+            Center += Relative - Direction * T;
+        }
+        Center /= Points.Num();
+        TArray<double> Distances;
+        for (const FVector& Point : Points)
+        {
+            const FVector Relative = Point - Origin;
+            Distances.Add((Relative - Direction * FVector::DotProduct(Relative, Direction) - Center).Size());
+        }
+        const double Low = Percentile(Along, 0.05), High = Percentile(Along, 0.95);
+        // Cross-section shape around the centre line: principal width direction and half extents.
+        double Sxx = 0, Sxy = 0, Syy = 0;
+        const FVector U = FVector::CrossProduct(Direction, FMath::Abs(Direction.Z) < 0.9 ? FVector::UpVector : FVector::ForwardVector).GetSafeNormal();
+        const FVector V = FVector::CrossProduct(Direction, U);
+        for (const FVector& Point : Points)
+        {
+            const FVector Relative = Point - Origin;
+            const FVector Radial = Relative - Direction * FVector::DotProduct(Relative, Direction) - Center;
+            const double X = FVector::DotProduct(Radial, U), Y = FVector::DotProduct(Radial, V);
+            Sxx += X * X; Sxy += X * Y; Syy += Y * Y;
+        }
+        const double Theta = 0.5 * FMath::Atan2(2.0 * Sxy, Sxx - Syy);
+        const FVector Wide = (U * FMath::Cos(Theta) + V * FMath::Sin(Theta)).GetSafeNormal();
+        const FVector Narrow = FVector::CrossProduct(Direction, Wide).GetSafeNormal();
+        TArray<double> WideExtent, NarrowExtent;
+        for (const FVector& Point : Points)
+        {
+            const FVector Relative = Point - Origin;
+            const FVector Radial = Relative - Direction * FVector::DotProduct(Relative, Direction) - Center;
+            WideExtent.Add(FMath::Abs(FVector::DotProduct(Radial, Wide)));
+            NarrowExtent.Add(FMath::Abs(FVector::DotProduct(Radial, Narrow)));
+        }
+        const double HalfWide = Percentile(WideExtent, 0.85), HalfNarrow = Percentile(NarrowExtent, 0.85);
+        FVector StartPoint, EndPoint, WrapAxis = FVector::ZeroVector;
+        double Radius;
+        // A short, flat part (torso slice) is a stadium across its width; limbs run along the bone.
+        if (HalfWide > 1.3 * HalfNarrow && High - Low < 2.0 * HalfWide)
+        {
+            Radius = HalfNarrow;
+            const FVector Mid = Origin + Center + Direction * ((Low + High) * 0.5);
+            StartPoint = Mid - Wide * (HalfWide - HalfNarrow);
+            EndPoint = Mid + Wide * (HalfWide - HalfNarrow);
+            WrapAxis = BoneCS.InverseTransformVectorNoScale(Direction).GetSafeNormal();
+        }
+        else
+        {
+            // A limb tapers (thick upper thigh, slim knee): long parts get one capsule per half,
+            // each with its own radius, so the outer surface stays close along the length.
+            const double Fraction = FMath::Clamp(RadiusPercentile, 0.05f, 0.95f);
+            const double Overall = Percentile(Distances, Fraction);
+            const int32 Pieces = High - Low > 3.0 * Overall ? 2 : 1;
+            for (int32 Piece = 0; Piece < Pieces; ++Piece)
+            {
+                const double From = FMath::Lerp(Low, High, double(Piece) / Pieces), To = FMath::Lerp(Low, High, double(Piece + 1) / Pieces);
+                TArray<double> Local;
+                for (int32 I = 0; I < Points.Num(); ++I)
+                    if (Along[I] >= From - 0.5 && Along[I] <= To + 0.5) Local.Add(Distances[I]);
+                Radius = Local.Num() >= 8 ? Percentile(Local, Fraction) : Overall;
+                // Hemispherical caps add the radius at each end; pull the segment in by half of it
+                // (only at the outer ends; the halves meet in the middle).
+                double A = From + (Piece == 0 ? Radius * 0.5 : 0.0), B = To - (Piece == Pieces - 1 ? Radius * 0.5 : 0.0);
+                if (B < A) A = B = (From + To) * 0.5;
+                FGratiaSurfaceCapsule Capsule;
+                Capsule.Bone = Name;
+                Capsule.StartCm = BoneCS.InverseTransformPosition(Origin + Center + Direction * A);
+                Capsule.EndCm = BoneCS.InverseTransformPosition(Origin + Center + Direction * B);
+                Capsule.RadiusCm = float(FMath::Max(Radius, 0.5));
+                Capsules.Add(Capsule);
+                UE_LOG(LogGratiaSoftBodySetup, Display, TEXT("BODY_SURFACE %s piece=%d vertices=%d radius_cm=%.2f length_cm=%.2f"),
+                    *Name.ToString(), Piece, Local.Num(), Capsule.RadiusCm, float(B - A));
+            }
+            continue;
+        }
+        FGratiaSurfaceCapsule Capsule;
+        Capsule.Bone = Name;
+        Capsule.StartCm = BoneCS.InverseTransformPosition(StartPoint);
+        Capsule.EndCm = BoneCS.InverseTransformPosition(EndPoint);
+        Capsule.RadiusCm = float(FMath::Max(Radius, 0.5));
+        Capsule.WrapAxis = WrapAxis;
+        Capsules.Add(Capsule);
+        UE_LOG(LogGratiaSoftBodySetup, Display, TEXT("BODY_SURFACE %s slice vertices=%d radius_cm=%.2f length_cm=%.2f section=%.1fx%.1f"),
+            *Name.ToString(), Points.Num(), Capsule.RadiusCm, float(FVector::Distance(StartPoint, EndPoint)), HalfWide * 2, HalfNarrow * 2);
+    }
+    return !Capsules.IsEmpty();
+}
+
 bool UGratiaSoftBodySetupLibrary::BuildBodyColliders(USkeletalMesh* SkeletalMesh, const FString& JSONPath, const TArray<FName>& SoftBones,
     float RangeCm, TArray<FGratiaBodyColliderSphere>& Colliders)
 {

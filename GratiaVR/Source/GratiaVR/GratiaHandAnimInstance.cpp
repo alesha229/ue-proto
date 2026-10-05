@@ -19,23 +19,26 @@ struct FGratiaHandProxy : public FAnimInstanceProxy
     UGratiaHandAnimInstance* Owner = nullptr;
     UAnimSequence* Open = nullptr;
     UAnimSequence* Closed = nullptr;
+    UAnimSequence* IndexClosed = nullptr;
+    UAnimSequence* ThumbOpen = nullptr;
     UMirrorDataTable* Mirror = nullptr;
     bool bLeft = false;
     float Alpha[UGratiaHandAnimInstance::NumFingers] = {};
     TArray<int32> BoneFinger;
     // Finger chain joints (compact indices) for the active hand side.
     int32 Joints[UGratiaHandAnimInstance::NumFingers][3];
+    int32 WristJoint = INDEX_NONE, PalmJoint = INDEX_NONE;
     uint16 Serial = 0;
 
     virtual void PreUpdate(UAnimInstance* InInstance, float DeltaSeconds) override
     {
         FAnimInstanceProxy::PreUpdate(InInstance, DeltaSeconds);
         Owner = CastChecked<UGratiaHandAnimInstance>(InInstance);
-        Open = Owner->OpenPose; Closed = Owner->ClosedPose; Mirror = Owner->MirrorTable; bLeft = Owner->bLeftHand;
+        Open = Owner->OpenPose; Closed = Owner->ClosedPose; IndexClosed = Owner->IndexClosedPose; ThumbOpen = Owner->ThumbOpenPose; Mirror = Owner->MirrorTable; bLeft = Owner->bLeftHand;
         for (int32 F = 0; F < UGratiaHandAnimInstance::NumFingers; ++F) Alpha[F] = Owner->FingerAlpha[F];
     }
 
-    void CacheBones(const FBoneContainer& Bones)
+    void CacheHandBones(const FBoneContainer& Bones)
     {
         if (Serial == Bones.GetSerialNumber() && !BoneFinger.IsEmpty()) return;
         Serial = Bones.GetSerialNumber();
@@ -43,9 +46,12 @@ struct FGratiaHandProxy : public FAnimInstanceProxy
         BoneFinger.Init(INDEX_NONE, Bones.GetCompactPoseNumBones());
         const TCHAR* Side = bLeft ? TEXT("_l") : TEXT("_r");
         for (int32 F = 0; F < UGratiaHandAnimInstance::NumFingers; ++F) for (int32 J = 0; J < 3; ++J) Joints[F][J] = INDEX_NONE;
+        WristJoint = PalmJoint = INDEX_NONE;
         for (FCompactPoseBoneIndex Index(0); Index < Bones.GetCompactPoseNumBones(); ++Index)
         {
             const FString Name = Ref.GetBoneName(Bones.MakeMeshPoseIndex(Index).GetInt()).ToString().ToLower();
+            if (Name == FString(TEXT("hand")) + Side) WristJoint = Index.GetInt();
+            if (Name == FString(TEXT("palm")) + Side) PalmJoint = Index.GetInt();
             for (int32 F = 0; F < UGratiaHandAnimInstance::NumFingers; ++F)
             {
                 if (!Name.StartsWith(GratiaHandFingerNames[F])) continue;
@@ -66,13 +72,19 @@ struct FGratiaHandProxy : public FAnimInstanceProxy
         return true;
     }
 
-    void BlendInto(FCompactPose& Out, const FCompactPose& A, const FCompactPose& B, const float* FingerAlpha) const
+    void BlendInto(FCompactPose& Out, const FCompactPose& A, const FCompactPose& B, const FCompactPose* IndexB, const FCompactPose* ThumbA,
+        const float* FingerAlpha) const
     {
         for (FCompactPoseBoneIndex Index : Out.ForEachBoneIndex())
         {
             const int32 F = BoneFinger.IsValidIndex(Index.GetInt()) ? BoneFinger[Index.GetInt()] : INDEX_NONE;
             if (F == INDEX_NONE) { Out[Index] = A[Index]; continue; }
-            Out[Index].Blend(A[Index], B[Index], FMath::Clamp(FingerAlpha[F], 0.0f, 1.0f));
+            // Negative curl extrapolates past the open pose (straighter fingers).
+            const float Curl = FMath::Clamp(FingerAlpha[F], -UGratiaHandAnimInstance::Extension(F), 1.0f);
+            // Thumb: extended (0) to relaxed (1); index: its own curl; others: grasp.
+            if (F == 0 && ThumbA) { Out[Index].Blend((*ThumbA)[Index], A[Index], Curl); continue; }
+            const FCompactPose& Target = F == 1 && IndexB ? *IndexB : B;
+            Out[Index].Blend(A[Index], Target[Index], Curl);
         }
     }
 
@@ -80,14 +92,16 @@ struct FGratiaHandProxy : public FAnimInstanceProxy
     {
         if (!Open || !Closed) { Output.ResetToRefPose(); return true; }
         const FBoneContainer& Bones = Output.Pose.GetBoneContainer();
-        CacheBones(Bones);
-        FCompactPose OpenPose, ClosedPose;
-        OpenPose.SetBoneContainer(&Bones); ClosedPose.SetBoneContainer(&Bones);
-        FBlendedCurve CurveA, CurveB;
-        UE::Anim::FStackAttributeContainer AttrA, AttrB;
+        CacheHandBones(Bones);
+        FCompactPose OpenPose, ClosedPose, IndexPose, ThumbPose;
+        OpenPose.SetBoneContainer(&Bones); ClosedPose.SetBoneContainer(&Bones); IndexPose.SetBoneContainer(&Bones); ThumbPose.SetBoneContainer(&Bones);
+        FBlendedCurve CurveA, CurveB, CurveC, CurveD;
+        UE::Anim::FStackAttributeContainer AttrA, AttrB, AttrC, AttrD;
         SamplePose(Open, 0.0, OpenPose, CurveA, AttrA);
         SamplePose(Closed, Closed->GetPlayLength(), ClosedPose, CurveB, AttrB);
-        BlendInto(Output.Pose, OpenPose, ClosedPose, Alpha);
+        const bool bIndex = IndexClosed && SamplePose(IndexClosed, IndexClosed->GetPlayLength(), IndexPose, CurveC, AttrC);
+        const bool bThumb = ThumbOpen && SamplePose(ThumbOpen, ThumbOpen->GetPlayLength(), ThumbPose, CurveD, AttrD);
+        BlendInto(Output.Pose, OpenPose, ClosedPose, bIndex ? &IndexPose : nullptr, bThumb ? &ThumbPose : nullptr, Alpha);
         if (Owner && !Owner->bSamplesReady.load())
         {
             // Component-space finger joints for every uniform curl step; the game thread
@@ -96,9 +110,15 @@ struct FGratiaHandProxy : public FAnimInstanceProxy
             for (int32 K = 0; K <= UGratiaHandAnimInstance::NumSamples; ++K)
             {
                 float Uniform[UGratiaHandAnimInstance::NumFingers];
-                for (float& Value : Uniform) Value = float(K) / UGratiaHandAnimInstance::NumSamples;
-                BlendInto(Step, OpenPose, ClosedPose, Uniform);
+                for (int32 F = 0; F < UGratiaHandAnimInstance::NumFingers; ++F) Uniform[F] = UGratiaHandAnimInstance::CurlAt(F, K);
+                BlendInto(Step, OpenPose, ClosedPose, bIndex ? &IndexPose : nullptr, bThumb ? &ThumbPose : nullptr, Uniform);
                 FCSPose<FCompactPose> Component; Component.InitPose(Step);
+                if (K == 0)
+                {
+                    Owner->WristSample = WristJoint != INDEX_NONE ? Component.GetComponentSpaceTransform(FCompactPoseBoneIndex(WristJoint)).GetLocation() : FVector::ZeroVector;
+                    Owner->bPalmBone = PalmJoint != INDEX_NONE;
+                    Owner->PalmSample = Owner->bPalmBone ? Component.GetComponentSpaceTransform(FCompactPoseBoneIndex(PalmJoint)).GetLocation() : FVector::ZeroVector;
+                }
                 for (int32 F = 0; F < UGratiaHandAnimInstance::NumFingers; ++F)
                 {
                     FVector Points[3];
@@ -127,26 +147,47 @@ bool UGratiaHandAnimInstance::LoadDefaultPoses()
 {
     if (!OpenPose) OpenPose = LoadObject<UAnimSequence>(nullptr, TEXT("/Game/XRMannequins/Animations/A_MannequinsXR_Idle_Right.A_MannequinsXR_Idle_Right"));
     if (!ClosedPose) ClosedPose = LoadObject<UAnimSequence>(nullptr, TEXT("/Game/XRMannequins/Animations/A_MannequinsXR_Grasp_Right.A_MannequinsXR_Grasp_Right"));
+    if (!IndexClosedPose) IndexClosedPose = LoadObject<UAnimSequence>(nullptr, TEXT("/Game/XRMannequins/Animations/A_MannequinsXR_IndexCurl_Right.A_MannequinsXR_IndexCurl_Right"));
+    if (!ThumbOpenPose) ThumbOpenPose = LoadObject<UAnimSequence>(nullptr, TEXT("/Game/XRMannequins/Animations/A_MannequinsXR_ThumbUp_Right.A_MannequinsXR_ThumbUp_Right"));
     if (!MirrorTable) MirrorTable = LoadObject<UMirrorDataTable>(nullptr, TEXT("/Game/XRMannequins/Animations/MDT_MannequinsXR.MDT_MannequinsXR"));
     return OpenPose && ClosedPose && (!bLeftHand || MirrorTable);
 }
 
 float UGratiaHandAnimInstance::CapFinger(int32 Finger, const FTransform& Component) const
 {
-    if (!bConform || ConformSpheres.IsEmpty() || !bSamplesReady.load()) return 1.0f;
-    auto Touches = [&](int32 K)
+    if (!bConform || (ConformSpheres.IsEmpty() && ConformCapsules.IsEmpty()) || !bSamplesReady.load()) return 1.0f;
+    const float Clearance = FingerRadiusCm + ConformMarginCm;
+    // Deepest overlap of the moving joints and tip with any contact shape at curl sample K.
+    // The knuckle (P = 0) does not move with the curl; a palm resting on the body must not
+    // block the fingers from wrapping, so it is not tested.
+    auto Overlap = [&](int32 K)
     {
-        for (int32 P = 0; P < PointsPerFinger; ++P)
+        double Deepest = -1.0e9;
+        for (int32 P = 1; P < PointsPerFinger; ++P)
         {
             const FVector Point = Component.TransformPosition(Samples[Finger][K][P]);
             for (const FVector4& Sphere : ConformSpheres)
-                if (FVector::Distance(Point, FVector(Sphere.X, Sphere.Y, Sphere.Z)) < Sphere.W + FingerRadiusCm + ConformMarginCm) return true;
+                Deepest = FMath::Max(Deepest, Sphere.W + Clearance - FVector::Distance(Point, FVector(Sphere.X, Sphere.Y, Sphere.Z)));
+            for (const FGratiaConformCapsule& Capsule : ConformCapsules)
+                Deepest = FMath::Max(Deepest, Capsule.Radius + Clearance - FMath::PointDistToSegment(Point, Capsule.A, Capsule.B));
         }
-        return false;
+        return Deepest;
     };
-    if (Touches(0)) return 0.0f;
+    auto Touches = [&](int32 K) { return Overlap(K) > 0.0; };
+    if (Touches(0))
+    {
+        // Already in contact when open (tight spot): take the least overlapping curl.
+        int32 Best = 0;
+        double Least = Overlap(0);
+        for (int32 K = 1; K <= NumSamples; ++K)
+        {
+            const double Value = Overlap(K);
+            if (Value < Least) { Least = Value; Best = K; }
+        }
+        return CurlAt(Finger, Best);
+    }
     for (int32 K = 1; K <= NumSamples; ++K)
-        if (Touches(K)) return float(K - 1) / NumSamples;
+        if (Touches(K)) return CurlAt(Finger, K - 1);
     return 1.0f;
 }
 
@@ -175,7 +216,7 @@ void UGratiaHandAnimInstance::GetFingerPoints(TArray<FVector>& OutWorld) const
     const FTransform Component = Mesh->GetComponentTransform();
     for (int32 F = 0; F < NumFingers; ++F)
     {
-        const float Scaled = FMath::Clamp(FingerAlpha[F], 0.0f, 1.0f) * NumSamples;
+        const float Scaled = FMath::Clamp((FingerAlpha[F] + Extension(F)) / (1.0f + Extension(F)), 0.0f, 1.0f) * NumSamples;
         const int32 K = FMath::Min(FMath::FloorToInt(Scaled), NumSamples - 1);
         const float T = Scaled - K;
         for (int32 P = 2; P < PointsPerFinger; ++P) // distal joint and tip: 10 spheres per hand
@@ -187,12 +228,31 @@ bool UGratiaHandAnimInstance::GetPalmPoint(FVector& OutWorld) const
 {
     const USkeletalMeshComponent* Mesh = GetSkelMeshComponent();
     if (!Mesh || !bSamplesReady.load()) return false;
-    // Knuckles of index..pinky; the hand root is the wrist.
-    FVector Knuckles = FVector::ZeroVector;
-    for (int32 F = 1; F < NumFingers; ++F) Knuckles += Samples[F][0][0];
-    Knuckles /= double(NumFingers - 1);
-    OutWorld = Mesh->GetComponentTransform().TransformPosition(Knuckles * 0.6);
+    FGratiaPalmFrame Frame;
+    if (!GetPalmFrame(Frame)) return false;
+    OutWorld = Mesh->GetComponentTransform().TransformPosition(Frame.Point);
     return !OutWorld.ContainsNaN();
+}
+
+bool UGratiaHandAnimInstance::GetPalmFrame(FGratiaPalmFrame& Out) const
+{
+    if (!bSamplesReady.load()) return false;
+    FVector Knuckles = FVector::ZeroVector, Closed = FVector::ZeroVector;
+    for (int32 F = 1; F < NumFingers; ++F)
+    {
+        Knuckles += Samples[F][0][0];
+        // Curled finger tips lie on the palm side of the knuckle line.
+        Closed += Samples[F][NumSamples][3];
+    }
+    Knuckles /= double(NumFingers - 1);
+    Closed /= double(NumFingers - 1);
+    Out.Point = bPalmBone ? PalmSample : FMath::Lerp(WristSample, Knuckles, 0.6);
+    Out.Finger = (Knuckles - WristSample).GetSafeNormal();
+    Out.Normal = FVector::VectorPlaneProject(Closed - Knuckles, Out.Finger).GetSafeNormal();
+    Out.RestPoints.Reset();
+    for (int32 F = 0; F < NumFingers; ++F)
+        for (int32 P = 1; P < PointsPerFinger; ++P) Out.RestPoints.Add(Samples[F][0][P]);
+    return !Out.Point.ContainsNaN() && Out.Finger.IsNormalized() && Out.Normal.IsNormalized();
 }
 
 FString UGratiaHandAnimInstance::GetDiagnostics() const

@@ -16,7 +16,7 @@ New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
 $logPath = Join-Path $evidenceRoot 'packaged_soft_body_qa.log'
 $resultPath = Join-Path $evidenceRoot 'packaged_soft_body_result.json'
 $shotRoot = Join-Path $archiveRoot 'GratiaVR\Saved\Screenshots\Windows'
-if (Test-Path -LiteralPath $shotRoot) { Get-ChildItem -LiteralPath $shotRoot -Filter 'GratiaSoftPress_*.png' | Remove-Item -Force }
+if (Test-Path -LiteralPath $shotRoot) { Get-ChildItem -LiteralPath $shotRoot -Filter 'Gratia*_*.png' | Where-Object { $_.Name -like 'GratiaSoftPress_*' -or $_.Name -like 'GratiaBodyGrip_*' } | Remove-Item -Force }
 $began = [DateTimeOffset]::UtcNow
 # A normal RHI keeps the packaged animation and hand mesh paths identical to play;
 # NullRHI is not used for this rendered desktop run.
@@ -64,6 +64,10 @@ foreach ($zone in ([regex]::Matches($logText, 'SOFT_BODY_QA_ZONE (\S+)') | ForEa
     }
     $press += [pscustomobject]$entry
 }
+# Wrapping-grip captures (forearm, thigh, waist) for visual review.
+$gripShots = @(Get-ChildItem -LiteralPath $shotRoot -Filter 'GratiaBodyGrip_*.png' -ErrorAction SilentlyContinue)
+foreach ($shot in $gripShots) { Copy-Item -LiteralPath $shot.FullName -Destination (Join-Path $evidenceRoot ('body_grip_' + $shot.Name.Substring(15))) -Force }
+$gripChecks = ([regex]::Matches($logText, 'SOFT_BODY_QA_CHECK PASS .*(palm rests|palm faces|fingers wrap|stay outside the body)')).Count
 $pressPassed = $press.Count -ge 1 -and -not ($press | Where-Object { -not $_.captures -or $_.press_changed_percent -lt 1.0 -or $_.dent_changed_percent -le 0 })
 $pass = -not $timedOut -and $gameProcess.ExitCode -eq 0 -and $freshLog -and $buildMatched -and $markerPassed -and -not $failureDetected -and $materialsPassed -and $pressPassed
 [pscustomobject]@{
@@ -72,7 +76,7 @@ $pass = -not $timedOut -and $gameProcess.ExitCode -eq 0 -and $freshLog -and $bui
     began_utc = $began.ToString('o'); finished_utc = [DateTimeOffset]::UtcNow.ToString('o')
     exit_code = $gameProcess.ExitCode; timed_out = $timedOut; passed = $pass; fresh_log = $freshLog
     build_matched = $buildMatched; marker_passed = $markerPassed; failure_detected = $failureDetected; materials_passed = $materialsPassed
-    press_captures_passed = $pressPassed; press = $press
+    press_captures_passed = $pressPassed; press = $press; body_grip_shots = $gripShots.Count; body_grip_checks = $gripChecks
     check_count = ([regex]::Matches($logText, 'SOFT_BODY_QA_CHECK PASS')).Count
     log = $logPath; source = 'synthetic-soft-body-QA'; real_vr_acceptance = $false; nullrhi = $false
 } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $resultPath -Encoding utf8

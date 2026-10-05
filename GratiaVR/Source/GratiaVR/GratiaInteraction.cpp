@@ -1,6 +1,7 @@
 #include "GratiaInteraction.h"
 #include "GratiaPreviewCharacter.h"
 #include "GratiaAnimInstance.h"
+#include "GratiaBodySurface.h"
 #include "Camera/CameraComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "GameFramework/Pawn.h"
@@ -214,8 +215,12 @@ void UGratiaInteraction::GatherCollisionShapes(TArray<FGratiaContactShape>& Shap
     if (!Character.IsValid() || !Character->CharacterProfile) return;
     const UGratiaCharacterProfile* Profile = Character->CharacterProfile;
     const double Scale = CharacterScale();
-    const double HandRadius = Nonnegative(Profile->ContactSettings.HandRadiusCm);
-    for (const FGratiaCollisionProxyDefinition& Proxy : Profile->CollisionProxies)
+    // Skin-fitted surface: the palm (small radius) rests on the skin instead of a wrist sphere
+    // stopping at the conservative proxies.
+    const bool bSurface = Profile->HandSurface.bEnabled && Character->BodySurface && Character->BodySurface->HasSurface();
+    const double HandRadius = bSurface ? Nonnegative(Profile->HandSurface.PalmContactRadiusCm) * Scale : Nonnegative(Profile->ContactSettings.HandRadiusCm);
+    if (bSurface) Character->BodySurface->GatherContactShapes(float(HandRadius), Shapes);
+    for (const FGratiaCollisionProxyDefinition& Proxy : bSurface ? TArray<FGratiaCollisionProxyDefinition>() : Profile->CollisionProxies)
     {
         FVector Start, End;
         if (!FMath::IsFinite(Proxy.Radius) || Proxy.Radius <= 0.0f
@@ -232,12 +237,15 @@ void UGratiaInteraction::GatherCollisionShapes(TArray<FGratiaContactShape>& Shap
     if (SceneBounds(Center, Extent)) Shapes.Add(FGratiaContactShape::Box(Center, Extent + FVector(HandRadius)));
 }
 
-FTransform UGratiaInteraction::ConstrainHand(const FTransform& From, const FTransform& Target, bool bLeft) const
+FTransform UGratiaInteraction::ConstrainHand(const FTransform& From, const FTransform& Target, bool bLeft, const FVector& PalmLocal) const
 {
     const int32 HandIndex = bLeft ? 0 : 1;
     TArray<FGratiaContactShape> Shapes;
     GatherCollisionShapes(Shapes);
-    const FGratiaContactSolveResult Solved = GratiaContactSolver::Solve(From.GetLocation(), Target.GetLocation(), Shapes);
+    const FVector FromPalm = From.TransformPositionNoScale(PalmLocal), TargetPalm = Target.TransformPositionNoScale(PalmLocal);
+    const FGratiaContactSolveResult Palm = GratiaContactSolver::Solve(FromPalm, TargetPalm, Shapes);
+    FGratiaContactSolveResult Solved = Palm;
+    Solved.Position = Palm.Position - (TargetPalm - Target.GetLocation());
     LastConstraint[HandIndex] = Solved;
     const bool bUnsafe = !Solved.bInputValid || !Solved.bConverged || Solved.bUsedFallback
         || Solved.StartCorrectionDistance > Nonnegative(ContactSettings.MaxHandCorrectionCm)

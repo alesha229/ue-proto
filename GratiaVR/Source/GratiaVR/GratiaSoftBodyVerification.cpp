@@ -1,6 +1,7 @@
 #include "GratiaSoftBodyVerification.h"
 
 #include "GratiaAnimInstance.h"
+#include "GratiaBodySurface.h"
 #include "GratiaCharacterProfile.h"
 #include "GratiaHandAnimInstance.h"
 #include "GratiaInteraction.h"
@@ -98,7 +99,7 @@ TArray<FVector> UGratiaSoftBodyVerification::TipsInParentFrame() const
     return Result;
 }
 
-void UGratiaSoftBodyVerification::AimCamera(const FVector& Center, const FVector& OutwardDir)
+void UGratiaSoftBodyVerification::AimCamera(const FVector& Center, const FVector& OutwardDir, bool bFrontal)
 {
     APlayerController* Controller = UGameplayStatics::GetPlayerController(this, 0);
     if (!Controller || !FApp::CanEverRender()) return;
@@ -110,7 +111,8 @@ void UGratiaSoftBodyVerification::AimCamera(const FVector& Center, const FVector
     // Look from the body's outer side so the other soft part does not hide this one.
     if (FVector::DotProduct(Side, Center - Character->GetActorLocation()) < 0) Side = -Side;
     const FVector Focus = Center + OutwardDir * 4.0;
-    const FVector Eye = Focus + Side * 48.0 + OutwardDir * 12.0 + Up * 4.0;
+    // Frontal: from outside along the surface normal, slightly to the side and above.
+    const FVector Eye = bFrontal ? Focus + OutwardDir * 42.0 + Side * 14.0 + Up * 10.0 : Focus + Side * 48.0 + OutwardDir * 12.0 + Up * 4.0;
     ShotCamera->SetActorLocationAndRotation(Eye, (Focus - Eye).Rotation());
     ShotCamera->GetCameraComponent()->FieldOfView = 55.0f;
     Controller->SetViewTarget(ShotCamera);
@@ -350,9 +352,122 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
         UE_LOG(LogGratiaSoftBodyQA, Display, TEXT("SOFT_BODY_QA_CONFORM %s"), *HandAnim->GetDiagnostics());
         Check(ConformedFingers >= 3, FString::Printf(TEXT("fingers stop on the soft surface (%d of 5 capped below a full fist)"), ConformedFingers));
         Check(Deepest <= 1.0, FString::Printf(TEXT("finger tips stay outside the contact volume (deepest %.2fcm)"), Deepest));
-        TestHand->DestroyComponent(); TestHand = nullptr;
-        Character->Interaction->bBodyMotion = false;
-        Advance(EPhase::Disabled);
+        Advance(EPhase::BodyGrip);
+        break;
+    }
+    case EPhase::BodyGrip:
+    {
+        // A real XR hand starts off-axis near an arm, a leg and the waist; the grip helper must
+        // detect the part, put the palm on it across the part's axis and wrap the fingers.
+        auto* Surface = Character->BodySurface.Get();
+        auto* HandAnim = TestHand ? Cast<UGratiaHandAnimInstance>(TestHand->GetAnimInstance()) : nullptr;
+        const auto* Profile = Character->CharacterProfile.Get();
+        auto Done = [this]()
+        {
+            if (TestHand) { TestHand->DestroyComponent(); TestHand = nullptr; }
+            Character->Interaction->bBodyMotion = false;
+            Advance(EPhase::Disabled);
+        };
+        if (GripIndex == 0 && GripParts.IsEmpty() && PhaseSeconds <= Delta)
+        {
+            for (const TCHAR* Token : {TEXT("forearm_L"), TEXT("thigh_L"), TEXT("spine_001")})
+                for (const FGratiaSurfaceCapsule& Capsule : Profile->BodySurface)
+                    if (Capsule.Bone.ToString().Contains(Token)) { GripParts.Add(Capsule.Bone); break; }
+            if (!Check(Surface && HandAnim && Surface->HasSurface() && GripParts.Num() >= 2,
+                FString::Printf(TEXT("body surface has grip targets (%d of forearm/thigh/waist)"), GripParts.Num()))) { Done(); break; }
+        }
+        if (GripIndex >= GripParts.Num()) { Done(); break; }
+        const FName Bone = GripParts[GripIndex];
+        FVector A, B; float Radius;
+        FGratiaPalmFrame Palm;
+        if (!Surface->GetBoneCapsule(Bone, A, B, Radius) || !HandAnim->GetPalmFrame(Palm))
+        {
+            Check(false, FString::Printf(TEXT("%s capsule and palm frame available"), *Bone.ToString()));
+            ++GripIndex; Advance(EPhase::BodyGrip); break;
+        }
+        const float Thickness = Profile->HandSurface.PalmThicknessCm;
+        if (PhaseSeconds <= Delta)
+        {
+            // Upper thigh (near the hip): lower down the hanging hand is in front of it.
+            const FVector Mid = FMath::Lerp(A, B, Bone.ToString().Contains(TEXT("thigh")) ? 0.25 : 0.5);
+            GripAxis = (B - A).GetSafeNormal();
+            // Approach horizontally from outside the body (the actor origin is at the feet).
+            const FVector Up = Character->GetActorUpVector();
+            FVector Out = FVector::VectorPlaneProject(FVector::VectorPlaneProject(Mid - Character->GetActorLocation(), Up),
+                GripAxis.IsZero() ? Up : GripAxis).GetSafeNormal();
+            // Legs and torso from the front: from the side the hanging arm is nearer.
+            if (Out.Size() < 0.5 || !Bone.ToString().Contains(TEXT("arm")))
+                Out = FVector::VectorPlaneProject(Character->GetActorForwardVector(), GripAxis.IsZero() ? Up : GripAxis).GetSafeNormal();
+            // The idle hands hang in front of the thighs: hold the thigh from behind and outside.
+            if (Bone.ToString().Contains(TEXT("thigh")))
+            {
+                const FVector Lateral = FVector::VectorPlaneProject(Mid - Character->GetActorLocation(), Up).GetSafeNormal();
+                Out = FVector::VectorPlaneProject(Lateral - Out, GripAxis.IsZero() ? Up : GripAxis).GetSafeNormal();
+            }
+            // Worst case start: palm tilted 35 degrees, fingers along the part, 3.5 cm away.
+            const FVector Along = GripAxis.IsZero() ? FVector::UpVector : GripAxis;
+            const FVector TiltAxis = FVector::CrossProduct(Out, Along).GetSafeNormal();
+            const FVector StartNormal = FQuat(TiltAxis, FMath::DegreesToRadians(35.0f)).RotateVector(-Out);
+            const FVector StartFinger = FVector::VectorPlaneProject(Along, StartNormal).GetSafeNormal();
+            const FQuat Rotation = FRotationMatrix::MakeFromXZ(StartFinger, StartNormal).ToQuat()
+                * FRotationMatrix::MakeFromXZ(Palm.Finger, Palm.Normal).ToQuat().Inverse();
+            const FVector PalmStart = Mid + Out * (Radius + Thickness + 3.5);
+            const FTransform StartPose(Rotation, PalmStart - Rotation.RotateVector(Palm.Point));
+            FGratiaSurfaceHit Hit;
+            const bool bFound = Surface->FindNearest(PalmStart, Profile->HandSurface.GripReachCm + Thickness, Hit, false);
+            // The torso is several slices; any of them is the waist/torso part.
+            const FString Name = Bone.ToString();
+            const bool bTorso = Name.Contains(TEXT("spine")) || Name.Contains(TEXT("pelvis"));
+            const FString Found = bFound ? Hit.Bone.ToString() : FString();
+            const bool bSamePart = bTorso ? (Found.Contains(TEXT("spine")) || Found.Contains(TEXT("pelvis")))
+                : Found.Contains(Name.Contains(TEXT("thigh")) ? TEXT("thigh") : TEXT("forearm"));
+            Check(bFound && bSamePart, FString::Printf(TEXT("grip near %s detects that part (found %s)"), *Name, bFound ? *Found : TEXT("nothing")));
+            if (bFound) GripParts[GripIndex] = Hit.Bone;
+            TestHand->SetWorldTransform(bFound ? UGratiaBodySurface::SolveWrap(StartPose, Palm, Hit, Thickness,
+                Settings.FingerRadiusCm + Settings.FingerConformMarginCm) : StartPose);
+            if (bFound) AimCamera(Hit.Point, Hit.Normal, true);
+            HandAnim->bConform = true; HandAnim->FingerRadiusCm = Settings.FingerRadiusCm; HandAnim->ConformMarginCm = Settings.FingerConformMarginCm;
+            for (int32 F = 0; F < UGratiaHandAnimInstance::NumFingers; ++F) { HandAnim->FingerInput[F] = 1.0f; HandAnim->FingerAlpha[F] = 0.0f; }
+        }
+        Surface->GatherConformShapes(TestHand->GetComponentTransform().TransformPosition(Palm.Point), 30.0f, HandAnim->ConformSpheres, HandAnim->ConformCapsules);
+        if (PhaseSeconds < 1.3f) break;
+        FVector PalmPoint, PalmNormal, PalmFinger;
+        UGratiaBodySurface::PalmWorld(TestHand->GetComponentTransform(), Palm, PalmPoint, PalmNormal, PalmFinger);
+        FGratiaSurfaceHit OnPart;
+        Surface->FindOnBone(Bone, PalmPoint, OnPart);
+        const float Facing = FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(FVector::DotProduct(PalmNormal, -OnPart.Normal), -1.0, 1.0)));
+        const float Across = OnPart.WrapAxis.IsZero() ? 0.0f : FMath::Abs(FVector::DotProduct(PalmFinger, OnPart.WrapAxis));
+        int32 Wrapped = 0;
+        for (int32 F = 1; F < UGratiaHandAnimInstance::NumFingers; ++F)
+            if (HandAnim->FingerCap[F] < 0.98f && FMath::IsNearlyEqual(HandAnim->FingerAlpha[F], HandAnim->FingerCap[F], 0.06f)) ++Wrapped;
+        TArray<FVector> Points;
+        HandAnim->GetFingerPoints(Points);
+        double Deepest = -100.0;
+        int32 DeepestPoint = INDEX_NONE;
+        constexpr double FingerFlesh = 0.8;
+        for (int32 I = 0; I < Points.Num(); ++I)
+        {
+            const FVector& Point = Points[I];
+            double Depth = -100.0;
+            for (const FGratiaConformCapsule& Capsule : HandAnim->ConformCapsules)
+                Depth = FMath::Max(Depth, Capsule.Radius + FingerFlesh - FMath::PointDistToSegment(Point, Capsule.A, Capsule.B));
+            for (const FVector4& Sphere : HandAnim->ConformSpheres)
+                Depth = FMath::Max(Depth, Sphere.W + FingerFlesh - FVector::Distance(Point, FVector(Sphere.X, Sphere.Y, Sphere.Z)));
+            if (Depth > Deepest) { Deepest = Depth; DeepestPoint = I; }
+        }
+        Shoot(FString::Printf(TEXT("GratiaBodyGrip_%s"), *Bone.ToString()));
+        // Points are (distal joint, tip) per finger: thumb, index, middle, ring, pinky.
+        UE_LOG(LogGratiaSoftBodyQA, Display, TEXT("BODY_GRIP_QA deepest at finger %d %s"), DeepestPoint / 2, DeepestPoint % 2 ? TEXT("tip") : TEXT("joint"));
+        UE_LOG(LogGratiaSoftBodyQA, Display, TEXT("BODY_GRIP_QA part=%s radius=%.1fcm palm_gap=%.2fcm facing=%.1fdeg across=%.2f wrapped=%d deepest=%.2fcm %s"),
+            *Bone.ToString(), Radius, OnPart.Gap, Facing, Across, Wrapped, Deepest, *HandAnim->GetDiagnostics());
+        Check(OnPart.Gap >= Thickness - 0.6f && OnPart.Gap <= Thickness + 3.0f,
+            FString::Printf(TEXT("%s palm rests on the surface (gap %.2fcm, palm %.2fcm, open fingers may lift it up to 3cm)"), *Bone.ToString(), OnPart.Gap, Thickness));
+        Check(Facing <= 12.0f, FString::Printf(TEXT("%s palm faces the part (%.1f deg)"), *Bone.ToString(), Facing));
+        Check(Across <= 0.35f, FString::Printf(TEXT("%s fingers run around the part (axis dot %.2f)"), *Bone.ToString(), Across));
+        Check(Wrapped >= 3, FString::Printf(TEXT("%s fingers wrap and stop on the surface (%d of 4)"), *Bone.ToString(), Wrapped));
+        Check(Deepest <= 1.0, FString::Printf(TEXT("%s fingers stay outside the body (deepest %.2fcm)"), *Bone.ToString(), Deepest));
+        ++GripIndex;
+        Advance(EPhase::BodyGrip);
         break;
     }
     case EPhase::Disabled:

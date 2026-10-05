@@ -6,6 +6,8 @@
 #include "GratiaMenu.h"
 #include "GratiaSecondaryMotion.h"
 #include "GratiaSoftBodyInteraction.h"
+#include "GratiaBodySurface.h"
+#include "GratiaCharacterProfile.h"
 #include "GratiaHandAnimInstance.h"
 #include "GratiaBuildInfo.h"
 #include "GratiaHandInput.h"
@@ -376,11 +378,16 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
     }
 
     FTransform VisualWorld = Hand.LastWorld;
+    if (Hand.Gate.State != EGratiaHandState::Tracked && !Hand.GripBone.IsNone()) ReleaseBodyGrip(Hand, bLeft, TEXT("tracking"));
     if (Hand.Gate.State == EGratiaHandState::Tracked)
     {
-        const FTransform ContactTarget = TargetCharacter.IsValid() && TargetCharacter->Interaction
-            ? TargetCharacter->Interaction->ConstrainHand(Hand.LastWorld, Target, bLeft) : Target;
-        const bool bBlocked = !ContactTarget.GetLocation().Equals(Target.GetLocation(), 0.1);
+        // The palm collides with the body surface (not a wide sphere around the wrist).
+        FGratiaPalmFrame Palm;
+        const FVector PalmLocal = Hand.HandAnim.IsValid() && Hand.HandAnim->GetPalmFrame(Palm) ? Palm.Point * Target.GetScale3D() : FVector::ZeroVector;
+        const FTransform Constrained = TargetCharacter.IsValid() && TargetCharacter->Interaction
+            ? TargetCharacter->Interaction->ConstrainHand(Hand.LastWorld, Target, bLeft, PalmLocal) : Target;
+        const FTransform ContactTarget = ApplyBodySurface(Hand, bLeft, Target, Constrained, DeltaSeconds);
+        const bool bBlocked = !ContactTarget.Equals(Target, 0.01);
         // Exact original local transform retains the template's late controller update and hand alignment.
         if (bBlocked)
         {
@@ -444,7 +451,10 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
                 if (Hand.Visual->GetAttachParent()) Hand.Visual->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
                 Hand.Visual->SetWorldLocation(SoftBody->GetPressPoint(bLeft) - (VisiblePalm - VisualWorld.GetLocation()), false, nullptr, ETeleportType::TeleportPhysics);
             }
-            UpdateHaptics(Hand, bLeft, bAllowed && bXRActive ? SoftBody->GetHapticAmplitude(bLeft) : 0.0f, SoftBody->GetHapticFrequency(bLeft));
+            // Grip onto a body part gives a short tap; soft-zone vibration follows depth.
+            Hand.GripPulse = FMath::Max(0.0f, Hand.GripPulse - DeltaSeconds);
+            const float Amplitude = FMath::Max(SoftBody->GetHapticAmplitude(bLeft), Hand.GripPulse > 0 ? 0.45f : 0.0f);
+            UpdateHaptics(Hand, bLeft, bAllowed && bXRActive ? Amplitude : 0.0f, Hand.GripPulse > 0 ? 0.3f : SoftBody->GetHapticFrequency(bLeft));
         }
     }
     UpdateHandPose(Hand, bLeft, VisualWorld.GetLocation());
@@ -461,15 +471,102 @@ void AGratiaStage1Runtime::UpdateHandPose(FHandProxy& Hand, bool bLeft, const FV
     auto* Anim = Hand.HandAnim.Get();
     const float Grasp = HandInput ? HandInput->GetGrasp(bLeft) : 0.0f;
     const float Index = HandInput ? HandInput->GetIndexCurl(bLeft) : 0.0f;
-    Anim->FingerInput[0] = Grasp; Anim->FingerInput[1] = Index;
-    Anim->FingerInput[2] = Anim->FingerInput[3] = Anim->FingerInput[4] = Grasp;
+    // Wrapping grip closes every finger onto the part; near a surface the fingers rest on it.
+    const float Rest = Hand.GripBone.IsNone() ? 0.85f * Hand.SurfaceWeight : 1.0f;
+    // Thumb: 1 is its relaxed pose; contact caps extend it out of the body.
+    Anim->FingerInput[0] = Anim->ThumbOpenPose ? 1.0f : FMath::Max(Grasp, Rest);
+    Anim->FingerInput[1] = FMath::Max(Index, Rest);
+    Anim->FingerInput[2] = Anim->FingerInput[3] = Anim->FingerInput[4] = FMath::Max(Grasp, Rest);
     const auto* Profile = TargetCharacter.IsValid() ? TargetCharacter->CharacterProfile.Get() : nullptr;
     Anim->bConform = Profile && Profile->SoftBody.bFingerConform && Hand.Gate.CanInteract();
     if (Profile) { Anim->FingerRadiusCm = Profile->SoftBody.FingerRadiusCm; Anim->ConformMarginCm = Profile->SoftBody.FingerConformMarginCm; }
     // Squeezing (grip) lets the fingers sink into soft zones; the press dent opens under them.
-    if (Anim->bConform && TargetCharacter->SoftBodyInteraction)
+    Anim->ConformCapsules.Reset();
+    if (Anim->bConform && TargetCharacter->BodySurface && TargetCharacter->BodySurface->HasSurface())
+        TargetCharacter->BodySurface->GatherConformShapes(Near, 30.0f, Anim->ConformSpheres, Anim->ConformCapsules, Profile->SoftBody.SquishDepthCm * Grasp);
+    else if (Anim->bConform && TargetCharacter->SoftBodyInteraction)
         TargetCharacter->SoftBodyInteraction->GetConformSpheres(Near, 30.0f, Anim->ConformSpheres, Profile->SoftBody.SquishDepthCm * Grasp);
     else Anim->ConformSpheres.Reset();
+}
+
+void AGratiaStage1Runtime::ReleaseBodyGrip(FHandProxy& Hand, bool bLeft, const TCHAR* Reason)
+{
+    if (Hand.GripBone.IsNone()) return;
+    UE_LOG(LogGratiaStage1, Display, TEXT("BODY_GRIP_RELEASE hand=%s part=%s reason=%s"), bLeft ? TEXT("L") : TEXT("R"), *Hand.GripBone.ToString(), Reason);
+    Hand.GripBone = NAME_None;
+    Hand.GripBlend = 1.0f;
+}
+
+FTransform AGratiaStage1Runtime::ApplyBodySurface(FHandProxy& Hand, bool bLeft, const FTransform& Target, const FTransform& Constrained, float DeltaSeconds)
+{
+    Hand.SurfaceWeight = 0.0f;
+    AGratiaPreviewCharacter* Character = TargetCharacter.Get();
+    const UGratiaCharacterProfile* Profile = Character ? Character->CharacterProfile.Get() : nullptr;
+    UGratiaBodySurface* Surface = Character ? Character->BodySurface.Get() : nullptr;
+    FGratiaPalmFrame Palm;
+    if (!Profile || !Profile->HandSurface.bEnabled || !Surface || !Hand.HandAnim.IsValid() || !Hand.HandAnim->GetPalmFrame(Palm)
+        || (Menu && Menu->bOpen) || !Character->CharacterMesh)
+    {
+        ReleaseBodyGrip(Hand, bLeft, TEXT("unavailable"));
+        return Constrained;
+    }
+    const FGratiaHandSurfaceSettings& Settings = Profile->HandSurface;
+    const float Grip = HandInput ? HandInput->GetGrip(bLeft) : 0.0f;
+    const USkeletalMeshComponent* Mesh = Character->CharacterMesh.Get();
+    auto BoneFrame = [Mesh](FName Bone, FTransform& Out)
+    {
+        const int32 Index = Mesh->GetBoneIndex(Bone);
+        if (Index == INDEX_NONE) return false;
+        const FTransform World = Mesh->GetBoneTransform(Index);
+        Out = FTransform(World.GetRotation(), World.GetLocation());
+        return !Out.ContainsNaN();
+    };
+    if (!Hand.GripBone.IsNone())
+    {
+        // Held: the hand rides on the body part; it lets go on release or when pulled away.
+        FTransform Bone;
+        if (!BoneFrame(Hand.GripBone, Bone)) { ReleaseBodyGrip(Hand, bLeft, TEXT("missing bone")); return Constrained; }
+        const FTransform Held = Hand.GripRelative * Bone;
+        const double Pull = FVector::Distance(Target.TransformPosition(Palm.Point), Held.TransformPosition(Palm.Point));
+        if (Grip <= Settings.GripReleaseInput) ReleaseBodyGrip(Hand, bLeft, TEXT("grip released"));
+        else if (Pull > Settings.GripBreakDistanceCm) ReleaseBodyGrip(Hand, bLeft, TEXT("pulled away"));
+        else
+        {
+            Hand.GripBlend = FMath::Min(1.0f, Hand.GripBlend + DeltaSeconds / FMath::Max(0.01f, Settings.GripBlendSeconds));
+            return BlendTransform(Hand.GripFrom, Held, FMath::SmoothStep(0.0f, 1.0f, Hand.GripBlend));
+        }
+        Hand.bGripArmed = false;
+        return Constrained;
+    }
+    if (Grip <= Settings.GripReleaseInput) Hand.bGripArmed = true;
+    FGratiaSurfaceHit Hit;
+    const FVector PalmPoint = Constrained.TransformPosition(Palm.Point);
+    // Soft zones keep their own trigger/grip grab; limbs and torso are wrapped here.
+    if (Hand.bGripArmed && Grip >= Settings.GripStartInput
+        && Surface->FindNearest(PalmPoint, Settings.GripReachCm + Settings.PalmThicknessCm, Hit, false))
+    {
+        FTransform Bone;
+        if (BoneFrame(Hit.Bone, Bone))
+        {
+            const FTransform Wrap = UGratiaBodySurface::SolveWrap(Constrained, Palm, Hit, Settings.PalmThicknessCm,
+                Profile->SoftBody.FingerRadiusCm + Profile->SoftBody.FingerConformMarginCm);
+            Hand.GripBone = Hit.Bone;
+            Hand.GripRelative = Wrap.GetRelativeTransform(Bone);
+            Hand.GripFrom = Hand.LastWorld;
+            Hand.GripBlend = 0.0f;
+            Hand.bGripArmed = false;
+            Hand.GripPulse = 0.07f;
+            UE_LOG(LogGratiaStage1, Display, TEXT("BODY_GRIP hand=%s part=%s gap=%.1fcm radius=%.1fcm"),
+                bLeft ? TEXT("L") : TEXT("R"), *Hit.Bone.ToString(), Hit.Gap, Hit.Radius);
+            return Hand.GripFrom;
+        }
+    }
+    if (Settings.AdaptDistanceCm > 0 && Surface->FindNearest(PalmPoint, Settings.AdaptDistanceCm + Settings.PalmThicknessCm, Hit, true))
+    {
+        Hand.SurfaceWeight = 1.0f - FMath::Clamp((Hit.Gap - Settings.PalmThicknessCm) / Settings.AdaptDistanceCm, 0.0f, 1.0f);
+        return UGratiaBodySurface::LeanToSurface(Constrained, Palm, Hit, Hand.SurfaceWeight, Settings.AdaptMaxDegrees, Settings.PalmThicknessCm);
+    }
+    return Constrained;
 }
 
 void AGratiaStage1Runtime::UpdateHaptics(FHandProxy& Hand, bool bLeft, float Amplitude, float Frequency)
@@ -583,6 +680,8 @@ FString AGratiaStage1Runtime::GetStatusText() const
         HandInput ? *HandInput->GetDiagnostics() : TEXT("Hand input missing"),
         TargetCharacter.IsValid() && TargetCharacter->SecondaryMotion ? *TargetCharacter->SecondaryMotion->GetHandDiagnostics() : TEXT("Physics missing"),
         TargetCharacter.IsValid() && TargetCharacter->SoftBodyInteraction ? *(TargetCharacter->SoftBodyInteraction->GetDiagnostics()
+            + TEXT("\nBody grip: L ") + (LeftHand.GripBone.IsNone() ? FString(TEXT("-")) : LeftHand.GripBone.ToString())
+            + TEXT(" | R ") + (RightHand.GripBone.IsNone() ? FString(TEXT("-")) : RightHand.GripBone.ToString())
             + TEXT("\nHands: L ") + (LeftHand.HandAnim.IsValid() ? LeftHand.HandAnim->GetDiagnostics() : FString(TEXT("default")))
             + TEXT(" | R ") + (RightHand.HandAnim.IsValid() ? RightHand.HandAnim->GetDiagnostics() : FString(TEXT("default"))))
             : TEXT("Soft body missing"), TEXT(GRATIA_BUILD_ID));

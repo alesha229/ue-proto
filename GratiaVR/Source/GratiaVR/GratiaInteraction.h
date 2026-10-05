@@ -37,7 +37,8 @@ public:
     virtual void TickComponent(float Delta, ELevelTick Type, FActorComponentTickFunction* Tick) override;
     void SetHandSample(bool bLeft, const FTransform& Raw, const FTransform& Visual, bool bAllowed);
     bool IsHandSampleReady(bool bLeft) const { return Hands[bLeft ? 0 : 1].bAllowed; }
-    FTransform ConstrainHand(const FTransform& From, const FTransform& Target, bool bLeft = false) const;
+    /** PalmLocal: palm centre in the hand transform's space; the palm (not the wrist) collides. */
+    FTransform ConstrainHand(const FTransform& From, const FTransform& Target, bool bLeft = false, const FVector& PalmLocal = FVector::ZeroVector) const;
     UFUNCTION(BlueprintCallable, Category = "Interaction")
     void RebuildProfileZones();
     UFUNCTION(BlueprintCallable, Category = "Interaction")
