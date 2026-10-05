@@ -68,7 +68,8 @@ not_torso = ("arm", "hand", "shoulder", "thigh", "shin", "foot", "tail", "hair",
 slice_vertex_bones = [b for b in bones if b not in soft and b != head and b not in neck
                       and not any(t in b.lower() for t in not_torso)]
 slices = tagged(setup.measure_torso_slices(mesh, include, slice_vertex_bones, attach, 3.5), True, False)
-softs = tagged(setup.measure_sphere_surface(mesh, include, soft, 0.8), False, True)
+# Soft parts: median radius (through the skin, not around it); the dent shows the contact.
+softs = tagged(setup.measure_sphere_surface(mesh, include, soft, 0.5), False, True)
 heads = tagged(setup.measure_sphere_surface(mesh, head_include, [head], 0.8), False, False)
 necks = tagged(setup.measure_body_surface(mesh, head_include, [b for b in bones if b not in neck], 20, 0.8), False, False)
 assert limbs and slices, "body surface fit failed"

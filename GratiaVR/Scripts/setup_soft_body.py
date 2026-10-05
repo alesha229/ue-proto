@@ -51,6 +51,11 @@ settings.set_editor_property('enabled', True)
 settings.set_editor_property('chains', chains)
 # Full trigger/grip lets the fingers sink this deep into a breast/butt (stronger squeeze).
 settings.set_editor_property('squish_depth_cm', 3.5)
+# Contact volume and surface dent = the palm itself (palm skin ~1.5 cm from the palm centre):
+# nothing squeezes, dents or vibrates before the visible palm reaches the skin.
+settings.set_editor_property('palm_radius_cm', 1.5)
+settings.set_editor_property('press_palm_radius_cm', 1.5)
+settings.set_editor_property('hand_push_fraction', 1.0)
 settings.set_editor_property('body_colliders', colliders)
 profile.set_editor_property('soft_body', settings)
 # KawaiiPhysics owns these bones; the rigid secondary path must not simulate them too.

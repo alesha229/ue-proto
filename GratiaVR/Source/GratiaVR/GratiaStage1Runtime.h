@@ -204,6 +204,12 @@ public:
     float RenderThreadMs = 0.0f;
 
     float GPUFrameMs = 0.0f;
+    /** Frame-time log window: worst frame and its thread times, slow frame count (VR hitch diagnosis). */
+    float PerfWindowSeconds = 0.0f, PerfWorstMs = 0.0f, PerfWorstGameMs = 0.0f, PerfWorstRenderMs = 0.0f, PerfWorstGPUMs = 0.0f;
+    int32 PerfFrames = 0, PerfSlowFrames = 0, PerfQuietWindows = 0, PerfSpikesThisSecond = 0;
+    double PerfSpikeSecond = 0.0;
+    void LogFramePerformance(float DeltaSeconds);
+    FString GetPerformanceContext() const;
 
     UFUNCTION(BlueprintCallable, Category = "Stage 1|Calibration")
     void Recenter();

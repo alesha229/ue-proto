@@ -1,6 +1,7 @@
 #include "GratiaSoftBodyInteraction.h"
 
 #include "GratiaAnimInstance.h"
+#include "GratiaBodySurface.h"
 #include "GratiaCharacterProfile.h"
 #include "GratiaInteraction.h"
 #include "GratiaPreviewCharacter.h"
@@ -77,6 +78,7 @@ void UGratiaSoftBodyInteraction::ResetSoftBody()
     bFault = false; FaultReason.Reset();
     ClearHands();
     Squash.Reset();
+    SquashDirection.Reset();
     PushToAnimation(true);
 }
 
@@ -127,6 +129,16 @@ void UGratiaSoftBodyInteraction::UpdateZones()
             Zone.Center = World.GetLocation() + Direction * Chain.DummyBoneLengthCm * Chain.ContactCenterAlongBone * Scale;
             Zone.Radius = Chain.ContactRadiusCm * Scale;
             Zone.Axis = GratiaSoftBodyAxisVector(Chain.ForwardAxis);
+            Zone.Rotation = World.GetRotation();
+            // One surface for everything: press, squash and haptics use the same fitted shape
+            // that stops the hand, so nothing starts before the palm reaches the skin.
+            FVector SurfaceA, SurfaceB;
+            float SurfaceRadius = 0.0f;
+            if (Character->BodySurface && Character->BodySurface->GetBoneCapsule(Bone, SurfaceA, SurfaceB, SurfaceRadius) && SurfaceRadius > 0.5f)
+            {
+                Zone.Center = (SurfaceA + SurfaceB) * 0.5;
+                Zone.Radius = SurfaceRadius;
+            }
             if (Zone.Center.ContainsNaN() || Zone.Tip.ContainsNaN()) { SetFault(TEXT("non-finite soft body zone")); return; }
             Zones.Add(Zone);
         }
@@ -153,7 +165,7 @@ void UGratiaSoftBodyInteraction::GetConformSpheres(const FVector& Point, float R
 }
 
 void UGratiaSoftBodyInteraction::SubmitHand(bool bLeft, const FVector& Visible, const FVector& Raw, bool bAllowed, float Delta, float Grab,
-    const TArray<FVector>& Fingers)
+    const TArray<FVector>& Fingers, bool bPoseOwned)
 {
     FHand& Hand = Hands[bLeft ? 0 : 1];
     const float Trigger = Grab;
@@ -172,8 +184,9 @@ void UGratiaSoftBodyInteraction::SubmitHand(bool bLeft, const FVector& Visible, 
     bool bNearZone = false;
     for (const FZone& Zone : Zones)
         bNearZone |= FVector::Distance(Raw, Zone.Center) < Zone.Radius + (Settings.PalmRadiusCm + Settings.SoftPressDepthCm) * Scale;
-    const FVector Press = bNearZone ? Visible + (Raw - Visible).GetClampedToMaxSize(Settings.SoftPressDepthCm * Scale) : Visible;
+    const FVector Press = bNearZone && !bPoseOwned ? Visible + (Raw - Visible).GetClampedToMaxSize(Settings.SoftPressDepthCm * Scale) : Visible;
     Hand.bPress = bNearZone && !Press.Equals(Visible, 0.01);
+    const FVector Grabber = bPoseOwned ? Raw : Press;
 
     // Penetration depth of palm and fingers into the deepest zone drives vibration.
     double Depth = 0;
@@ -211,16 +224,16 @@ void UGratiaSoftBodyInteraction::SubmitHand(bool bLeft, const FVector& Visible, 
                 Gap = FMath::Min(Gap, FVector::Distance(Finger + (Press - Visible), Zone.Center) - Zone.Radius - Settings.FingerRadiusCm * Scale);
             const FHand& Other = Hands[bLeft ? 1 : 0];
             if (!Chain.bAllowGrab || Other.GrabBone == Zone.Bone || Gap > Settings.GrabRadiusCm * Scale || Gap >= Best) continue;
-            Best = Gap; Hand.GrabBone = Zone.Bone; Hand.GrabOffset = Zone.Tip - Press;
+            Best = Gap; Hand.GrabBone = Zone.Bone; Hand.GrabOffset = Zone.Tip - Grabber;
         }
         UE_LOG(LogGratiaSoftBody, Display, TEXT("SOFT_BODY_GRAB hand=%s bone=%s"), bLeft ? TEXT("L") : TEXT("R"), *Hand.GrabBone.ToString());
     }
     if (!Hand.GrabBone.IsNone())
     {
         const FZone* Zone = Zones.FindByPredicate([&Hand](const FZone& Value) { return Value.Bone == Hand.GrabBone; });
-        if (!Zone || FVector::Distance(Press + Hand.GrabOffset, Zone->Tip) > Settings.GrabBreakDistanceCm * Scale) ReleaseGrab(Hand);
+        if (!Zone || FVector::Distance(Grabber + Hand.GrabOffset, Zone->Tip) > Settings.GrabBreakDistanceCm * Scale) ReleaseGrab(Hand);
     }
-    Hand.Visible = Visible; Hand.Raw = Raw; Hand.Press = Press; Hand.Fingers = Fingers;
+    Hand.Visible = Visible; Hand.Raw = Raw; Hand.Press = Press; Hand.Fingers = Fingers; Hand.Grabber = Grabber;
     // Fingers were measured on the visible hand; the pressed hand is drawn at the press point.
     for (FVector& Finger : Hand.Fingers) Finger += Press - Visible;
     Hand.SubmitTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
@@ -245,11 +258,7 @@ void UGratiaSoftBodyInteraction::PushToAnimation(bool bReset)
     {
         const FVector2D* State = Squash.Find(Zone.Bone);
         if (!State || FMath::Abs(State->X) < 0.002f) continue;
-        // Compress along the bone's forward axis, spread the other two axes.
-        const float Along = FMath::Clamp(1.0f - State->X, 0.4f, 1.4f);
-        const float Side = 1.0f + (1.0f / FMath::Sqrt(Along) - 1.0f) * FMath::Clamp(Settings.SquashBulge, 0.0f, 1.0f);
-        const FVector Abs = Zone.Axis.GetAbs();
-        Anim->SoftBodyInput.Scales.Emplace(Zone.Bone, FVector(Side) + (Along - Side) * Abs);
+        Anim->SoftBodyInput.Scales.Emplace(Zone.Bone, GetSquashScale(Zone.Bone));
     }
     const FTransform Component = Character->CharacterMesh->GetComponentTransform();
     const double Scale = Component.GetScale3D().GetAbsMax();
@@ -272,7 +281,7 @@ void UGratiaSoftBodyInteraction::PushToAnimation(bool bReset)
         const auto& Chain = Settings.Chains[Zone->ChainIndex];
         FGratiaSoftBodyGrab Grab;
         Grab.RootBone = Hand.GrabBone;
-        Grab.TargetCS = Component.InverseTransformPosition(Hand.Press + Hand.GrabOffset);
+        Grab.TargetCS = Component.InverseTransformPosition(Hand.Grabber + Hand.GrabOffset);
         Grab.Movement = Chain.GrabMovement;
         Grab.MaxStretchCm = Chain.MaxGrabStretchCm / Scale;
         Anim->SoftBodyInput.Grabs.Add(Grab);
@@ -307,14 +316,30 @@ void UGratiaSoftBodyInteraction::UpdateSquash(float Delta)
     const float Step = FMath::Min(Delta, 0.05f);
     for (const FZone& Zone : Zones)
     {
-        // Deepest hand sphere (palm or finger) inside the zone, relative to the zone radius.
+        // Deepest hand sphere (palm or finger) inside the zone, relative to the zone radius;
+        // the direction from the zone centre to it is where the part is squeezed.
         double Depth = 0.0;
+        FVector Deepest = FVector::ZeroVector;
+        auto Consider = [&](const FVector& Point, double RadiusCm)
+        {
+            const double Value = Zone.Radius + RadiusCm * Scale - FVector::Distance(Point, Zone.Center);
+            if (Value > Depth) { Depth = Value; Deepest = Point; }
+        };
         for (const FHand& Hand : Hands)
         {
             if (!Hand.bReady || Now - Hand.SubmitTime > 0.1) continue;
-            Depth = FMath::Max(Depth, Zone.Radius + Settings.PalmRadiusCm * Scale - FVector::Distance(Hand.Press, Zone.Center));
-            for (const FVector& Finger : Hand.Fingers)
-                Depth = FMath::Max(Depth, Zone.Radius + Settings.FingerRadiusCm * Scale - FVector::Distance(Finger, Zone.Center));
+            Consider(Hand.Press, Settings.PalmRadiusCm);
+            for (const FVector& Finger : Hand.Fingers) Consider(Finger, Settings.FingerRadiusCm);
+        }
+        if (Depth > 0.0)
+        {
+            const FVector Local = Zone.Rotation.UnrotateVector(Deepest - Zone.Center).GetSafeNormal();
+            if (!Local.IsNearlyZero())
+            {
+                FVector& Direction = SquashDirection.FindOrAdd(Zone.Bone, Local);
+                Direction = FMath::Lerp(Direction, Local, FMath::Min(1.0f, Step * 20.0f)).GetSafeNormal();
+                if (Direction.IsNearlyZero()) Direction = Local;
+            }
         }
         const float Target = Settings.SquashAmount * float(FMath::Clamp(Depth / FMath::Max(Zone.Radius, 1.0f), 0.0, 1.0));
         // Underdamped spring: soft follow while pressed, a short wobble on release.
@@ -328,6 +353,27 @@ void UGratiaSoftBodyInteraction::UpdateSquash(float Delta)
         }
         if (!FMath::IsFinite(State.X) || !FMath::IsFinite(State.Y)) State = FVector2D::ZeroVector;
     }
+}
+
+FVector UGratiaSoftBodyInteraction::GetSquashScale(FName Bone) const
+{
+    const FVector2D* State = Squash.Find(Bone);
+    const auto* Profile = Character.IsValid() ? Character->CharacterProfile.Get() : nullptr;
+    if (!State || !Profile) return FVector::OneVector;
+    const FZone* Zone = Zones.FindByPredicate([Bone](const FZone& Value) { return Value.Bone == Bone; });
+    const FVector* Stored = SquashDirection.Find(Bone);
+    const FVector Direction = Stored ? *Stored : Zone ? Zone->Axis : FVector::XAxisVector;
+    // Compressed along the press direction, volume-preserving bulge across it; per bone axis
+    // the factors blend by the squared direction component (exact for axis-aligned presses).
+    const float Along = FMath::Clamp(1.0f - float(State->X), 0.4f, 1.4f);
+    const float Across = 1.0f + (1.0f / FMath::Sqrt(Along) - 1.0f) * FMath::Clamp(Profile->SoftBody.SquashBulge, 0.0f, 1.0f);
+    FVector Result;
+    for (int32 Axis = 0; Axis < 3; ++Axis)
+    {
+        const float Weight = float(FMath::Square(Direction[Axis]));
+        Result[Axis] = FMath::Pow(Along, Weight) * FMath::Pow(Across, 1.0f - Weight);
+    }
+    return Result.ContainsNaN() ? FVector::OneVector : Result;
 }
 
 void UGratiaSoftBodyInteraction::PushPress()

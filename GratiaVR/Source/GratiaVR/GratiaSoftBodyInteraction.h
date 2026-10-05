@@ -29,14 +29,18 @@ public:
         float Radius = 0.0f;
         /** Forward axis of the soft bone in its own space. */
         FVector Axis = FVector::XAxisVector;
+        /** Soft bone world rotation (squash direction is kept in bone space). */
+        FQuat Rotation = FQuat::Identity;
     };
 
     UGratiaSoftBodyInteraction();
 
     /** Visible: proxy-constrained palm centre. Raw: controller target of the palm centre.
-     *  Grab: max of trigger and grip. Fingers: world finger points of the visible hand. */
+     *  Grab: max of trigger and grip. Fingers: world finger points of the visible hand.
+     *  PoseOwned: the body-surface helper places the hand (cup/wrap); the hand is not moved
+     *  toward the controller, and a grabbed part follows the controller (no hand/part loop). */
     void SubmitHand(bool bLeft, const FVector& Visible, const FVector& Raw, bool bAllowed, float Delta, float Grab,
-        const TArray<FVector>& Fingers);
+        const TArray<FVector>& Fingers, bool bPoseOwned = false);
     void ClearHands();
     UFUNCTION(BlueprintCallable, Category = "Soft Body") void ResetSoftBody();
 
@@ -55,6 +59,8 @@ public:
     int32 GetPressSphereCount() const { return PressSpheres; }
     /** Current squeeze of a soft bone (0 rest, SquashAmount at full press depth). */
     float GetSquash(FName Bone) const { const FVector2D* State = Squash.Find(Bone); return State ? float(State->X) : 0.0f; }
+    /** Bone-space scale of a soft bone: compressed along the press direction, bulging across it. */
+    FVector GetSquashScale(FName Bone) const;
 
     /** Surface press deformation of skin and clothing (material offset); QA can switch it off. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body")
@@ -87,6 +93,8 @@ private:
         double SubmitTime = -1.0;
         FName GrabBone;
         FVector GrabOffset = FVector::ZeroVector;
+        /** Point the grab follows: the pressed hand, or the controller when the pose is owned. */
+        FVector Grabber = FVector::ZeroVector;
     };
 
     void SetFault(const FString& Reason);
@@ -108,6 +116,8 @@ private:
     int32 PressSpheres = 0;
     /** Squeeze spring per soft bone: amount and its velocity. */
     TMap<FName, FVector2D> Squash;
+    /** Press direction per soft bone, in bone space (unit; the last one is kept for the spring-back). */
+    TMap<FName, FVector> SquashDirection;
     void UpdateSquash(float Delta);
     bool bPressCleared = false;
     bool bWarnedZoneSlots = false;

@@ -11,6 +11,7 @@
 #include "GratiaHandAnimInstance.h"
 #include "GratiaBuildInfo.h"
 #include "GratiaHandInput.h"
+#include "GratiaAnimInstance.h"
 
 #include "Camera/CameraComponent.h"
 #include "Components/PrimitiveComponent.h"
@@ -161,6 +162,7 @@ void AGratiaStage1Runtime::Tick(float DeltaSeconds)
         RenderThreadMs = FMath::Lerp(RenderThreadMs, static_cast<float>(FPlatformTime::ToMilliseconds(GRenderThreadTime)), Alpha);
         GPUFrameMs = FMath::Lerp(GPUFrameMs, static_cast<float>(FPlatformTime::ToMilliseconds(RHIGetGPUFrameCycles())), Alpha);
         DebugRefreshSeconds += DeltaSeconds;
+        LogFramePerformance(DeltaSeconds);
     }
     DebugPanel->SetVisibility(bShowDebug);
     if (DebugRefreshSeconds >= 0.2f)
@@ -170,6 +172,59 @@ void AGratiaStage1Runtime::Tick(float DeltaSeconds)
     }
     RunRequestedTests(DeltaSeconds);
     RunSoakAndMetrics(DeltaSeconds);
+}
+
+FString AGratiaStage1Runtime::GetPerformanceContext() const
+{
+    const AGratiaPreviewCharacter* Character = TargetCharacter.Get();
+    const auto* Anim = Character && Character->CharacterMesh ? Cast<UGratiaAnimInstance>(Character->CharacterMesh->GetAnimInstance()) : nullptr;
+    const auto* SoftBody = Character ? Character->SoftBodyInteraction.Get() : nullptr;
+    auto HandText = [&](const FHandProxy& Hand, bool bLeft)
+    {
+        return FString::Printf(TEXT("%s:%s%s%s"), bLeft ? TEXT("L") : TEXT("R"),
+            !Hand.CupBone.IsNone() ? TEXT("cup ") : TEXT(""), !Hand.GripBone.IsNone() ? TEXT("grip ") : TEXT(""),
+            SoftBody && !SoftBody->GetGrabbedBone(bLeft).IsNone() ? TEXT("grab") : TEXT("-"));
+    };
+    return FString::Printf(TEXT("reaction=%d pose=%s quality=%d %s %s"),
+        Anim && Anim->IsReactionCuePlaying() ? 1 : 0, Character ? *Character->GetPreviewPoseLabel() : TEXT("none"),
+        Character && Character->Interaction ? Character->Interaction->Quality : -1, *HandText(LeftHand, true), *HandText(RightHand, false));
+}
+
+void AGratiaStage1Runtime::LogFramePerformance(float DeltaSeconds)
+{
+    // Thread times are the previous frame's; the worst frame of each window is logged with context.
+    const float FrameMs = DeltaSeconds * 1000.0f;
+    const float SlowMs = 1000.0f / 72.0f;
+    ++PerfFrames;
+    PerfWindowSeconds += DeltaSeconds;
+    if (FrameMs > SlowMs) ++PerfSlowFrames;
+    if (FrameMs > PerfWorstMs)
+    {
+        PerfWorstMs = FrameMs;
+        PerfWorstGameMs = static_cast<float>(FPlatformTime::ToMilliseconds(GGameThreadTime));
+        PerfWorstRenderMs = static_cast<float>(FPlatformTime::ToMilliseconds(GRenderThreadTime));
+        PerfWorstGPUMs = static_cast<float>(FPlatformTime::ToMilliseconds(RHIGetGPUFrameCycles()));
+    }
+    const double Now = FPlatformTime::Seconds();
+    if (FrameMs > 40.0f)
+    {
+        if (Now - PerfSpikeSecond >= 1.0) { PerfSpikeSecond = Now; PerfSpikesThisSecond = 0; }
+        if (++PerfSpikesThisSecond <= 3)
+            UE_LOG(LogGratiaStage1, Warning, TEXT("PERF_SPIKE frame=%.1fms game=%.1f render=%.1f gpu=%.1f %s"), FrameMs,
+                FPlatformTime::ToMilliseconds(GGameThreadTime), FPlatformTime::ToMilliseconds(GRenderThreadTime),
+                FPlatformTime::ToMilliseconds(RHIGetGPUFrameCycles()), *GetPerformanceContext());
+    }
+    if (PerfWindowSeconds < 2.0f) return;
+    // Windows with slow frames are always logged; quiet ones every 10 s.
+    if (PerfSlowFrames > 0 || ++PerfQuietWindows >= 5)
+    {
+        PerfQuietWindows = 0;
+        UE_LOG(LogGratiaStage1, Display, TEXT("PERF fps=%.1f worst=%.1fms (game=%.1f render=%.1f gpu=%.1f) slow=%d/%d %s"),
+            PerfFrames / PerfWindowSeconds, PerfWorstMs, PerfWorstGameMs, PerfWorstRenderMs, PerfWorstGPUMs, PerfSlowFrames, PerfFrames,
+            *GetPerformanceContext());
+    }
+    PerfWindowSeconds = PerfWorstMs = PerfWorstGameMs = PerfWorstRenderMs = PerfWorstGPUMs = 0.0f;
+    PerfFrames = PerfSlowFrames = 0;
 }
 
 void AGratiaStage1Runtime::BindPlayer()
@@ -434,7 +489,9 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
             const FVector RawPalm = Target.TransformPositionNoScale(PalmLocal);
             const bool bAllowed = TargetCharacter->Interaction->IsHandSampleReady(bLeft) && (!Menu || !Menu->bOpen);
             const float Grab = HandInput ? FMath::Max(HandInput->GetTrigger(bLeft), HandInput->GetGrip(bLeft)) : 0.0f;
-            SoftBody->SubmitHand(bLeft, VisiblePalm, RawPalm, bAllowed, DeltaSeconds, Grab, Fingers);
+            // Cupping/wrapping places the hand itself; the soft part then follows the controller.
+            const bool bPoseOwned = !Hand.CupBone.IsNone() || !Hand.GripBone.IsNone();
+            SoftBody->SubmitHand(bLeft, VisiblePalm, RawPalm, bAllowed, DeltaSeconds, Grab, Fingers, bPoseOwned);
             // Inside a soft zone the visible hand sinks by the bounded press depth.
             if (SoftBody->HasPress(bLeft) && Hand.Gate.State == EGratiaHandState::Tracked)
                 Desired.SetLocation(SoftBody->GetPressPoint(bLeft) - (VisiblePalm - VisualWorld.GetLocation()));
@@ -573,7 +630,9 @@ FTransform AGratiaStage1Runtime::ApplyBodySurface(FHandProxy& Hand, bool bLeft, 
         TArray<FVector4> NearSpheres;
         TArray<FGratiaConformCapsule> NearCapsules;
         Surface->GatherConformShapes(PalmPoint, 25.0f, NearSpheres, NearCapsules);
-        const FTransform Cup = UGratiaBodySurface::SolveWrap(Constrained, Palm, Hit, Settings.PalmThicknessCm,
+        // The palm sinks into the soft surface by half of the finger squeeze depth.
+        const FGratiaSurfaceHit CupHit = UGratiaBodySurface::Squeezed(Hit, 0.5f * Profile->SoftBody.SquishDepthCm * Squeeze);
+        const FTransform Cup = UGratiaBodySurface::SolveWrap(Constrained, Palm, CupHit, Settings.PalmThicknessCm,
             Profile->SoftBody.FingerRadiusCm + Profile->SoftBody.FingerConformMarginCm, NearCapsules);
         if (WasCupping != Hit.Bone) { Hand.CupBlend = 0.0f; Hand.GripPulse = 0.05f; }
         Hand.CupBone = Hit.Bone;

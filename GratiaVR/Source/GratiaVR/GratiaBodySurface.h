@@ -54,6 +54,13 @@ public:
 
     /** Hand transform that wraps the palm around the hit part: palm on the surface, fingers
      *  across the part's axis (keeping the closer of the two directions). */
+    /** The same soft-part hit squeezed by SinkCm (smaller radius): the cupping palm sinks into it. */
+    static FGratiaSurfaceHit Squeezed(const FGratiaSurfaceHit& Hit, float SinkCm)
+    {
+        FGratiaSurfaceHit Out = Hit;
+        Out.Radius = FMath::Max(0.5f, Hit.Radius - FMath::Max(0.0f, SinkCm));
+        return Out;
+    }
     static FTransform SolveWrap(const FTransform& Hand, const FGratiaPalmFrame& Palm, const FGratiaSurfaceHit& Hit, float PalmThicknessCm,
         float FingerClearanceCm, TConstArrayView<FGratiaConformCapsule> Neighbours = {});
     /** Partly turns the palm toward the surface (Weight 0..1, limited angle) and draws it closer. */

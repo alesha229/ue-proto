@@ -174,6 +174,7 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
         if (PhaseSeconds <= Delta)
         {
             BaselineTip = FVector::ZeroVector; BaselineSamples = 0; DepthAmplitude.Reset(); bSawGrab = false; PressTipCm = PullTipCm = 0;
+            OnsetGapCm = 100.0; FrontScale = FVector::OneVector;
             AimCamera(Zone->Center, (Zone->Tip - Zone->Center).GetSafeNormal());
         }
         Submit(FVector(0, 0, -1.0e5), Delta, 0, false);
@@ -198,8 +199,12 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
     case EPhase::Press:
     {
         const float T = FMath::Clamp(PhaseSeconds / 0.8f, 0.0f, 1.0f);
-        Submit(FMath::Lerp(Start, Pressed, T), Delta, 0);
+        const FVector HandNow = FMath::Lerp(Start, Pressed, T);
+        Submit(HandNow, Delta, 0);
         DepthAmplitude.Emplace(SoftBody->GetDepthCm(true), SoftBody->GetHapticAmplitude(true));
+        // Gap between the palm skin and the zone surface when anything first reacts.
+        if (OnsetGapCm >= 100.0 && (SoftBody->GetDepthCm(true) > 0 || SoftBody->GetSquash(Zone->Bone) > 0.01f))
+            OnsetGapCm = FVector::Distance(HandNow, Zone->Center) - Zone->Radius - Character->CharacterProfile->HandSurface.PalmContactRadiusCm;
         PressTipCm = FMath::Max(PressTipCm, FVector::Distance(CurrentTip(), BaselineTip));
         if (PhaseSeconds < 1.0f) break;
         // Ignore the short first-contact tap; afterwards vibration must follow depth.
@@ -219,6 +224,8 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
         Check(bMonotonic && LastDepth >= 1.0 && FMath::IsNearlyEqual(LastAmplitude, Expected, 0.05),
             FString::Printf(TEXT("%s vibration rises with depth: %.2f at %.1fcm (expected %.2f)"), *Zone->Chain.ToString(), LastAmplitude, LastDepth, Expected));
         Check(PressTipCm >= 0.3, FString::Printf(TEXT("%s pressed tip moved %.2fcm (min 0.3)"), *Zone->Bone.ToString(), PressTipCm));
+        Check(OnsetGapCm <= 0.3 && OnsetGapCm >= -1.0, FString::Printf(TEXT("%s squeeze and vibration start when the palm reaches the skin (gap %.2fcm)"),
+            *Zone->Chain.ToString(), OnsetGapCm));
         Advance(EPhase::Squeeze);
         break;
     }
@@ -230,6 +237,7 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
         {
             Check(SoftBody->GetSquash(Zone->Bone) >= 0.05f,
                 FString::Printf(TEXT("%s squeezes under the press (squash %.2f, min 0.05)"), *Zone->Chain.ToString(), SoftBody->GetSquash(Zone->Bone)));
+            FrontScale = SoftBody->GetSquashScale(Zone->Bone);
             Check(SoftBody->GetPressSphereCount() >= 1 && Settings.PressCollection,
                 FString::Printf(TEXT("%s palm and finger spheres reach the press collection (%d)"), *Zone->Chain.ToString(), SoftBody->GetPressSphereCount()));
             Shoot(FString::Printf(TEXT("GratiaSoftPress_%s_on"), *Zone->Chain.ToString()));
@@ -244,6 +252,23 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
         if (PhaseSeconds < 0.8f) break;
         SoftBody->bPressDeformation = true;
         bShotOn = bShotOff = false;
+        Advance(EPhase::SideSqueeze);
+        break;
+    }
+    case EPhase::SideSqueeze:
+    {
+        // Pressed from the side the part compresses across, not along its front axis.
+        const FVector Side = FVector::CrossProduct(Outward, FVector::UpVector).GetSafeNormal();
+        Submit(Zone->Center + Side * (Zone->Radius + Settings.PalmRadiusCm - Settings.HapticFullDepthCm), Delta, 0);
+        if (PhaseSeconds < 0.6f) break;
+        const FVector SideScale = SoftBody->GetSquashScale(Zone->Bone);
+        auto MostCompressed = [](const FVector& Scale) { return Scale.X <= Scale.Y && Scale.X <= Scale.Z ? 0 : Scale.Y <= Scale.Z ? 1 : 2; };
+        auto Dominant = [](const FVector& Direction) { const FVector A = Direction.GetAbs(); return A.X >= A.Y && A.X >= A.Z ? 0 : A.Y >= A.Z ? 1 : 2; };
+        const int32 FrontAxis = MostCompressed(FrontScale), SideAxis = MostCompressed(SideScale);
+        const int32 ExpectedFront = Dominant(Zone->Rotation.UnrotateVector(Outward)), ExpectedSide = Dominant(Zone->Rotation.UnrotateVector(Side));
+        Check(FrontAxis == ExpectedFront && SideAxis == ExpectedSide && SideScale[SideAxis] < 0.98f,
+            FString::Printf(TEXT("%s squashes along the press direction: front axis %d (expected %d), side axis %d (expected %d, scale %.3f)"),
+                *Zone->Chain.ToString(), FrontAxis, ExpectedFront, SideAxis, ExpectedSide, SideScale[SideAxis]));
         Advance(EPhase::Arm);
         break;
     }
@@ -467,7 +492,7 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
             TArray<FVector4> NearSpheres;
             TArray<FGratiaConformCapsule> NearCapsules;
             Surface->GatherConformShapes(PalmStart, 25.0f, NearSpheres, NearCapsules, Shrink);
-            TestHand->SetWorldTransform(bFound ? UGratiaBodySurface::SolveWrap(StartPose, Palm, Hit, Thickness,
+            TestHand->SetWorldTransform(bFound ? UGratiaBodySurface::SolveWrap(StartPose, Palm, UGratiaBodySurface::Squeezed(Hit, 0.5f * Shrink), Thickness,
                 Settings.FingerRadiusCm + Settings.FingerConformMarginCm, NearCapsules) : StartPose);
             if (bFound) AimCamera(Hit.Point, Hit.Normal, true);
             HandAnim->bConform = true; HandAnim->FingerRadiusCm = Settings.FingerRadiusCm; HandAnim->ConformMarginCm = Settings.FingerConformMarginCm;
@@ -516,7 +541,7 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
         UE_LOG(LogGratiaSoftBodyQA, Display, TEXT("BODY_GRIP_QA deepest at finger %d %s"), DeepestPoint / 2, DeepestPoint % 2 ? TEXT("tip") : TEXT("joint"));
         UE_LOG(LogGratiaSoftBodyQA, Display, TEXT("BODY_GRIP_QA part=%s radius=%.1fcm palm_gap=%.2fcm facing=%.1fdeg across=%.2f wrapped=%d deepest=%.2fcm %s"),
             *Bone.ToString(), Radius, OnPart.Gap, Facing, Across, Wrapped, Deepest, *HandAnim->GetDiagnostics());
-        Check(OnPart.Gap >= Thickness - 0.6f && OnPart.Gap <= Thickness + 3.0f,
+        Check(OnPart.Gap >= Thickness - 0.5f * Shrink - 0.6f && OnPart.Gap <= Thickness + 3.0f,
             FString::Printf(TEXT("%s palm rests on the surface (gap %.2fcm, palm %.2fcm, open fingers may lift it up to 3cm)"), *Bone.ToString(), OnPart.Gap, Thickness));
         Check(Facing <= 12.0f, FString::Printf(TEXT("%s palm faces the part (%.1f deg)"), *Bone.ToString(), Facing));
         Check(Across <= 0.35f, FString::Printf(TEXT("%s fingers run around the part (axis dot %.2f)"), *Bone.ToString(), Across));

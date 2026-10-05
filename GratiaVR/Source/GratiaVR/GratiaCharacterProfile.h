@@ -373,7 +373,7 @@ struct GRATIAVR_API FGratiaSoftBodySettings
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Hands", meta = (ClampMin = "0", ClampMax = "10", Units = "cm"))
     float SoftPressDepthCm = 4.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Hands", meta = (ClampMin = "0.5", Units = "cm"))
-    float PalmRadiusCm = 4.0f;
+    float PalmRadiusCm = 1.5f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Hands", meta = (ClampMin = "0.2", Units = "cm"))
     float FingerRadiusCm = 1.1f;
     /** Grab search distance beyond the contact volume surface. */
@@ -414,7 +414,7 @@ struct GRATIAVR_API FGratiaSoftBodySettings
     TObjectPtr<UMaterialParameterCollection> PressCollection;
     /** Palm sphere of the surface dent (the palm itself; PalmRadiusCm is the contact/haptics volume). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press", meta = (ClampMin = "0.5", ClampMax = "8", Units = "cm"))
-    float PressPalmRadiusCm = 2.5f;
+    float PressPalmRadiusCm = 1.5f;
     /** Width of the smooth dent rim around each palm/finger sphere. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press", meta = (ClampMin = "0.1", ClampMax = "10", Units = "cm"))
     float PressSoftnessCm = 1.5f;
@@ -438,7 +438,7 @@ struct GRATIAVR_API FGratiaSoftBodySettings
     /** Hand sphere size for pushing the KawaiiPhysics bone; below 1 the surface yields
      *  (press dent and squash) before the whole soft part swings away. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press", meta = (ClampMin = "0", ClampMax = "1"))
-    float HandPushFraction = 0.5f;
+    float HandPushFraction = 1.0f;
 };
 
 USTRUCT(BlueprintType)
