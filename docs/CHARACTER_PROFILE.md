@@ -83,7 +83,7 @@ GetSecondaryGroupSettings and FindSecondaryBone expose the profile's
 secondary metadata. Groups are 1 hair, 2 cloth/decor, 3 local body and 4
 ears/tail. Keep chain anchors and planted body parts animation-controlled.
 
-## Native source cloth — implemented, QA pending
+## Native source cloth — implemented, editor QA PASS
 
 The 5 October 2026 port places TitsPhys, AssPhys and ThighsPhys in one
 mesh-owned `GratiaSourceCloth_BodyCages` asset: 3112 source vertices and 206 full
@@ -99,7 +99,12 @@ budget. `bBodyMotion`, `bPhysicalMotion` and ClothSettings.bEnabled control it.
 Do not read the old four-body group-3 cap as a cloth particle budget.
 
 ClothSettings exposes hand/grab radii, break distance, maximum hand travel/speed,
-grab stiffness/velocity blending and an emergency particle-offset limit. Native
+grab stiffness/velocity blending, an emergency particle-offset limit and
+SoftPressDepthCm (default 4 cm): how far the cloth hand collider may follow the raw
+controller past the proxy-constrained visible hand, so a press can dent soft tissue.
+The cloth asset is a `UGratiaSourceClothingAsset`; it restores the stored per-section
+render binding whenever Unreal rebuilds the mesh. The port excludes vertices whose
+dominant bone is under the profile's Head/LeftFoot/RightFoot semantics. Native
 material/pin/pressure settings live on the embedded clothing asset and remain
 editable in Unreal's clothing editor. Artist tuning requires new QA evidence.
 
