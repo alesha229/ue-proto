@@ -29,10 +29,22 @@ $uatArguments = @(
 if ($LASTEXITCODE -ne 0) { throw "Packaging failed ($LASTEXITCODE)" }
 & $pythonPath (Join-Path $PSScriptRoot 'create_build_manifest.py') --engine $EngineRoot --output $manifestPath --verify
 if ($LASTEXITCODE -ne 0) { throw 'Build fingerprint changed during packaging' }
+# UAT can report success after archive copy retries fail (for example a locked DLL).
+$stagedRoot = Join-Path $projectRoot 'Saved\StagedBuilds\Windows'
+$packageFiles = @()
+foreach ($stagedFile in Get-ChildItem -LiteralPath $stagedRoot -File -Recurse) {
+    $relative = $stagedFile.FullName.Substring($stagedRoot.Length + 1)
+    $archivedFile = Join-Path (Join-Path $archiveRoot 'Windows') $relative
+    if (-not (Test-Path -LiteralPath $archivedFile -PathType Leaf)) { throw "Archive file missing: $relative" }
+    $stagedHash = (Get-FileHash -LiteralPath $stagedFile.FullName -Algorithm SHA256).Hash
+    if ((Get-FileHash -LiteralPath $archivedFile -Algorithm SHA256).Hash -ne $stagedHash) { throw "Archive file differs from staged build: $relative" }
+    $packageFiles += [pscustomobject]@{ path = $relative; sha256 = $stagedHash; bytes = $stagedFile.Length }
+}
 $exePath = Join-Path $archiveRoot 'Windows\GratiaVR\Binaries\Win64\GratiaVR.exe'
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 $manifest | Add-Member -NotePropertyName executable_sha256 -NotePropertyValue (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
 $manifest | Add-Member -NotePropertyName packaged_utc -NotePropertyValue ([DateTimeOffset]::UtcNow.ToString('o'))
+$manifest | Add-Member -NotePropertyName package_files -NotePropertyValue $packageFiles
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $archiveRoot 'Windows\build_manifest.json') -Encoding utf8
 Copy-Item -LiteralPath (Join-Path $archiveRoot 'Windows\build_manifest.json') -Destination (Join-Path $evidenceRoot 'build_manifest.json')
 Write-Output "Stage 1 archive: $archiveRoot"

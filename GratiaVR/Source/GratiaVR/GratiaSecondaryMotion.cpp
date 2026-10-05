@@ -105,20 +105,38 @@ void UGratiaSecondaryMotion::ClearHands()
     for (FPhysicsHand& Hand : Hands) Hand = FPhysicsHand();
 }
 
-void UGratiaSecondaryMotion::SubmitHand(bool bLeft, const FVector& Position, bool bAllowed, float Delta)
+void UGratiaSecondaryMotion::SubmitHand(bool bLeft, const FVector& Position, bool bAllowed, float Delta, float Trigger)
 {
     FPhysicsHand& Hand = Hands[bLeft ? 0 : 1];
     const UGratiaCharacterProfile* Profile = Character.IsValid() ? Character->CharacterProfile.Get() : nullptr;
     if (!bAllowed || !Profile || !Profile->HandPhysics.bEnabled || ActiveBones.IsEmpty() || bFault
-        || Position.ContainsNaN() || !FMath::IsFinite(Delta) || Delta <= 0 || Delta > 0.1f)
+        || Position.ContainsNaN() || !FMath::IsFinite(Trigger) || !FMath::IsFinite(Delta) || Delta <= 0 || Delta > 0.1f)
     { Hand = FPhysicsHand(); return; }
     // A new/recovered hand is seeded without sweeping from its parked location.
     const bool bContinuous = Hand.bReady && FVector::Distance(Hand.Current, Position) <= Profile->HandPhysics.MaxTravelCm;
+    if (!bContinuous) { Hand.GrabbedBone = NAME_None; Hand.bGrabArmed = false; }
+    Hand.bGrabPressed = false;
+    if (Trigger <= 0.25f)
+    {
+        if (!Hand.GrabbedBone.IsNone()) UE_LOG(LogGratiaPhysics, Display, TEXT("HAND_GRAB hand=%d release=trigger bone=%s"), bLeft ? 0 : 1, *Hand.GrabbedBone.ToString());
+        Hand.GrabbedBone = NAME_None; Hand.bGrabArmed = true;
+    }
+    else if (Trigger >= 0.65f && Hand.bGrabArmed)
+    {
+        Hand.bGrabPressed = Profile->HandPhysics.bAllowGrab && bContinuous;
+        Hand.bGrabArmed = false;
+    }
     Hand.Previous = bContinuous ? Hand.Current : Position;
     Hand.Current = Position;
     Hand.Delta = Delta;
     Hand.bPending = bContinuous;
     Hand.bReady = true;
+}
+
+FString UGratiaSecondaryMotion::GetHandDiagnostics() const
+{
+    return FString::Printf(TEXT("Grab L=%s R=%s | pushes L=%d R=%d"), *Hands[0].GrabbedBone.ToString(),
+        *Hands[1].GrabbedBone.ToString(), HandPushCounts[0], HandPushCounts[1]);
 }
 
 void UGratiaSecondaryMotion::ApplyHandPressure()
@@ -133,6 +151,40 @@ void UGratiaSecondaryMotion::ApplyHandPressure()
         if (!Hand.bPending) continue;
         Hand.bPending = false; // never replay stale tracking data
         const FVector Velocity = ((Hand.Current - Hand.Previous) / Hand.Delta).GetClampedToMaxSize(Settings.MaxSpeedCmPerSecond);
+        if (Hand.bGrabPressed)
+        {
+            Hand.bGrabPressed = false;
+            float BestDistance = Settings.RadiusCm;
+            for (FName Bone : ActiveBones)
+            {
+                if (Hands[1 - Index].GrabbedBone == Bone) continue;
+                FBodyInstance* Body = Mesh->GetBodyInstance(Bone);
+                FVector Point;
+                const float Distance = Body && Body->IsInstanceSimulatingPhysics() ? Body->GetDistanceToBody(Hand.Current, Point) : -1;
+                if (!FMath::IsFinite(Distance) || Distance < 0 || Distance >= BestDistance || Point.ContainsNaN()) continue;
+                BestDistance = Distance; Hand.GrabbedBone = Bone;
+                Hand.GrabLocalPoint = Body->GetUnrealWorldTransform().InverseTransformPosition(Point);
+                Hand.GrabOffset = Point - Hand.Current;
+            }
+            UE_LOG(LogGratiaPhysics, Display, TEXT("HAND_GRAB hand=%d acquire=%s"), Index, *Hand.GrabbedBone.ToString());
+        }
+        if (!Hand.GrabbedBone.IsNone())
+        {
+            FBodyInstance* Body = Mesh->GetBodyInstance(Hand.GrabbedBone);
+            if (!Settings.bAllowGrab || !ActiveBones.Contains(Hand.GrabbedBone) || !Body || !Body->IsInstanceSimulatingPhysics())
+            { Hand.GrabbedBone = NAME_None; continue; }
+            const FVector Point = Body->GetUnrealWorldTransform().TransformPosition(Hand.GrabLocalPoint);
+            const FVector Error = Hand.Current + Hand.GrabOffset - Point;
+            if (Error.ContainsNaN() || Error.Size() > Settings.GrabBreakDistanceCm)
+            {
+                UE_LOG(LogGratiaPhysics, Display, TEXT("HAND_GRAB hand=%d release=break_distance"), Index);
+                Hand.GrabbedBone = NAME_None; continue;
+            }
+            const FVector Force = (Error * Settings.GrabStiffness +
+                (Velocity - Body->GetUnrealWorldVelocityAtPoint(Point)) * Settings.GrabDamping).GetClampedToMaxSize(Settings.MaxForce);
+            if (!Force.ContainsNaN()) Body->AddImpulseAtPosition(Force * Hand.Delta, Point);
+            continue; // grab and pressure share the same per-hand force budget
+        }
         struct FPush { FBodyInstance* Body; FVector Point, Direction; double Force; FName Bone; };
         TArray<FPush> Pushes;
         double Total = 0;
@@ -248,6 +300,12 @@ bool UGratiaSecondaryMotion::RunChecks(FString& Failure)
         {
             FBodyInstance* Body = Mesh->GetBodyInstance(Name);
             Pass &= Body && Body->IsInstanceSimulatingPhysics() && !Mesh->GetSocketTransform(Name).ContainsNaN();
+            if (Body)
+            {
+                const FVector Size = Body->GetBodyBounds().GetSize();
+                const double Limit = CharacterProfile->MaxSecondaryCollisionSizeCm * Character->GetActorScale3D().GetAbs().GetMax();
+                Pass &= !Size.ContainsNaN() && Size.GetMax() > 0 && Size.GetMax() <= Limit;
+            }
         }
         for (FName Semantic : {FName("Root"), FName("LeftFoot"), FName("RightFoot"), FName("LeftThigh"), FName("RightThigh"), FName("UpperChest")})
         {

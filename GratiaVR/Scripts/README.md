@@ -15,6 +15,12 @@ Self-test включает синтетическое воздействие о�
 
 ## Текущая последовательность
 
+После импорта `repair_secondary_shape_units.py` однократно адаптирует размеры
+существующего PhysicsAsset к FBX bone scale; резервная копия находится в evidence/04.
+Новая генерация `BuildPhysicsAsset` также выполняет эту конверсию.
+IA_GrabLeft/Right используют trigger Axis1D; Z/X — только desktop QA.
+Перед выдачей manifest сборка сравнивает все staged/archive файлы по SHA-256.
+
 1. `Start-BlenderMCP.ps1` / `Blender-MCP.py`: подключение к открытому Blender,
    проверка рабочего файла и журнал MCP-вызовов.
 2. `author_reference_reactions.py`: создание трёх реакций в MVP-копии.

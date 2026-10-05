@@ -88,6 +88,55 @@ void ConfigureBody(USkeletalBodySetup* Body, const FGratiaSecondaryBoneDef* Defi
 }
 #endif
 
+bool UGratiaPortLibrary::RepairSecondaryShapeUnits(USkeletalMesh* SkeletalMesh)
+{
+#if WITH_EDITOR
+    if (!SkeletalMesh || !SkeletalMesh->GetPhysicsAsset()) return false;
+    UPhysicsAsset* Asset = SkeletalMesh->GetPhysicsAsset();
+    if (Asset->GetOutermost()->GetMetaData().GetValue(Asset, TEXT("Gratia.ShapeUnits")) == FString(TEXT("BoneLocalV2"))) return true;
+    const FReferenceSkeleton& Skeleton = SkeletalMesh->GetRefSkeleton();
+    TArray<FTransform> Rest;
+    for (int32 Index = 0; Index < Skeleton.GetNum(); ++Index)
+    {
+        const int32 Parent = Skeleton.GetParentIndex(Index);
+        Rest.Add(Parent == INDEX_NONE ? Skeleton.GetRefBonePose()[Index] : Skeleton.GetRefBonePose()[Index] * Rest[Parent]);
+    }
+    Asset->Modify();
+    for (USkeletalBodySetup* Body : Asset->SkeletalBodySetups)
+    {
+        const auto* Definition = GratiaSecondaryBones::Find(Body->BoneName);
+        if (!Definition || !Definition->bSafeDefaultSimulation) continue;
+        const int32 Index = Skeleton.FindBoneIndex(Body->BoneName);
+        if (Index == INDEX_NONE) return false;
+        const FVector Scale = Rest[Index].GetScale3D().GetAbs();
+        if (Scale.ContainsNaN() || Scale.GetMin() <= UE_SMALL_NUMBER || Scale.GetMax() / Scale.GetMin() > 1.0001)
+        {
+            UE_LOG(LogTemp, Error, TEXT("SHAPE_UNIT_UNSUPPORTED bone=%s scale=%s"), *Body->BoneName.ToString(), *Scale.ToString());
+            return false;
+        }
+        UE_LOG(LogTemp, Display, TEXT("SHAPE_UNIT_AUDIT bone=%s scale=%s spheres=%d capsules=%d"),
+            *Body->BoneName.ToString(), *Scale.ToString(), Body->AggGeom.SphereElems.Num(), Body->AggGeom.SphylElems.Num());
+        // Previous generator clamped lengths/radii in cm, then Chaos multiplied them
+        // by the imported bone scale (100 for this FBX). Keep the fitted centre,
+        // which was already in bone-local coordinates; convert only clamped dimensions.
+        Body->Modify();
+        const float LengthCm = FMath::Clamp(Definition->SourceRestLengthCm, 0.5f, 30.0f);
+        for (auto& Shape : Body->AggGeom.SphylElems)
+        {
+            Shape.Radius /= Scale.X;
+            Shape.Length = FMath::Clamp(Shape.Length * Scale.X, 0.1f, LengthCm) / Scale.X;
+        }
+        for (auto& Shape : Body->AggGeom.SphereElems) Shape.Radius /= Scale.X;
+        Body->InvalidatePhysicsData(); Body->CreatePhysicsMeshes();
+    }
+    Asset->GetOutermost()->GetMetaData().SetValue(Asset, TEXT("Gratia.ShapeUnits"), TEXT("BoneLocalV2"));
+    Asset->MarkPackageDirty();
+    return true;
+#else
+    return false;
+#endif
+}
+
 UPhysicsAsset* UGratiaPortLibrary::BuildPhysicsAsset(USkeletalMesh* SkeletalMesh, const FString& AssetPackagePath)
 {
 #if WITH_EDITOR
@@ -246,6 +295,8 @@ UPhysicsAsset* UGratiaPortLibrary::BuildPhysicsAsset(USkeletalMesh* SkeletalMesh
     Package->GetMetaData().SetValue(Asset, TEXT("Gratia.Groups"), TEXT("1=hair;2=cloth;3=body;4=ears/tail;thigh core remains kinematic"));
     SkeletalMesh->Modify();
     SkeletalMesh->SetPhysicsAsset(Asset);
+    Package->GetMetaData().SetValue(Asset, TEXT("Gratia.ShapeUnits"), TEXT(""));
+    if (!RepairSecondaryShapeUnits(SkeletalMesh)) return nullptr;
     SkeletalMesh->MarkPackageDirty();
     Asset->MarkPackageDirty();
     if (bNewAsset)

@@ -24,6 +24,7 @@ public:
     void RunRequestedTests(float DeltaSeconds);
     void RunSoakAndMetrics(float DeltaSeconds);
     void ConfigureCaptureView();
+    bool IsHandPhysicsQAActive() const { return bSelfTest && HandPhysicsQAPhase > 0 && HandPhysicsQAPhase < 7; }
 
 protected:
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
@@ -64,7 +65,14 @@ private:
     int32 HandPhysicsQAPhase = 0;
     int32 HandPhysicsBaseline[2] = {};
     FName HandPhysicsQABone;
+    int32 PhysicsProbeGroup = 1;
+    float PhysicsProbeSeconds = 0;
+    FName PhysicsProbeBone;
+    FQuat PhysicsProbeBodyStart = FQuat::Identity, PhysicsProbeVisualStart = FQuat::Identity;
+    double PhysicsProbeBodyDegrees = 0, PhysicsProbeVisualDegrees = 0;
+    void RunPhysicsResponseProbe(float Delta);
     FVector HandPhysicsBefore = FVector::ZeroVector;
+    FVector HandPhysicsTargets[2] = {FVector::ZeroVector, FVector::ZeroVector};
     void RunHandPhysicsIntegration();
     bool bInputIntegrationReleased = false;
     bool bInputIntegrationDone = false;

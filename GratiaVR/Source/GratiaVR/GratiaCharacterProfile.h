@@ -202,6 +202,14 @@ struct GRATIAVR_API FGratiaHandPhysicsSettings
     float MaxSpeedCmPerSecond = 500.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Physics", meta = (ClampMin = "0.1"))
     float MaxTravelCm = 35.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Physics|Grab")
+    bool bAllowGrab = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Physics|Grab", meta = (ClampMin = "0.0"))
+    float GrabStiffness = 60.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Physics|Grab", meta = (ClampMin = "0.0"))
+    float GrabDamping = 1.5f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Physics|Grab", meta = (ClampMin = "0.1"))
+    float GrabBreakDistanceCm = 15.0f;
 };
 
 USTRUCT(BlueprintType)
@@ -328,6 +336,9 @@ public:
     float MaxPhysicsTargetDeviationCm = 35.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion", meta = (ClampMin = "0.01", Units = "s"))
     float PhysicsSafetyCheckSeconds = 0.25f;
+    /** Maximum world-space AABB side for a secondary body at actor scale 1. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Validation", meta = (ClampMin = "0.1", Units = "cm"))
+    float MaxSecondaryCollisionSizeCm = 60.0f;
 
     UFUNCTION(BlueprintPure, Category = "Character Profile")
     FName ResolveBone(FName Semantic) const;

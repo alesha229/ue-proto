@@ -10,6 +10,7 @@
 #include "GratiaCharacterProfile.h"
 #include "GratiaContactSolver.h"
 #include "GratiaAnimInstance.h"
+#include "GratiaHandInput.h"
 #include "Animation/AnimSequence.h"
 #include "Animation/AnimSingleNodeInstance.h"
 #include "Animation/MorphTarget.h"
@@ -872,9 +873,13 @@ void UGratiaRuntimeVerification::RunRequestedTests(float DeltaSeconds)
         bCharacterMotionChecksDone = bFinish;
     }
     if (bTestChecksDone && bSelfTest) RunInputIntegration();
-    if (bCharacterMotionChecksDone && bSelfTest) RunHandPhysicsIntegration();
+    if (bCharacterMotionChecksDone && bSelfTest)
+    {
+        RunPhysicsResponseProbe(DeltaSeconds);
+        if (PhysicsProbeGroup > 4) RunHandPhysicsIntegration();
+    }
     if (bTestChecksDone && bCharacterMotionChecksDone && TestElapsedSeconds >= 8.0f && !bRecenterTestPending
-        && (!bSelfTest || (bInputIntegrationDone && HandPhysicsQAPhase == 3)))
+        && (!bSelfTest || (bInputIntegrationDone && HandPhysicsQAPhase == 7)))
     {
         if (bTestFailed)
         {
@@ -889,30 +894,82 @@ void UGratiaRuntimeVerification::RunRequestedTests(float DeltaSeconds)
     }
 }
 
+void UGratiaRuntimeVerification::RunPhysicsResponseProbe(float Delta)
+{
+    if (PhysicsProbeGroup > 4) return;
+    auto* Character = GetRuntime().TargetCharacter.Get();
+    if (!Character || !Character->CharacterProfile || !Character->SecondaryMotion
+        || !Character->CharacterProfile->Capabilities.bSecondaryPhysics) { PhysicsProbeGroup = 5; return; }
+    auto* Mesh = Character->CharacterMesh.Get();
+    if (PhysicsProbeBone.IsNone())
+    {
+        float Longest = -1;
+        for (FName Name : Character->SecondaryMotion->GetActiveBones())
+        {
+            const auto* Definition = Character->CharacterProfile->FindSecondaryBone(Name);
+            if (Definition && Definition->Group == PhysicsProbeGroup && Definition->RestLengthCm > Longest)
+            { Longest = Definition->RestLengthCm; PhysicsProbeBone = Name; }
+        }
+        if (PhysicsProbeBone.IsNone()) { TestSkip(TEXT("Physics group disabled by current quality")); ++PhysicsProbeGroup; return; }
+        FBodyInstance* Body = Mesh->GetBodyInstance(PhysicsProbeBone);
+        PhysicsProbeBodyStart = Body->GetUnrealWorldTransform().GetRotation();
+        PhysicsProbeVisualStart = Mesh->GetSocketQuaternion(PhysicsProbeBone);
+        PhysicsProbeBodyDegrees = PhysicsProbeVisualDegrees = 0; PhysicsProbeSeconds = 0;
+        UE_LOG(LogGratiaVerification, Display, TEXT("PHYSICS_PROBE scale=%s bone_scale=%s"), *Body->Scale3D.ToString(), *Mesh->GetSocketTransform(PhysicsProbeBone).GetScale3D().ToString());
+        // Explicit diagnostic angular velocity pulse, unrelated to demo reactions or XR.
+        Body->AddAngularImpulseInRadians(FVector(4, 0, 0), true);
+        UE_LOG(LogGratiaVerification, Display, TEXT("PHYSICS_PROBE source=synthetic group=%d bone=%s body=%s visual=%s bounds=%s blend=%.2f"),
+            PhysicsProbeGroup, *PhysicsProbeBone.ToString(), *Body->GetUnrealWorldTransform().GetLocation().ToString(),
+            *Mesh->GetSocketLocation(PhysicsProbeBone).ToString(), *Body->GetBodyBounds().GetSize().ToString(), Body->PhysicsBlendWeight);
+        return;
+    }
+    PhysicsProbeSeconds += FMath::Clamp(Delta, 0.0f, 0.1f);
+    FBodyInstance* Body = Mesh->GetBodyInstance(PhysicsProbeBone);
+    PhysicsProbeBodyDegrees = FMath::Max(PhysicsProbeBodyDegrees, FMath::RadiansToDegrees(PhysicsProbeBodyStart.AngularDistance(Body->GetUnrealWorldTransform().GetRotation())));
+    PhysicsProbeVisualDegrees = FMath::Max(PhysicsProbeVisualDegrees, FMath::RadiansToDegrees(PhysicsProbeVisualStart.AngularDistance(Mesh->GetSocketQuaternion(PhysicsProbeBone))));
+    if (PhysicsProbeSeconds < 0.4f) return;
+    UE_LOG(LogGratiaVerification, Display, TEXT("PHYSICS_PROBE group=%d body_degrees=%.4f visual_degrees=%.4f"), PhysicsProbeGroup, PhysicsProbeBodyDegrees, PhysicsProbeVisualDegrees);
+    TestCheck(PhysicsProbeBodyDegrees > 0.25 && PhysicsProbeVisualDegrees > 0.1 && !Character->SecondaryMotion->HasFault(),
+        TEXT("Physical group moves its Chaos body and visible skeletal bone after an angular pulse"));
+    ++PhysicsProbeGroup; PhysicsProbeBone = NAME_None;
+}
+
 void UGratiaRuntimeVerification::RunHandPhysicsIntegration()
 {
-    if (HandPhysicsQAPhase == 3) return;
+    if (HandPhysicsQAPhase == 7) return;
     auto* Character = GetRuntime().TargetCharacter.Get();
-    if (!Character || !Character->SecondaryMotion || !Character->CharacterProfile) { HandPhysicsQAPhase = 3; return; }
+    if (!Character || !Character->SecondaryMotion || !Character->CharacterProfile) { HandPhysicsQAPhase = 7; return; }
     auto* Physics = Character->SecondaryMotion.Get();
     const auto& Settings = Character->CharacterProfile->HandPhysics;
     if (!Character->CharacterProfile->Capabilities.bSecondaryPhysics || !Settings.bEnabled)
-    { TestSkip(TEXT("Hand pressure unavailable in this profile")); HandPhysicsQAPhase = 3; return; }
+    { TestSkip(TEXT("Hand pressure unavailable in this profile")); HandPhysicsQAPhase = 7; return; }
     if (HandPhysicsQAPhase == 0)
     {
         TestCheck(!Physics->GetActiveBones().IsEmpty(), TEXT("Hand pressure has active driven Chaos bodies"));
-        if (Physics->GetActiveBones().IsEmpty()) { HandPhysicsQAPhase = 3; return; }
+        if (Physics->GetActiveBones().IsEmpty()) { HandPhysicsQAPhase = 7; return; }
         HandPhysicsQABone = Physics->GetActiveBones().Last();
         FBodyInstance* Body = Character->CharacterMesh->GetBodyInstance(HandPhysicsQABone);
-        if (!Body) { TestCheck(false, TEXT("Hand pressure test body exists")); HandPhysicsQAPhase = 3; return; }
+        if (!Body) { TestCheck(false, TEXT("Hand pressure test body exists")); HandPhysicsQAPhase = 7; return; }
         HandPhysicsBefore = Body->GetUnrealWorldTransform().GetLocation();
+        HandPhysicsTargets[0] = Body->GetBodyBounds().GetCenter();
+        HandPhysicsTargets[1] = HandPhysicsTargets[0];
+        double Farthest = 0;
+        for (FName Name : Physics->GetActiveBones())
+        {
+            if (FBodyInstance* Candidate = Character->CharacterMesh->GetBodyInstance(Name))
+            {
+                const FVector Point = Candidate->GetBodyBounds().GetCenter();
+                const double Distance = FVector::DistSquared(Point, HandPhysicsTargets[0]);
+                if (Distance > Farthest) { Farthest = Distance; HandPhysicsTargets[1] = Point; }
+            }
+        }
         UE_LOG(LogGratiaVerification, Display, TEXT("HAND_PHYSICS_QA source=synthetic bone=%s"), *HandPhysicsQABone.ToString());
         for (int32 Index = 0; Index < 2; ++Index)
         {
             HandPhysicsBaseline[Index] = Physics->GetHandPushCount(Index == 0);
             const FVector Axis = Index == 0 ? FVector::RightVector : FVector::ForwardVector;
-            Physics->SubmitHand(Index == 0, HandPhysicsBefore + Axis * Settings.RadiusCm * 2, true, 1.0f / 90);
-            Physics->SubmitHand(Index == 0, HandPhysicsBefore + Axis * Settings.RadiusCm * 0.25f, true, 1.0f / 90);
+            Physics->SubmitHand(Index == 0, HandPhysicsTargets[Index] + Axis * Settings.RadiusCm * 2, true, 1.0f / 90);
+            Physics->SubmitHand(Index == 0, HandPhysicsTargets[Index] + Axis * Settings.RadiusCm * 0.25f, true, 1.0f / 90);
         }
         HandPhysicsQAPhase = 1;
     }
@@ -932,12 +989,53 @@ void UGratiaRuntimeVerification::RunHandPhysicsIntegration()
         UE_LOG(LogGratiaVerification, Display, TEXT("HAND_PHYSICS_QA displacement_cm=%.6f"), Travel);
         HandPhysicsQAPhase = 2;
     }
-    else
+    else if (HandPhysicsQAPhase == 2)
     {
         TestCheck(Physics->GetHandPushCount(true) == HandPhysicsBaseline[0] && Physics->GetHandPushCount(false) == HandPhysicsBaseline[1],
             TEXT("Revoked hand samples cancel pending physical pressure on both hands"));
         Physics->ClearHands();
+        if (!Settings.bAllowGrab) { TestSkip(TEXT("Grab disabled by profile")); HandPhysicsQAPhase = 7; return; }
+        for (bool Left : {true, false}) Physics->SubmitHand(Left, HandPhysicsTargets[Left ? 0 : 1], true, 1.0f / 90, 0);
+        auto* PC = GetRuntime().PlayerController.Get();
+        if (!PC) { TestCheck(false, TEXT("Grab QA has player input")); HandPhysicsQAPhase = 7; return; }
+        PC->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::Z, IE_Pressed, 1));
+        PC->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::X, IE_Pressed, 1));
         HandPhysicsQAPhase = 3;
+    }
+    else if (HandPhysicsQAPhase == 3)
+    {
+        for (bool Left : {true, false})
+        {
+            const float Trigger = GetRuntime().HandInput->GetTrigger(Left);
+            TestCheck(Trigger >= 0.65f, Left ? TEXT("Z maps through bound left grab action") : TEXT("X maps through bound right grab action"));
+            Physics->SubmitHand(Left, HandPhysicsTargets[Left ? 0 : 1], true, 1.0f / 90, Trigger);
+        }
+        HandPhysicsQAPhase = 4;
+    }
+    else if (HandPhysicsQAPhase == 4)
+    {
+        TestCheck(!Physics->GetGrabbedBone(true).IsNone() && !Physics->GetGrabbedBone(false).IsNone()
+            && Physics->GetGrabbedBone(true) != Physics->GetGrabbedBone(false), TEXT("Both triggers acquire distinct active physical bodies"));
+        for (bool Left : {true, false}) Physics->SubmitHand(Left, HandPhysicsTargets[Left ? 0 : 1] + FVector(0, 0, 1), true, 1.0f / 90, 1);
+        GetRuntime().PlayerController->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::Z, IE_Released, 0));
+        GetRuntime().PlayerController->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::X, IE_Released, 0));
+        HandPhysicsQAPhase = 5;
+    }
+    else if (HandPhysicsQAPhase == 5)
+    {
+        TestCheck(!Physics->GetGrabbedBone(true).IsNone() && !Physics->GetGrabbedBone(false).IsNone(), TEXT("Both grabs persist while hand target moves"));
+        TestCheck(GetRuntime().HandInput->GetTrigger(true) == 0 && GetRuntime().HandInput->GetTrigger(false) == 0, TEXT("Released keys clear both bound trigger actions"));
+        Physics->SubmitHand(true, HandPhysicsBefore, true, 1.0f / 90, GetRuntime().HandInput->GetTrigger(true));
+        Physics->SubmitHand(false, HandPhysicsBefore, false, 1.0f / 90, 1);
+        TestCheck(Physics->GetGrabbedBone(true).IsNone() && Physics->GetGrabbedBone(false).IsNone(), TEXT("Trigger release and tracking loss clear grabs immediately"));
+        Physics->SubmitHand(false, HandPhysicsBefore, true, 1.0f / 90, 1);
+        Physics->SubmitHand(false, HandPhysicsBefore, true, 1.0f / 90, 1);
+        HandPhysicsQAPhase = 6;
+    }
+    else
+    {
+        TestCheck(Physics->GetGrabbedBone(false).IsNone(), TEXT("Tracking recovery with a held trigger cannot reacquire"));
+        Physics->ClearHands(); HandPhysicsQAPhase = 7;
     }
 }
 

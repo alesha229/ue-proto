@@ -19,10 +19,12 @@ public:
     void ResetPhysics();
     bool RunChecks(FString& Failure);
     /** Called after tracking and the independent proxy solver. Consumed once next PrePhysics. */
-    void SubmitHand(bool bLeft, const FVector& Position, bool bAllowed, float Delta);
+    void SubmitHand(bool bLeft, const FVector& Position, bool bAllowed, float Delta, float Trigger = 0.0f);
     void ClearHands();
     const TArray<FName>& GetActiveBones() const { return ActiveBones; }
     int32 GetHandPushCount(bool bLeft) const { return HandPushCounts[bLeft ? 0 : 1]; }
+    FName GetGrabbedBone(bool bLeft) const { return Hands[bLeft ? 0 : 1].GrabbedBone; }
+    FString GetHandDiagnostics() const;
     int32 GetActiveBodyCount() const { return ActiveBones.Num(); }
     bool HasFault() const { return bFault; }
 protected:
@@ -41,6 +43,9 @@ private:
         FVector Previous = FVector::ZeroVector, Current = FVector::ZeroVector;
         float Delta = 0.0f;
         bool bReady = false, bPending = false;
+        bool bGrabArmed = false, bGrabPressed = false;
+        FName GrabbedBone;
+        FVector GrabLocalPoint = FVector::ZeroVector, GrabOffset = FVector::ZeroVector;
     };
     FPhysicsHand Hands[2];
     int32 HandPushCounts[2] = {};

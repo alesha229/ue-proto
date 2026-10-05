@@ -15,6 +15,7 @@ class UTextRenderComponent;
 class UGratiaLocomotion;
 class UGratiaMenu;
 class UGratiaRuntimeVerification;
+class UGratiaHandInput;
 
 UENUM(BlueprintType)
 enum class EGratiaHandState : uint8
@@ -97,6 +98,8 @@ public:
     TObjectPtr<UGratiaLocomotion> Locomotion;
     UPROPERTY(VisibleAnywhere, Category = "Menu")
     TObjectPtr<UGratiaMenu> Menu;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Input")
+    TObjectPtr<UGratiaHandInput> HandInput;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stage 1|Calibration", meta = (ClampMin = "0.5", ClampMax = "10.0", Units = "cm"))
     float HeightStepCm = 2.0f;

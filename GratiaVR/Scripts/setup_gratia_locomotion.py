@@ -22,6 +22,11 @@ for action, kind in [(walk, unreal.InputActionValueType.AXIS2D), (turn, unreal.I
     action.set_editor_property('consume_input', True)
 walk.set_editor_property('accumulation_behavior', unreal.InputActionAccumulationBehavior.CUMULATIVE)
 context.unmap_all()
+grab_left = asset('IA_GrabLeft', unreal.InputAction)
+grab_right = asset('IA_GrabRight', unreal.InputAction)
+for action in (grab_left, grab_right):
+    action.set_editor_property('value_type', unreal.InputActionValueType.AXIS1D)
+    action.set_editor_property('consume_input', True)
 bindings = []
 
 def mapping(action, key, y=False, negative=False):
@@ -55,6 +60,10 @@ for prefix, stick in xr_sticks:
     mapping(walk, f'{prefix}_Left_{stick}_2D')
     mapping(turn, f'{prefix}_Right_{stick}_X')
     mapping(block, f'{prefix}_Right_{stick}_Y')
+    mapping(grab_left, f'{prefix}_Left_Trigger_Axis')
+    mapping(grab_right, f'{prefix}_Right_Trigger_Axis')
+mapping(grab_left, 'Z')
+mapping(grab_right, 'X')
 mapping(walk, 'Gamepad_LeftX')
 mapping(walk, 'Gamepad_LeftY', y=True)
 mapping(turn, 'Gamepad_RightX')
@@ -109,7 +118,7 @@ for prefix, left_previous in [('OculusTouch', 'X'), ('ValveIndex', 'A')]:
 mapping(next_action, 'Down')
 mapping(next_action, 'Up', negative=True)
 mapping(apply_action, 'Enter')
-for item in [walk, turn, block, toggle, next_action, apply_action, movement_context, context]:
+for item in [walk, turn, block, grab_left, grab_right, toggle, next_action, apply_action, movement_context, context]:
     description = 'action_description' if isinstance(item, unreal.InputAction) else 'context_description'
     item.set_editor_property(description, item.get_name())
     assert library.save_loaded_asset(item, only_if_is_dirty=False)

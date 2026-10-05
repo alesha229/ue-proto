@@ -21,4 +21,7 @@ public:
      */
     UFUNCTION(BlueprintCallable, CallInEditor, Category = "Gratia|Editor")
     static UPhysicsAsset* BuildPhysicsAsset(USkeletalMesh* SkeletalMesh, const FString& AssetPackagePath);
+    /** Repairs centimetre dimensions mistakenly authored in a scaled FBX bone's local units. */
+    UFUNCTION(BlueprintCallable, CallInEditor, Category = "Gratia|Editor")
+    static bool RepairSecondaryShapeUnits(USkeletalMesh* SkeletalMesh);
 };
