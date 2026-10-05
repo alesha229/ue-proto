@@ -25,6 +25,7 @@ public:
     void RunSoakAndMetrics(float DeltaSeconds);
     void ConfigureCaptureView();
     bool IsHandPhysicsQAActive() const { return bSelfTest && HandPhysicsQAPhase > 0 && HandPhysicsQAPhase < 7; }
+    bool OwnsSyntheticContactSamples() const { return SoakDuration > 0.0f && !bMetricsFinished; }
 
 protected:
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;

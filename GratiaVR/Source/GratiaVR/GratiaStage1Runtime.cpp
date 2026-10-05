@@ -393,7 +393,9 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
         }
     }
     if (IsFiniteTransform(VisualWorld)) Hand.LastWorld = VisualWorld;
-    if (TargetCharacter.IsValid() && TargetCharacter->Interaction)
+    // The opt-in soak supplies its own samples after this update. Parked desktop
+    // hands must not keep resetting that scenario's correction-recovery timer.
+    if (TargetCharacter.IsValid() && TargetCharacter->Interaction && !Verification->OwnsSyntheticContactSamples())
     {
         TargetCharacter->Interaction->SetHandSample(bLeft, Target, VisualWorld, Hand.Gate.CanInteract());
         if (TargetCharacter->SecondaryMotion && !Verification->IsHandPhysicsQAActive())
