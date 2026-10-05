@@ -33,16 +33,42 @@ Head/LeftFoot/RightFoot профиля, не привязываются (в merg
 общий для волос и тела). Вес cloth плавно спадает с расстоянием до клетки 1→3 см:
 далёкие точки поворачивались бы вместе с треугольником клетки.
 
-### Настройка солвера
+### Настройка как в Blender (коллекция Phys/BodyPhys)
 
-5 iterations, 2 substeps, edge 0,65, area 0,85, bending 0,1, damping 0,1,
-gravity scale 0,2, anim drive 0,35–1,0 (по Pin), pressure 0. Pressure Chaos на трёх
-открытых клетках раздувал свободные частицы до MaxDistance в покое (смещение 3 см,
-лицо/шея до 6 см); форму в покое теперь держит anim drive, а маска pressure
-`SourcePressureRegions` сохранена в ассете для ручной настройки. Смещение в покое
-после правки: максимум ≈1,3 см, среднее ≈0,7 см. Это адаптация, а не 1:1 Blender.
-Клетки используют core colliders, исключая secondary bodies и core shapes,
-пересекающие свободные source-вершины. Группа тела 3 исключена из rigid simulation.
+Источник (Blender MCP, `export_source_cloth_cages.py` schema 2):
+
+| Клетка | Масса | Tension / shear / bending | Pin / internal springs | Pressure | Gravity | Collision |
+|---|---|---|---|---|---|---|
+| TitsPhys | 15 | 4 / 15 / 0,5 | 3 / 1 | 1 | 0,2 | да |
+| AssPhys | 16 | 5 / 5 / 0,5 | 1,8 / 0,5 | 0,5 | 0,2 | да, + self |
+| ThighsPhys | 3 | 5 / 5 / 0 | 5 / 5 | 1 | 0 | нет |
+
+Коллайдеры источника: `Body collision` (1343 вершины, friction 0) и `Head collision`
+(482, friction 1). Коллекция HairPhys в источнике исключена (exclude) и не переносится.
+Одежда Top/Pants/Boots/Pants decor в источнике следует за клетками через SurfaceDeform
+(render), поэтому в Unreal она привязана к ткани теми же весами групп, без ослабления.
+
+Перенос: один Chaos clothing asset (в UE секция меша привязывается только к одному
+cloth-ассету, а Body зависит от всех трёх клеток), значения каждой клетки — weight maps:
+tension→EdgeStiffness, shear→AreaStiffness, bending→BendingStiffness, pressure→Pressure,
+pin и internal springs→AnimDrive (у Chaos нет internal springs; anim drive к форме
+анимированной клетки — ближайший аналог). Пружины Blender силовые, поэтому значения
+делятся на массу вершины: `s = (k/mass) / (k/mass + 0.12)`; pressure ×0.01.
+Калибровка подобрана по эталону `evidence/04/blender_cloth_offset_reference.json`
+(среднее смещение от скиннинга): Blender TitsPhys 0,68–1,0 см, AssPhys 1,1–1,5 см,
+ThighsPhys ≤0,01 см; готовый пакет в покое 0,59 / 1,42 / 0,011 см.
+
+Коллайдеры: Body/Head collision разбиты по доминирующей кости на convex-оболочки,
+оставлены только достижимые частицами (8 из 54), и заменены 80 вписанными сферами:
+convex-коллизии Chaos давали ~6 FPS, а CCD по всем фигурам — ещё ~15 FPS, поэтому CCD
+выключен (руки и так используют swept-капсулы). Среднее отличие сфер от исходной
+поверхности коллайдера 1,0 см, максимум 4,1 см. В покое ни одна частица не внутри.
+
+Ограничения Chaos (одно значение на ассет): гравитация 0,2 для всех клеток — у
+ThighsPhys в источнике 0, поэтому ей задан anim drive ≥0,9; масса и self-collision
+не разделяются по клеткам (self-collision AssPhys не перенесена: глобальная включила бы
+столкновения между пересекающимися AssPhys/ThighsPhys); collision выключенная у ThighsPhys
+в Unreal включена, иначе рука не могла бы её касаться.
 
 ### Руки
 
@@ -53,17 +79,20 @@ sphere/capsule collision и ограниченный хват динамичес
 ткани следует от видимой руки к raw-позиции контроллера не дальше
 `ClothSettings.SoftPressDepthCm` (по умолчанию 4 см); видимая рука и контактные
 реакции не меняются. F1 показывает текущую глубину `press L/R`.
-Хват: GrabStiffness 25, GrabVelocityBlend 0,6, MaxGrabSpeed 200 см/с.
+Хват: GrabStiffness 25, GrabVelocityBlend 0,6, MaxGrabSpeed 200 см/с. Поиск частицы
+для хвата идёт на `GrabRadiusCm` (3 см) дальше поверхности коллайдера руки (6 см):
+коллайдер отталкивает частицы до своей поверхности, и прежний поиск в пределах 6 см от
+центра почти всегда промахивался.
 Отпускание, tracking loss/recovery, меню, отключение и fault сбрасывают удержание.
 Все параметры — в CharacterProfile.ClothSettings.
 
-Editor QA (синтетическая рука, desktop, `evidence/04/editor_cloth_qa10.log`):
+QA готового пакета `gratia-20261005T081117Z-5d87d695-9a5f49fb` (синтетическая рука, desktop):
 
 | Зона | Нажим: частицы / видимая сетка | Хват, тяга 3 см: частицы / сетка |
 |---|---|---|
-| TitsPhys | 2,00 / 1,74 см | 0,76 / 0,51 см |
-| AssPhys | 2,62 / 1,66 см | 0,86 / 0,41 см |
-| ThighsPhys | 1,86 / 1,29 см | 0,37 / 0,21 см |
+| TitsPhys | 1,77 / 1,48 см | 0,92 / 0,82 см |
+| AssPhys | 1,87 / 1,52 см | 1,13 / 0,77 см |
+| ThighsPhys | 1,68 / 1,44 см | 0,21 / 0,15 см (почти жёсткая, как в Blender) |
 
 Лицо/стопы и неотмеченные вершины: 0,000 см. Прямой test-trigger не доказывает
 работу реального Input Action и не заменяет проверку в шлеме.

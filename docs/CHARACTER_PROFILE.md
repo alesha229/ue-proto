@@ -102,6 +102,7 @@ ClothSettings exposes hand/grab radii, break distance, maximum hand travel/speed
 grab stiffness/velocity blending, an emergency particle-offset limit and
 SoftPressDepthCm (default 4 cm): how far the cloth hand collider may follow the raw
 controller past the proxy-constrained visible hand, so a press can dent soft tissue.
+GrabRadiusCm is measured beyond the hand collider surface (HandRadiusCm).
 The cloth asset is a `UGratiaSourceClothingAsset`; it restores the stored per-section
 render binding whenever Unreal rebuilds the mesh. The port excludes vertices whose
 dominant bone is under the profile's Head/LeftFoot/RightFoot semantics. Native
