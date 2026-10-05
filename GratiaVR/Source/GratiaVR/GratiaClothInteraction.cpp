@@ -226,6 +226,21 @@ void UGratiaClothInteraction::UpdateNativeCloth(float Delta, bool bApplyHands)
                 }
             }
             CageDisplacements.Add(Name, CageDisplacement);
+            RegionDisplacementCm.SetNumZeroed(Profile->SourceClothRegions.Num());
+            for (int32 Region = 0; Region < Profile->SourceClothRegions.Num(); ++Region)
+            {
+                const auto& Definition = Profile->SourceClothRegions[Region];
+                if (Definition.AssetName != Name) continue;
+                double Sum = 0, Max = 0;
+                int32 Count = 0;
+                for (int32 Index = Definition.FirstParticle; Index < Definition.FirstParticle + Definition.ParticleCount && Index < Positions.Num(); ++Index)
+                {
+                    if (InverseMasses[Index] <= 0) continue;
+                    const double Offset = FVector::Distance(FVector(Positions[Index]), FVector(Animation[Index])) * Scale;
+                    Sum += Offset; Max = FMath::Max(Max, Offset); ++Count;
+                }
+                RegionDisplacementCm[Region] = FVector2f(Count ? float(Sum / Count) : 0.f, float(Max));
+            }
             MeanDisplacementCm = DynamicInCage ? float(DisplacementSum / DynamicInCage) : 0.f;
             MaxDisplacementCm = FMath::Max(MaxDisplacementCm, CageDisplacement);
             if (CageDisplacement > Settings.MaxParticleOffsetCm)
@@ -253,7 +268,8 @@ void UGratiaClothInteraction::UpdateNativeCloth(float Delta, bool bApplyHands)
         if (Hand.bGrabPressed)
         {
             Hand.bGrabPressed = false;
-            double BestDistance = Settings.GrabRadiusCm;
+            const double SearchCm = Settings.HandRadiusCm + Settings.GrabRadiusCm;
+            double BestDistance = SearchCm, NearestAnyCm = DBL_MAX;
             for (const auto& View : Views)
             {
                 const auto Positions = View.Solver->GetParticleXsView(View.RangeId);
@@ -267,13 +283,15 @@ void UGratiaClothInteraction::UpdateNativeCloth(float Delta, bool bApplyHands)
                     if (Other.InstanceIndex == View.InstanceIndex && Other.ParticleRangeId == View.RangeId && Other.ParticleIndex == Index) continue;
                     const FVector Position = FVector(Positions[Index]) * Scale + Origin;
                     const double Distance = FVector::Distance(Hand.Current, Position);
+                    NearestAnyCm = FMath::Min(NearestAnyCm, Distance);
                     if (Distance >= BestDistance) continue;
                     BestDistance = Distance; Hand.InstanceIndex = View.InstanceIndex;
                     Hand.ClothId = int32(View.Cloth->GetGroupId()); Hand.ParticleRangeId = View.RangeId;
                     Hand.ParticleIndex = Index; Hand.GrabOffset = Position - Hand.Current;
                 }
             }
-            UE_LOG(LogGratiaClothHands, Display, TEXT("SOURCE_CLOTH_GRAB hand=%d particle=%d"), HandIndex, Hand.ParticleIndex);
+            UE_LOG(LogGratiaClothHands, Display, TEXT("SOURCE_CLOTH_GRAB hand=%d particle=%d nearest_dynamic_cm=%.2f search_cm=%.1f press_cm=%.1f"),
+                HandIndex, Hand.ParticleIndex, NearestAnyCm, SearchCm, PressDepthCm[HandIndex]);
         }
         if (Hand.ParticleIndex != INDEX_NONE)
         {
@@ -349,6 +367,12 @@ void UGratiaClothInteraction::TickComponent(float Delta, ELevelTick Type, FActor
     {
         NextDiagnosticTime = Now + 2;
         UE_LOG(LogGratiaClothHands, Display, TEXT("SOURCE_CLOTH %s"), *GetDiagnostics());
+        FString Regions;
+        const auto* Profile = Character->CharacterProfile.Get();
+        for (int32 Region = 0; Region < RegionDisplacementCm.Num() && Profile && Region < Profile->SourceClothRegions.Num(); ++Region)
+            Regions += FString::Printf(TEXT(" %s=%.3f/%.3f"), *Profile->SourceClothRegions[Region].Name.ToString(),
+                RegionDisplacementCm[Region].X, RegionDisplacementCm[Region].Y);
+        if (!Regions.IsEmpty()) UE_LOG(LogGratiaClothHands, Display, TEXT("SOURCE_CLOTH_REGIONS mean/max cm:%s"), *Regions);
     }
 }
 

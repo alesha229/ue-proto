@@ -53,26 +53,22 @@ IA_GrabLeft/Right используют trigger Axis1D; Z/X — только desk
 
 ## Активный перенос исходной мягкой поверхности
 
-Реализовано 5 октября 2026; редакторская и packaged QA пока ожидаются.
-`export_source_cloth_cages.py` и
+Повторяет физическую коллекцию Blender `Phys/BodyPhys` (HairPhys в источнике
+исключена и не переносится). `export_source_cloth_cages.py` (schema 2) и
 `audit_source_cloth_motion.py` выполняются только через живой Blender MCP в MVP-копии.
-Первый сохраняет исходные клетки, Pin, bone weights и точные SurfaceDeform-маски;
-второй временно включает их viewport-представление и восстанавливает состояние.
-После сборки editor-модуля `port_source_cloth_cages.py` создаёт native Chaos Cloth
-в существующем skeletal mesh из трёх включённых клеток TitsPhys/AssPhys/ThighsPhys
-(3112 вершин, 206 full pins), сохраняет skeleton/material/morph ресурсы и отключает
-дублирующую rigid-body симуляцию группы тела. Перед импортом сохраняется резервная
-копия меша/профиля. Повторный запуск меняет только собственные cloth assets;
-source pins, материалы и маски экспортируются в `Exports/Gratia/GameRig/source_cloth_cages.json`.
-`-GratiaClothQA` проверяет частицы и видимые вершины при синтетическом нажиме,
-хвате и сбросе; обязательна проверка конкретного нового пакета и отдельный VR-журнал.
-Import marker подтверждает только выполнение скрипта.
+Экспорт сохраняет клетки TitsPhys/AssPhys/ThighsPhys (топология, Pin, веса костей,
+настройки Cloth каждой клетки: масса, tension/shear/bending, pin и internal springs,
+pressure, gravity, collision/self-collision) и коллайдеры Body collision / Head collision.
+Эталон смещений источника: `evidence/04/blender_cloth_offset_reference.json`.
 
-Chaos требует адаптации source stiffness/pressure/internal springs. Активные
-cloth-вершины подавляют обычные positional corrective morphs, исключённые лицо/руки
-сохраняют skinning/morph path. Hair SurfaceDeform выключены в source render и
-не переносятся. Native body cloth пока одинаков при Low/Medium/High;
-костные группы аксессуаров продолжают использовать профильные quality caps.
+После сборки editor-модуля `port_source_cloth_cages.py` создаёт mesh-owned
+`UGratiaSourceClothingAsset`: значения каждой клетки — weight maps Chaos (tension,
+shear, bending, pressure, anim drive из pin/internal springs); коллайдеры — сферы,
+вписанные в convex-оболочки по костям (только достижимые частицами). Калибровка
+Blender→Chaos: `GRATIA_CLOTH_HALF_POINT` (0.12) и `GRATIA_CLOTH_PRESSURE_SCALE` (0.01).
+Привязка render-секций хранится в ассете и восстанавливается при пересборке меша;
+порт проверяет её после пересборки. `-GratiaClothQA` проверяет нажим/хват/сброс;
+обязательна проверка конкретного пакета и отдельный VR-журнал.
 
 ## Исторические миграции
 

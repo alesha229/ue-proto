@@ -17,5 +17,6 @@ public:
      *  Render vertices whose dominant skin bone is (under) an excluded root stay skinned:
      *  a merged mesh cannot tell, e.g., hair over the chest from a shared-material consumer. */
     UFUNCTION(BlueprintCallable, CallInEditor, Category = "Gratia|Editor")
-    static bool BuildSourceClothCages(USkeletalMesh* SkeletalMesh, const FString& JSONPath, const TArray<FName>& ExcludedBoneRoots);
+    static bool BuildSourceClothCages(USkeletalMesh* SkeletalMesh, const FString& JSONPath, const TArray<FName>& ExcludedBoneRoots,
+        float StiffnessHalfPoint, float PressureScale);
 };

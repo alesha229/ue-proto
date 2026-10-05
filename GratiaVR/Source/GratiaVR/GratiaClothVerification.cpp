@@ -237,7 +237,6 @@ bool UGratiaClothVerification::SelectReachableParticle()
     const FVector Right = FVector::CrossProduct(Up, Forward).GetSafeNormal();
     if (!Check(!Forward.IsNearlyZero() && !Right.IsNearlyZero(), TEXT("profile cloth probe axes are valid"))) return false;
     const float Radius = Character->CharacterProfile->ClothSettings.HandRadiusCm;
-    const float GrabRadius = Character->CharacterProfile->ClothSettings.GrabRadiusCm;
     double BestGap = DBL_MAX;
     CandidateParticle = INDEX_NONE;
     // A source region can be exposed at the front, back or side. Use its actual
@@ -261,13 +260,25 @@ bool UGratiaClothVerification::SelectReachableParticle()
         const FVector Press = Constrained.GetLocation() + (Touch - Constrained.GetLocation()).GetClampedToMaxSize(PressDepth);
         const double Gap = FVector::Distance(Press, Particles[Extremum]);
         if (Constrained.ContainsNaN() || Gap >= BestGap) continue;
+        // Source cages overlap (AssPhys / ThighsPhys). A grab takes the nearest
+        // dynamic particle of any cage, so only accept probes where that particle
+        // belongs to the region under test.
+        int32 Nearest = INDEX_NONE;
+        double NearestDistance = DBL_MAX;
+        for (int32 Particle = 0; Particle < Particles.Num(); ++Particle)
+        {
+            if (InverseMasses[Particle] <= 0) continue;
+            const double Distance = FVector::Distance(Press, Particles[Particle]);
+            if (Distance < NearestDistance) { NearestDistance = Distance; Nearest = Particle; }
+        }
+        if (Nearest < Region->FirstParticle || Nearest >= Region->FirstParticle + Region->ParticleCount) continue;
         BestGap = Gap;
         CandidateParticle = Extremum;
         ProbeForward = Direction;
         HandOutside = Outside;
         HandTouch = Touch;
     }
-    if (!Check(CandidateParticle != INDEX_NONE && BestGap < FMath::Min(Radius, GrabRadius),
+    if (!Check(CandidateParticle != INDEX_NONE && BestGap < Radius,
         FString::Printf(TEXT("dynamic cloth extremum is reachable by constrained visible hand gap=%.3fcm"), BestGap))) return false;
     HandVisual = FTransform(FQuat::Identity, HandOutside);
     UE_LOG(LogGratiaClothQA, Display, TEXT("CLOTH_QA_TARGET region=%s particle=%d source=(%.3f,%.3f,%.3f) hand=(%.3f,%.3f,%.3f)"),

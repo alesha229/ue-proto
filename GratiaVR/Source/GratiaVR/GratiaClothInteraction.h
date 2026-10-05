@@ -80,6 +80,8 @@ private:
     int32 ManagedCageCount = 0;
     float MaxDisplacementCm = 0;
     float MeanDisplacementCm = 0;
+    /** Per profile SourceClothRegion: mean / max dynamic particle offset from animation, cm. */
+    TArray<FVector2f> RegionDisplacementCm;
     double NextDiagnosticTime = 0;
     bool bRunning = false;
     bool bFault = false;

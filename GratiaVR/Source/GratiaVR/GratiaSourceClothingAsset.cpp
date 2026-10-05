@@ -1,6 +1,8 @@
 #include "GratiaSourceClothingAsset.h"
 
 #include "Engine/SkeletalMesh.h"
+#include "PhysicsEngine/PhysicsAsset.h"
+#include "PhysicsEngine/SkeletalBodySetup.h"
 #include "SkeletalMeshTypes.h"
 #if WITH_EDITOR
 #include "Rendering/SkeletalMeshLODModel.h"
@@ -12,6 +14,24 @@ DEFINE_LOG_CATEGORY_STATIC(LogGratiaSourceClothBinding, Log, All);
 UGratiaSourceClothingAsset::UGratiaSourceClothingAsset(const FObjectInitializer& ObjectInitializer)
     : Super(ObjectInitializer)
 {
+}
+
+void UGratiaSourceClothingAsset::PostLoad()
+{
+    Super::PostLoad();
+    if (!PhysicsAsset) return;
+    PhysicsAsset->ConditionalPostLoad();
+    for (USkeletalBodySetup* Body : PhysicsAsset->SkeletalBodySetups)
+    {
+        if (!Body) continue;
+        Body->ConditionalPostLoad();
+        if (Body->AggGeom.ConvexElems.IsEmpty()) continue;
+        Body->CreatePhysicsMeshes();
+        const int32 Removed = Body->AggGeom.ConvexElems.RemoveAll([](const FKConvexElem& Convex) { return !Convex.GetChaosConvexMesh(); });
+        if (Removed)
+            UE_LOG(LogGratiaSourceClothBinding, Error, TEXT("SOURCE_CLOTH_COLLIDER_UNAVAILABLE asset=%s bone=%s removed_convexes=%d"),
+                *GetName(), *Body->BoneName.ToString(), Removed);
+    }
 }
 
 #if WITH_EDITOR

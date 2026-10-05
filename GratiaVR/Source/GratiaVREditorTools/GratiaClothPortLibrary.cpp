@@ -18,6 +18,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "UObject/UnrealType.h"
 #include "Utils/ClothingMeshUtils.h"
+#include "Chaos/Convex.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogGratiaClothPort, Log, All);
 
@@ -25,11 +26,22 @@ namespace GratiaClothPort
 {
 constexpr TCHAR OwnedPrefix[] = TEXT("GratiaSourceCloth_");
 constexpr float SampleToleranceCm = 0.2f;
-// SurfaceDeform consumers lie on or just above their cages. Far bindings (for
-// example a coincident head/neck seam sample) would swing with a rotating cage
-// triangle, so their cloth weight fades out smoothly instead of tearing.
-constexpr float BindFullDistanceCm = 1.0f;
-constexpr float BindZeroDistanceCm = 3.0f;
+// Blender springs are force-based (stiffness / vertex mass); Chaos uses unitless
+// PBD stiffness in [0,1]. s(k) = k / (k + HalfPoint) keeps the source ordering
+// per cage; HalfPoint and PressureScale are calibrated against the measured
+// source offsets in evidence/04/blender_cloth_offset_reference.json.
+float SourceStiffnessHalfPoint = 0.12f;
+float SourcePressureScale = 0.01f;
+// Chaos has one gravity per asset. A cage whose source gravity is lower than the
+// asset gravity gets this anim-drive floor so it stays near its pose as in Blender.
+constexpr float GravityCompensationDrive = 0.9f;
+constexpr float FreeVertexDriveFloor = 0.05f;
+
+float SourceStiffness(double Stiffness, double Mass)
+{
+    const double K = Mass > UE_SMALL_NUMBER ? FMath::Max(Stiffness, 0.0) / Mass : 0.0;
+    return float(K / (K + SourceStiffnessHalfPoint));
+}
 
 bool ReadVector(const TSharedPtr<FJsonValue>& Value, FVector& Out)
 {
@@ -165,6 +177,9 @@ struct FCage
     int32 FirstTriangle = 0;
     int32 NumTriangles = 0;
     float Pressure = 0;
+    float Gravity = 1;
+    float Edge = 1, Area = 1, Bending = 1, PinDrive = 1, InternalDrive = 0;
+    bool bCollision = true, bSelfCollision = false;
 };
 
 struct FPortData
@@ -174,7 +189,8 @@ struct FPortData
     TArray<FCage> Cages;
     TArray<FInfluenceSample> Samples;
     TMap<FIntVector, TArray<int32>> SampleCells;
-    TArray<float> PressureMask;
+    TArray<float> PressureMask, EdgeMask, AreaMask, BendingMask;
+    float Gravity = 0;
     int32 FixedCount = 0;
 };
 
@@ -200,6 +216,23 @@ bool ReadCages(const TSharedPtr<FJsonObject>& Json, const USkeletalMesh* Mesh, c
         TSharedPtr<FJsonObject> Settings;
         if (CageJson->TryGetObjectField(TEXT("settings"), SettingsPtr)) Settings = *SettingsPtr;
         Cage.Pressure = Flag(Settings, TEXT("use_pressure"), false) ? FMath::Clamp((float)Number(Settings, TEXT("uniform_pressure_force"), 0), 0.f, 1.f) : 0.f;
+        const double Mass = Number(Settings, TEXT("mass"), 1.0);
+        Cage.Edge = SourceStiffness(Number(Settings, TEXT("tension_stiffness"), 15), Mass);
+        Cage.Area = SourceStiffness(Number(Settings, TEXT("shear_stiffness"), 5), Mass);
+        Cage.Bending = SourceStiffness(Number(Settings, TEXT("bending_stiffness"), 0.5), Mass);
+        Cage.PinDrive = SourceStiffness(Number(Settings, TEXT("pin_stiffness"), 1), Mass);
+        // Blender internal springs hold free vertices to the cage's own rest shape.
+        // Chaos legacy cloth has no internal springs; anim drive toward the
+        // animated (rest-shaped) cage is its closest shape-preserving term.
+        if (Flag(Settings, TEXT("use_internal_springs"), false))
+            Cage.InternalDrive = SourceStiffness(Number(Settings, TEXT("internal_tension_stiffness"), 0), Mass);
+        Cage.Gravity = FMath::Clamp((float)Number(CageJson, TEXT("gravity"), 1.0), 0.f, 1.f);
+        const TSharedPtr<FJsonObject>* CollisionPtr;
+        if (CageJson->TryGetObjectField(TEXT("collision"), CollisionPtr))
+        {
+            Cage.bCollision = Flag(*CollisionPtr, TEXT("use_collision"), true);
+            Cage.bSelfCollision = Flag(*CollisionPtr, TEXT("use_self_collision"), false);
+        }
         const int32 CageIndex = Out.Cages.Num();
         const int32 Base = Out.Physical.Vertices.Num();
         Cage.FirstTriangle = Out.Physical.Indices.Num() / 3;
@@ -217,8 +250,11 @@ bool ReadCages(const TSharedPtr<FJsonObject>& Json, const USkeletalMesh* Mesh, c
             // Native Chaos treats distances below 0.1cm as kinematic. Keep a
             // 1.01mm floor for partial source pins so they stay dynamic.
             MaxDistance.Add(Fixed ? 0.f : FMath::Max(0.101f, 3.f * FMath::Square(1.f - P)));
-            AnimDrive.Add(FMath::Max(P, 0.05f));
+            AnimDrive.Add(FMath::Max3(P * Cage.PinDrive, Cage.InternalDrive, FreeVertexDriveFloor));
             Out.PressureMask.Add(Cage.Pressure);
+            Out.EdgeMask.Add(Cage.Edge);
+            Out.AreaMask.Add(Cage.Area);
+            Out.BendingMask.Add(Cage.Bending);
             Out.FixedCount += Fixed;
             FClothVertBoneData BoneData;
             float Sum = 0;
@@ -281,9 +317,22 @@ bool ReadCages(const TSharedPtr<FJsonObject>& Json, const USkeletalMesh* Mesh, c
                 Out.Samples.Add(MoveTemp(Sample));
             }
         }
-        UE_LOG(LogGratiaClothPort, Display, TEXT("SOURCE_CLOTH_CAGE name=%s vertices=%d triangles=%d pressure_mask=%.3f"), *Cage.Name, Vertices->Num(), Cage.NumTriangles, Cage.Pressure);
+        Out.Gravity = FMath::Max(Out.Gravity, Cage.Gravity);
+        UE_LOG(LogGratiaClothPort, Display, TEXT("SOURCE_CLOTH_CAGE name=%s vertices=%d triangles=%d pressure=%.3f edge=%.3f area=%.3f bending=%.3f pin_drive=%.3f internal_drive=%.3f gravity=%.2f collision=%d self_collision=%d"),
+            *Cage.Name, Vertices->Num(), Cage.NumTriangles, Cage.Pressure, Cage.Edge, Cage.Area, Cage.Bending, Cage.PinDrive, Cage.InternalDrive, Cage.Gravity, Cage.bCollision, Cage.bSelfCollision);
     }
     if (Out.Physical.Vertices.Num() < 3 || Out.Physical.Vertices.Num() >= 65535 || Out.FixedCount == 0) return false;
+    for (const FCage& Cage : Out.Cages)
+    {
+        if (Cage.Gravity >= Out.Gravity - 0.01f) continue;
+        const auto& Indices = Out.Physical.Indices;
+        TSet<uint32> CageVertices;
+        for (int32 T = Cage.FirstTriangle; T < Cage.FirstTriangle + Cage.NumTriangles; ++T)
+            for (int32 C = 0; C < 3; ++C) CageVertices.Add(Indices[T * 3 + C]);
+        for (const uint32 Vertex : CageVertices) AnimDrive[Vertex] = FMath::Max(AnimDrive[Vertex], GravityCompensationDrive);
+        UE_LOG(LogGratiaClothPort, Display, TEXT("SOURCE_CLOTH_GRAVITY_COMPENSATION cage=%s source_gravity=%.2f asset_gravity=%.2f drive_floor=%.2f"),
+            *Cage.Name, Cage.Gravity, Out.Gravity, GravityCompensationDrive);
+    }
     Out.Physical.GetWeightMap(EWeightMapTargetCommon::MaxDistance).Values = MoveTemp(MaxDistance);
     Out.Physical.GetWeightMap(EWeightMapTargetCommon::AnimDriveStiffness).Values = MoveTemp(AnimDrive);
     // Chaos's cloth descriptor uses clockwise normals; calibrate winding against
@@ -330,7 +379,6 @@ struct FSectionMapping
     int32 Section = INDEX_NONE;
     TArray<FMeshToMeshVertData> Mapping;
     int32 DynamicVertices = 0;
-    int32 DistanceFaded = 0;
     float MaxRestError = 0;
 };
 
@@ -540,10 +588,8 @@ bool BuildMappings(USkeletalMesh* Mesh, const FPortData& Data, const TArray<FNam
         for (int32 I = 0; I < ActiveMapping.Num(); ++I)
         {
             auto Mapping = ActiveMapping[I];
-            const float BindDistance = FMath::Abs(Mapping.PositionBaryCoordsAndDist.W);
-            const float DistanceWeight = 1.f - FMath::SmoothStep(BindFullDistanceCm, BindZeroDistanceCm, BindDistance);
-            Result.DistanceFaded += DistanceWeight < 0.999f;
-            const float SimWeight = (1.f - Mapping.SourceMeshVertIndices[3] / 65535.f) * BlendWeights[I] * DistanceWeight;
+            // Source SurfaceDeform weights are used as authored, also for clothing.
+            const float SimWeight = (1.f - Mapping.SourceMeshVertIndices[3] / 65535.f) * BlendWeights[I];
             Mapping.SourceMeshVertIndices[3] = (uint16)FMath::RoundToInt((1.f - SimWeight) * 65535.f);
             Result.DynamicVertices += SimWeight > 0.001f;
             if (SimWeight > 0.001f)
@@ -582,38 +628,224 @@ void AddMask(FClothLODDataCommon& Lod, const uint32 Target, const TCHAR* Name, c
     EditorMask.Name = FName(Name);
 }
 
-bool CoreColliderTouchesFreeCage(const USkeletalBodySetup* Body, const USkeletalMesh* Mesh, const FClothPhysicalMeshData& Physical)
+FTransform RefComponentTransform(const FReferenceSkeleton& Skeleton, int32 BoneIndex)
 {
-    const auto& Skeleton = Mesh->GetRefSkeleton();
-    const int32 BoneIndex = Skeleton.FindBoneIndex(Body->BoneName);
-    if (BoneIndex == INDEX_NONE) return true;
-    FTransform BoneTransform = Skeleton.GetRefBonePose()[BoneIndex];
+    FTransform Result = Skeleton.GetRefBonePose()[BoneIndex];
     for (int32 Parent = Skeleton.GetParentIndex(BoneIndex); Parent != INDEX_NONE; Parent = Skeleton.GetParentIndex(Parent))
-        BoneTransform *= Skeleton.GetRefBonePose()[Parent];
-    const double Scale = BoneTransform.GetScale3D().GetAbsMax();
-    const auto& MaxDistance = Physical.GetWeightMap(EWeightMapTargetCommon::MaxDistance).Values;
-    for (int32 Vertex = 0; Vertex < Physical.Vertices.Num(); ++Vertex)
+        Result *= Skeleton.GetRefBonePose()[Parent];
+    return Result;
+}
+
+/**
+ * Source "Collision" objects (Body collision, Head collision) become convex hulls,
+ * one per dominant skinning bone, so they follow the skeleton as the armature-deformed
+ * source meshes do. Only these source colliders are used, as in Blender.
+ */
+UPhysicsAsset* BuildSourceColliders(const TSharedPtr<FJsonObject>& Json, USkeletalMesh* Mesh, const FSourceTransform& Transform,
+    UObject* Outer, const FPortData& Data, const FClothPhysicalMeshData& Physical, float& OutFriction, float& OutThickness)
+{
+    const TArray<TSharedPtr<FJsonValue>>* Colliders;
+    if (!Json->TryGetArrayField(TEXT("colliders"), Colliders) || Colliders->IsEmpty())
     {
-        if (MaxDistance[Vertex] <= 0.001f) continue;
-        const FVector Point(Physical.Vertices[Vertex]);
-        for (const auto& Sphere : Body->AggGeom.SphereElems)
-            if (FVector::Distance(Point, BoneTransform.TransformPosition(Sphere.Center)) < Sphere.Radius * Scale + 0.15) return true;
-        for (const auto& Capsule : Body->AggGeom.SphylElems)
-        {
-            const FVector Axis = Capsule.Rotation.RotateVector(FVector(0, 0, Capsule.Length * 0.5));
-            const FVector A = BoneTransform.TransformPosition(Capsule.Center - Axis);
-            const FVector B = BoneTransform.TransformPosition(Capsule.Center + Axis);
-            if (FMath::PointDistToSegment(Point, A, B) < Capsule.Radius * Scale + 0.15) return true;
-        }
-        // Convexes and boxes are not included by the legacy skeletal-mesh cloth collision extraction.
+        UE_LOG(LogGratiaClothPort, Error, TEXT("SOURCE_CLOTH_COLLIDERS_MISSING export schema 2 with source collision objects is required"));
+        return nullptr;
     }
-    return false;
+    const FReferenceSkeleton& Skeleton = Mesh->GetRefSkeleton();
+    auto* Asset = NewObject<UPhysicsAsset>(Outer, MakeUniqueObjectName(Outer, UPhysicsAsset::StaticClass(), TEXT("SourceCollision")));
+    TMap<FName, USkeletalBodySetup*> Bodies;
+    double FrictionSum = 0, ThicknessMax = 0;
+    for (const auto& ColliderValue : *Colliders)
+    {
+        const auto Collider = ColliderValue->AsObject();
+        FString Name;
+        const TArray<TSharedPtr<FJsonValue>> *Vertices, *Weights;
+        if (!Collider.IsValid() || !Collider->TryGetStringField(TEXT("name"), Name) || !Collider->TryGetArrayField(TEXT("vertices"), Vertices)
+            || !Collider->TryGetArrayField(TEXT("weights"), Weights) || Vertices->Num() != Weights->Num()) return nullptr;
+        FrictionSum += Number(Collider, TEXT("friction"), 0);
+        ThicknessMax = FMath::Max(ThicknessMax, Number(Collider, TEXT("thickness_outer"), 0.001) * 100.0);
+        TMap<FName, TArray<FVector>> Groups;
+        for (int32 I = 0; I < Vertices->Num(); ++I)
+        {
+            FVector Position;
+            if (!ReadVector((*Vertices)[I], Position)) return nullptr;
+            FName Dominant;
+            double Best = 0;
+            for (const auto& WeightValue : (*Weights)[I]->AsArray())
+            {
+                const auto Weight = WeightValue->AsObject();
+                FString Bone;
+                if (Weight.IsValid() && Weight->TryGetStringField(TEXT("bone"), Bone) && Number(Weight, TEXT("weight"), 0) > Best)
+                { Best = Number(Weight, TEXT("weight"), 0); Dominant = FName(*Bone); }
+            }
+            if (Dominant.IsNone() || Skeleton.FindBoneIndex(Dominant) == INDEX_NONE) return nullptr;
+            Groups.FindOrAdd(Dominant).Add(Transform.Position(Position));
+        }
+        int32 Hulls = 0, Skipped = 0;
+        for (auto& Pair : Groups)
+        {
+            if (Pair.Value.Num() < 8) { ++Skipped; continue; }
+            const FTransform BoneTransform = RefComponentTransform(Skeleton, Skeleton.FindBoneIndex(Pair.Key));
+            FKConvexElem Elem;
+            for (const FVector& Point : Pair.Value) Elem.VertexData.Add(BoneTransform.InverseTransformPosition(Point));
+            Elem.UpdateElemBox();
+            USkeletalBodySetup*& Body = Bodies.FindOrAdd(Pair.Key);
+            if (!Body)
+            {
+                Body = NewObject<USkeletalBodySetup>(Asset, NAME_None, RF_Transactional);
+                Body->BoneName = Pair.Key;
+                Body->PhysicsType = PhysType_Kinematic;
+                Body->CollisionTraceFlag = CTF_UseSimpleAsComplex;
+                Asset->SkeletalBodySetups.Add(Body);
+            }
+            Body->AggGeom.ConvexElems.Add(MoveTemp(Elem));
+            ++Hulls;
+        }
+        UE_LOG(LogGratiaClothPort, Display, TEXT("SOURCE_CLOTH_COLLIDER name=%s vertices=%d convex_hulls=%d skipped_small_groups=%d friction=%.2f"),
+            *Name, Vertices->Num(), Hulls, Skipped, Number(Collider, TEXT("friction"), 0));
+    }
+    for (auto& Pair : Bodies)
+    {
+        Pair.Value->InvalidatePhysicsData();
+        Pair.Value->CreatePhysicsMeshes();
+        for (const auto& Convex : Pair.Value->AggGeom.ConvexElems)
+            if (!Convex.GetChaosConvexMesh())
+            {
+                UE_LOG(LogGratiaClothPort, Error, TEXT("SOURCE_CLOTH_COLLIDER_COOK_FAILED bone=%s"), *Pair.Key.ToString());
+                return nullptr;
+            }
+    }
+    // A dynamic particle never leaves its MaxDistance sphere around the animated
+    // position, so a hull farther than that (plus a margin for animation stretch)
+    // from every dynamic particle can never collide. Dropping such hulls keeps the
+    // collision result and removes most per-particle convex tests.
+    const auto& Reach = Physical.GetWeightMap(EWeightMapTargetCommon::MaxDistance).Values;
+    constexpr double ReachMarginCm = 2.0;
+    int32 Kept = 0, Culled = 0;
+    for (auto& Pair : Bodies)
+    {
+        const FTransform BoneTransform = RefComponentTransform(Skeleton, Skeleton.FindBoneIndex(Pair.Key));
+        const double BoneScale = BoneTransform.GetScale3D().GetAbsMax();
+        Pair.Value->AggGeom.ConvexElems.RemoveAll([&](const FKConvexElem& Convex)
+        {
+            for (int32 Vertex = 0; Vertex < Physical.Vertices.Num(); ++Vertex)
+            {
+                if (Reach[Vertex] <= 0.001f) continue;
+                const FVector Local = BoneTransform.InverseTransformPosition(FVector(Physical.Vertices[Vertex]));
+                const double Distance = Convex.GetChaosConvexMesh()->SignedDistance(Chaos::FVec3(Local)) * BoneScale;
+                if (Distance <= Reach[Vertex] + ReachMarginCm) { ++Kept; return false; }
+            }
+            ++Culled;
+            return true;
+        });
+    }
+    Asset->SkeletalBodySetups.RemoveAll([](const USkeletalBodySetup* Body) { return Body->AggGeom.ConvexElems.IsEmpty(); });
+    for (auto It = Bodies.CreateIterator(); It; ++It) if (It.Value()->AggGeom.ConvexElems.IsEmpty()) It.RemoveCurrent();
+    UE_LOG(LogGratiaClothPort, Display, TEXT("SOURCE_CLOTH_COLLIDER_REACH kept_hulls=%d culled_unreachable=%d margin_cm=%.1f"), Kept, Culled, ReachMarginCm);
+    // Chaos cloth tests every particle against every convex face, which measured
+    // ~6 FPS with the reachable hulls. Each hull becomes a few inscribed spheres
+    // (cheap in Chaos); the residual against the source surface is reported.
+    constexpr double GridCm = 1.5, CoveredCm = 0.5;
+    constexpr int32 MaxSpheresPerHull = 10;
+    double WorstGapCm = 0, GapSum = 0;
+    int32 GapCount = 0, SphereCount = 0;
+    for (auto& Pair : Bodies)
+    {
+        const FTransform BoneTransform = RefComponentTransform(Skeleton, Skeleton.FindBoneIndex(Pair.Key));
+        const double BoneScale = BoneTransform.GetScale3D().GetAbsMax();
+        auto& Geometry = Pair.Value->AggGeom;
+        for (const FKConvexElem& Convex : Geometry.ConvexElems)
+        {
+            const auto& Hull = *Convex.GetChaosConvexMesh();
+            const FBox Box = Convex.ElemBox;
+            const double Step = GridCm / BoneScale;
+            struct FCandidate { FVector Center; double Radius; };
+            TArray<FCandidate> Candidates;
+            for (double X = Box.Min.X; X <= Box.Max.X; X += Step)
+                for (double Y = Box.Min.Y; Y <= Box.Max.Y; Y += Step)
+                    for (double Z = Box.Min.Z; Z <= Box.Max.Z; Z += Step)
+                    {
+                        const double Phi = Hull.SignedDistance(Chaos::FVec3(X, Y, Z));
+                        if (Phi < -0.3 / BoneScale) Candidates.Add({FVector(X, Y, Z), -Phi});
+                    }
+            TArray<double> Gap;
+            Gap.Init(TNumericLimits<double>::Max(), Convex.VertexData.Num());
+            for (int32 Added = 0; Added < MaxSpheresPerHull && !Candidates.IsEmpty(); ++Added)
+            {
+                int32 Best = INDEX_NONE;
+                double BestScore = 0;
+                for (int32 C = 0; C < Candidates.Num(); ++C)
+                {
+                    double Score = 0;
+                    for (int32 V = 0; V < Convex.VertexData.Num(); ++V)
+                    {
+                        const double NewGap = (FVector::Distance(Convex.VertexData[V], Candidates[C].Center) - Candidates[C].Radius) * BoneScale;
+                        Score += FMath::Max(0.0, FMath::Min(Gap[V], 10.0) - FMath::Max(NewGap, 0.0));
+                    }
+                    if (Score > BestScore) { BestScore = Score; Best = C; }
+                }
+                if (Best == INDEX_NONE || BestScore < 1.0) break;
+                FKSphereElem Sphere(float(Candidates[Best].Radius));
+                Sphere.Center = Candidates[Best].Center;
+                Geometry.SphereElems.Add(Sphere);
+                ++SphereCount;
+                for (int32 V = 0; V < Convex.VertexData.Num(); ++V)
+                    Gap[V] = FMath::Min(Gap[V], (FVector::Distance(Convex.VertexData[V], Candidates[Best].Center) - Candidates[Best].Radius) * BoneScale);
+            }
+            for (const double Value : Gap) { WorstGapCm = FMath::Max(WorstGapCm, Value); GapSum += Value; ++GapCount; }
+            int32 Covered = 0;
+            for (const double Value : Gap) Covered += Value <= CoveredCm;
+            UE_LOG(LogGratiaClothPort, Display, TEXT("SOURCE_CLOTH_COLLIDER_SPHERES bone=%s source_points=%d within_%.1fcm=%d"),
+                *Pair.Key.ToString(), Convex.VertexData.Num(), CoveredCm, Covered);
+        }
+        Geometry.ConvexElems.Empty();
+        Pair.Value->InvalidatePhysicsData();
+    }
+    UE_LOG(LogGratiaClothPort, Display, TEXT("SOURCE_CLOTH_COLLIDER_APPROXIMATION spheres=%d source_surface_gap_mean_cm=%.3f max_cm=%.3f"),
+        SphereCount, GapCount ? GapSum / GapCount : 0.0, WorstGapCm);
+    Asset->UpdateBodySetupIndexMap();
+    Asset->UpdateBoundsBodiesArray();
+    // Report particles that start inside a collider: Chaos collides every cage,
+    // while in the source only cages with collision enabled react to colliders.
+    const auto& MaxDistance = Physical.GetWeightMap(EWeightMapTargetCommon::MaxDistance).Values;
+    for (const FCage& Cage : Data.Cages)
+    {
+        TSet<uint32> CageVertices;
+        for (int32 T = Cage.FirstTriangle; T < Cage.FirstTriangle + Cage.NumTriangles; ++T)
+            for (int32 C = 0; C < 3; ++C) CageVertices.Add(Physical.Indices[T * 3 + C]);
+        int32 Inside = 0, Dynamic = 0;
+        for (const uint32 Vertex : CageVertices)
+        {
+            if (MaxDistance[Vertex] <= 0.001f) continue;
+            ++Dynamic;
+            const FVector Point(Physical.Vertices[Vertex]);
+            bool bInside = false;
+            for (const auto& Pair : Bodies)
+            {
+                const FTransform BoneTransform = RefComponentTransform(Skeleton, Skeleton.FindBoneIndex(Pair.Key));
+                const FVector Local = BoneTransform.InverseTransformPosition(Point);
+                for (const auto& Sphere : Pair.Value->AggGeom.SphereElems)
+                    bInside |= FVector::Distance(Local, Sphere.Center) < Sphere.Radius;
+                if (bInside) break;
+            }
+            Inside += bInside;
+        }
+        UE_LOG(LogGratiaClothPort, Display, TEXT("SOURCE_CLOTH_REST_INSIDE_COLLIDER cage=%s source_collision=%d dynamic=%d inside=%d"),
+            *Cage.Name, Cage.bCollision, Dynamic, Inside);
+    }
+    OutFriction = float(FrictionSum / Colliders->Num());
+    OutThickness = float(ThicknessMax);
+    return Asset;
 }
 }
 
-bool UGratiaClothPortLibrary::BuildSourceClothCages(USkeletalMesh* SkeletalMesh, const FString& JSONPath, const TArray<FName>& ExcludedBoneRoots)
+bool UGratiaClothPortLibrary::BuildSourceClothCages(USkeletalMesh* SkeletalMesh, const FString& JSONPath, const TArray<FName>& ExcludedBoneRoots,
+    float StiffnessHalfPoint, float PressureScale)
 {
     using namespace GratiaClothPort;
+    if (!FMath::IsFinite(StiffnessHalfPoint) || StiffnessHalfPoint <= 0 || !FMath::IsFinite(PressureScale) || PressureScale < 0) return false;
+    SourceStiffnessHalfPoint = StiffnessHalfPoint;
+    SourcePressureScale = PressureScale;
+    UE_LOG(LogGratiaClothPort, Display, TEXT("SOURCE_CLOTH_CALIBRATION stiffness_half_point=%.4f pressure_scale=%.4f"), StiffnessHalfPoint, PressureScale);
     if (!SkeletalMesh || !SkeletalMesh->GetImportedModel() || SkeletalMesh->GetImportedModel()->LODModels.IsEmpty()) return false;
     FString Text;
     TSharedPtr<FJsonObject> Json;
@@ -628,7 +860,10 @@ bool UGratiaClothPortLibrary::BuildSourceClothCages(USkeletalMesh* SkeletalMesh,
     }
     const UEnum* Targets = FindObject<UEnum>(nullptr, TEXT("/Script/ChaosCloth.EChaosWeightMapTarget"));
     const int64 PressureTarget = Targets ? Targets->GetValueByNameString(TEXT("Pressure")) : INDEX_NONE;
-    if (PressureTarget == INDEX_NONE) return false;
+    const int64 EdgeTarget = Targets ? Targets->GetValueByNameString(TEXT("EdgeStiffness")) : INDEX_NONE;
+    const int64 AreaTarget = Targets ? Targets->GetValueByNameString(TEXT("AreaStiffness")) : INDEX_NONE;
+    const int64 BendingTarget = Targets ? Targets->GetValueByNameString(TEXT("BendingStiffness")) : INDEX_NONE;
+    if (PressureTarget == INDEX_NONE || EdgeTarget == INDEX_NONE || AreaTarget == INDEX_NONE || BendingTarget == INDEX_NONE) return false;
     // Never replace clothing authored by another tool or artist.
     for (const auto& Mapping : Mappings)
     {
@@ -715,26 +950,27 @@ bool UGratiaClothPortLibrary::BuildSourceClothCages(USkeletalMesh* SkeletalMesh,
     AddMask(Lod, (uint32)EWeightMapTargetCommon::MaxDistance, TEXT("SourcePinMaxDistance"), MaxDistances);
     AddMask(Lod, (uint32)EWeightMapTargetCommon::AnimDriveStiffness, TEXT("SourcePinAnimDrive"), Drive);
     AddMask(Lod, (uint32)PressureTarget, TEXT("SourcePressureRegions"), Data.PressureMask);
+    AddMask(Lod, (uint32)EdgeTarget, TEXT("SourceTensionByCage"), Data.EdgeMask);
+    AddMask(Lod, (uint32)AreaTarget, TEXT("SourceShearByCage"), Data.AreaMask);
+    AddMask(Lod, (uint32)BendingTarget, TEXT("SourceBendingByCage"), Data.BendingMask);
     auto* Config = NewObject<UChaosClothConfig>(Asset);
     Config->MassMode = EClothMassMode::TotalMass;
     Config->TotalMass = 1.f;
-    Config->EdgeStiffnessWeighted = {0.65f, 0.65f};
-    Config->BendingStiffnessWeighted = {0.1f, 0.1f};
-    Config->AreaStiffnessWeighted = {0.85f, 0.85f};
+    // Per-cage source values live in the weight maps; the ranges are identity.
+    Config->EdgeStiffnessWeighted = {0.f, 1.f};
+    Config->BendingStiffnessWeighted = {0.f, 1.f};
+    Config->AreaStiffnessWeighted = {0.f, 1.f};
     Config->TetherStiffness = {0.8f, 0.8f};
     Config->TetherScale = {1.05f, 1.05f};
-    // Blender keeps cage volume with pressure and pin springs. Chaos pressure on
-    // three open cages inflated free particles to MaxDistance at rest, so rest
-    // shape comes from the anim drive instead; the pressure mask stays editable.
-    Config->AnimDriveStiffness = {0.35f, 1.0f};
+    Config->AnimDriveStiffness = {0.f, 1.f};
     Config->AnimDriveDamping = {0.2f, 0.4f};
     Config->DampingCoefficient = 0.1f;
     Config->LocalDampingCoefficient = 0.05f;
-    Config->GravityScale = 0.2f;
-    Config->Pressure = {0.f, 0.f};
-    Config->CollisionThickness = 0.15f;
-    Config->FrictionCoefficient = 0.5f;
-    Config->bUseCCD = true;
+    Config->GravityScale = Data.Gravity;
+    Config->Pressure = {0.f, SourcePressureScale};
+    // Hands already use swept capsules; CCD against every collider sphere cost
+    // most of the frame in the editor measurement.
+    Config->bUseCCD = false;
     Config->bUseSelfCollisions = false;
     auto* Shared = NewObject<UChaosClothSharedSimConfig>(Asset);
     Shared->IterationCount = 5;
@@ -743,21 +979,11 @@ bool UGratiaClothPortLibrary::BuildSourceClothCages(USkeletalMesh* SkeletalMesh,
     Asset->ClothConfigs.Empty();
     Asset->ClothConfigs.Add(Config->GetClass()->GetFName(), Config);
     Asset->ClothConfigs.Add(Shared->GetClass()->GetFName(), Shared);
-    // Only kinematic core collisions: simulated body capsules must not push their own cage away.
-    UPhysicsAsset* CollisionAsset = nullptr;
-    if (const UPhysicsAsset* ExistingPhysics = SkeletalMesh->GetPhysicsAsset())
-    {
-        const FName CollisionName = MakeUniqueObjectName(Asset, UPhysicsAsset::StaticClass(), TEXT("CoreCollision"));
-        CollisionAsset = DuplicateObject<UPhysicsAsset>(ExistingPhysics, Asset, CollisionName);
-        CollisionAsset->ConstraintSetup.Empty();
-        CollisionAsset->SkeletalBodySetups.RemoveAll([&](const USkeletalBodySetup* Body)
-        {
-            return !Body || Body->PhysicsType != PhysType_Kinematic || CoreColliderTouchesFreeCage(Body, SkeletalMesh, Lod.PhysicalMeshData);
-        });
-        CollisionAsset->CollisionDisableTable.Empty();
-        CollisionAsset->UpdateBodySetupIndexMap();
-        CollisionAsset->UpdateBoundsBodiesArray();
-    }
+    float Friction = 0, Thickness = 0.1f;
+    UPhysicsAsset* CollisionAsset = BuildSourceColliders(Json, SkeletalMesh, Transform, Asset, Data, Lod.PhysicalMeshData, Friction, Thickness);
+    if (!CollisionAsset) return false;
+    Config->FrictionCoefficient = Friction;
+    Config->CollisionThickness = FMath::Max(Thickness, 0.1f);
     Asset->PhysicsAsset = CollisionAsset;
     Asset->RefreshBoneMapping(SkeletalMesh);
     Asset->CalculateReferenceBoneIndex();
@@ -784,8 +1010,8 @@ bool UGratiaClothPortLibrary::BuildSourceClothCages(USkeletalMesh* SkeletalMesh,
             MeshLod.RequiredBones.AddUnique(Index);
             MeshLod.ActiveBoneIndices.AddUnique(Index);
         }
-        UE_LOG(LogGratiaClothPort, Display, TEXT("SOURCE_CLOTH_SECTION section=%d material=%d render_vertices=%d dynamic_vertices=%d distance_faded=%d rest_error_cm=%.8f"),
-            Mapping.Section, Section.MaterialIndex, Section.SoftVertices.Num(), Mapping.DynamicVertices, Mapping.DistanceFaded, Mapping.MaxRestError);
+        UE_LOG(LogGratiaClothPort, Display, TEXT("SOURCE_CLOTH_SECTION section=%d material=%d render_vertices=%d dynamic_vertices=%d rest_error_cm=%.8f"),
+            Mapping.Section, Section.MaterialIndex, Section.SoftVertices.Num(), Mapping.DynamicVertices, Mapping.MaxRestError);
     }
     MeshLod.RequiredBones.Sort();
     SkeletalMesh->GetRefSkeleton().EnsureParentsExistAndSort(MeshLod.ActiveBoneIndices);
@@ -803,6 +1029,9 @@ bool UGratiaClothPortLibrary::BuildSourceClothCages(USkeletalMesh* SkeletalMesh,
                         UserData.CorrespondClothAssetIndex = Index;
                         UserData.ClothingData = Section.ClothingData;
                     }
+    // The section mapping is not part of the derived-data key: without a new key the
+    // build would reuse a cached LOD model holding the previous binding.
+    SkeletalMesh->InvalidateDeriveDataCacheGUID();
     SkeletalMesh->MarkPackageDirty();
     CoreColliderCount = CollisionAsset ? CollisionAsset->SkeletalBodySetups.Num() : 0;
     SimulationVertexCount = Lod.PhysicalMeshData.Vertices.Num();

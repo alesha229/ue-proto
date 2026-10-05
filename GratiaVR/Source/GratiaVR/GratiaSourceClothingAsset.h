@@ -37,6 +37,9 @@ class GRATIAVR_API UGratiaSourceClothingAsset : public UClothingAssetCommon
 public:
     UGratiaSourceClothingAsset(const FObjectInitializer& ObjectInitializer);
 
+    /** Chaos cloth dereferences every convex collider; drop any that failed to create. */
+    virtual void PostLoad() override;
+
 #if WITH_EDITOR
     virtual bool BindToSkeletalMesh(USkeletalMesh* InSkelMesh, const int32 InMeshLodIndex, const int32 InSectionIndex, const int32 InAssetLodIndex) override;
     virtual TArray<TPair<FText, FText>> GetStats() const override;

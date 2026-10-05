@@ -7,7 +7,7 @@ import unreal
 root = Path(__file__).resolve().parents[2]
 source = root / 'Exports/Gratia/GameRig/source_cloth_cages.json'
 data = json.loads(source.read_text(encoding='utf-8'))
-assert data['schema'] == 1 and all(c['weights'] for c in data['cages'])
+assert data['schema'] == 2 and all(c['weights'] for c in data['cages']) and data['colliders'], 'run export_source_cloth_cages.py (schema 2) via Blender MCP'
 lib = unreal.EditorAssetLibrary
 mesh = lib.load_asset('/Game/Gratia/GameRig/SK_Gratia_Game')
 profile = lib.load_asset('/Game/Characters/Profiles/DA_Gratia')
@@ -23,7 +23,12 @@ for asset in (mesh, profile):
 # have no SurfaceDeform in the source and must stay out of shared-material masks.
 excluded = [profile.resolve_bone(s) for s in ('Head', 'LeftFoot', 'RightFoot')]
 assert all(str(b) != 'None' for b in excluded), excluded
-assert unreal.GratiaClothPortLibrary.build_source_cloth_cages(mesh, str(source), excluded)
+# Calibration of Blender force-based springs/pressure to Chaos PBD values, chosen so
+# rest offsets per cage match evidence/04/blender_cloth_offset_reference.json.
+import os
+half_point = float(os.environ.get('GRATIA_CLOTH_HALF_POINT', '0.12'))
+pressure_scale = float(os.environ.get('GRATIA_CLOTH_PRESSURE_SCALE', '0.01'))
+assert unreal.GratiaClothPortLibrary.build_source_cloth_cages(mesh, str(source), excluded, half_point, pressure_scale)
 # Persist the cloth vertex-factory permutation before cook; editor auto-usage
 # alone cannot guarantee that the standalone package contains these shaders.
 for slot in mesh.get_editor_property('materials'):

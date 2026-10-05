@@ -256,8 +256,10 @@ struct GRATIAVR_API FGratiaClothSettings
     float SoftPressDepthCm = 4.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.1"))
     float MaxParticleOffsetCm = 8.0f;
+    /** Grab search distance beyond the hand collider surface (HandRadiusCm). The hand
+     *  collider pushes particles to its surface, so the search must reach past it. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.1"))
-    float GrabRadiusCm = 6.0f;
+    float GrabRadiusCm = 3.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.1"))
     float GrabBreakDistanceCm = 15.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Source Cloth", meta = (ClampMin = "0.1"))
