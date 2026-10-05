@@ -125,4 +125,7 @@ private:
     void OnReactionQAContact(FName ZoneName, int32 HandIndex, float HandSpeed, int32 Mood);
     void TestCheck(bool bPassed, const TCHAR* Description);
     void TestSkip(const TCHAR* Description) const;
+    /** Each profile performance clip starts from the Pose cycle, advances and has finite morph curves; restores the pose. */
+    void VerifyPerformanceClips(class AGratiaPreviewCharacter* Character, const UGratiaCharacterProfile* Profile,
+        class USkeletalMeshComponent* Component, const class USkeletalMesh* Mesh);
 };

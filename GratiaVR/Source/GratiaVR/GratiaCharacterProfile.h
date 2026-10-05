@@ -283,6 +283,21 @@ struct GRATIAVR_API FGratiaBodyColliderSphere
     float RadiusCm = 5.0f;
 };
 
+/** A full-body clip the Pose menu item (F2) can play after the preview poses, e.g. retargeted mocap. */
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaPerformanceClip
+{
+    GENERATED_BODY()
+
+    /** Menu label; empty uses the clip asset name. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance")
+    FName Name;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance")
+    TObjectPtr<UAnimSequence> Clip;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance")
+    bool bLoop = true;
+};
+
 /** Capsule fitted to the visible skin/clothing around one bone (reference pose, bone space). */
 USTRUCT(BlueprintType)
 struct GRATIAVR_API FGratiaSurfaceCapsule
@@ -483,6 +498,9 @@ public:
     /** Contact zone name -> authored response. Default is optional restrained fallback. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animations")
     TMap<FName, TObjectPtr<UAnimSequence>> ReactionClips;
+    /** Selectable after Idle/Arms/Head in the Pose menu item; their own face curves replace the procedural blink. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animations")
+    TArray<FGratiaPerformanceClip> PerformanceClips;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animations")
     bool bAuthoredReactionFacialCurves = false;
     /** Optional authored acknowledgement. Empty uses the presenter's short procedural chime. */

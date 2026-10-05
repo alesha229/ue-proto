@@ -117,6 +117,13 @@ bool UGratiaCharacterProfile::ValidateProfile(TArray<FString>& Errors, TArray<FS
     for (const auto& Pair : ReactionClips)
         if (Pair.Key.IsNone() || !Pair.Value || Pair.Value->GetSkeleton() != Mesh->GetSkeleton())
             Errors.Add(FString::Printf(TEXT("Reaction routing %s requires a clip on this profile's skeleton."), *Pair.Key.ToString()));
+    for (int32 Index = 0; Index < PerformanceClips.Num(); ++Index)
+    {
+        const UAnimSequence* Clip = PerformanceClips[Index].Clip;
+        if (!Clip || Clip->GetSkeleton() != Mesh->GetSkeleton() || Clip->GetPlayLength() <= 0.0f)
+            Errors.Add(FString::Printf(TEXT("Performance clip %d (%s) requires a non-empty clip on this profile's skeleton."),
+                Index, *PerformanceClips[Index].Name.ToString()));
+    }
     auto ValidateReactionSound = [&Errors](const USoundBase* Sound, const FString& Label)
     {
         if (!IsValid(Sound)) { Errors.Add(Label + TEXT(" has no valid sound resource.")); return; }

@@ -103,6 +103,12 @@ void AGratiaPreviewCharacter::BeginPlay()
     {
         SetPreviewPose(EGratiaPreviewPose::Head);
     }
+    else if (RequestedPose.Equals(TEXT("Performance"), ESearchCase::IgnoreCase))
+    {
+        int32 RequestedIndex = 0;
+        FParse::Value(FCommandLine::Get(), TEXT("GratiaPerformance="), RequestedIndex);
+        if (!SetPerformance(RequestedIndex)) ResetToIdle();
+    }
     else
     {
         if (!RequestedPose.IsEmpty())
@@ -167,18 +173,54 @@ UAnimSequence* AGratiaPreviewCharacter::GetReactionAnimationForZone(FName ZoneNa
     return SoftReaction;
 }
 
+const FGratiaPerformanceClip* AGratiaPreviewCharacter::GetPerformance() const
+{
+    return CharacterProfile && CharacterProfile->PerformanceClips.IsValidIndex(PerformanceIndex)
+        && CharacterProfile->PerformanceClips[PerformanceIndex].Clip ? &CharacterProfile->PerformanceClips[PerformanceIndex] : nullptr;
+}
+
 UAnimSequence* AGratiaPreviewCharacter::GetPreviewAnimation(EGratiaPreviewPose Pose) const
 {
     switch (Pose)
     {
     case EGratiaPreviewPose::Arms: return ArmsAnimation ? ArmsAnimation.Get() : IdleAnimation.Get();
     case EGratiaPreviewPose::Head: return HeadAnimation ? HeadAnimation.Get() : IdleAnimation.Get();
+    case EGratiaPreviewPose::Performance:
+        if (const FGratiaPerformanceClip* Performance = GetPerformance()) return Performance->Clip.Get();
+        return IdleAnimation.Get();
     default: return IdleAnimation.Get();
     }
 }
 
+FString AGratiaPreviewCharacter::GetPreviewPoseLabel() const
+{
+    switch (PreviewPose)
+    {
+    case EGratiaPreviewPose::Arms: return TEXT("Arms");
+    case EGratiaPreviewPose::Head: return TEXT("Head");
+    case EGratiaPreviewPose::Performance:
+        if (const FGratiaPerformanceClip* Performance = GetPerformance())
+            return Performance->Name.IsNone() ? Performance->Clip->GetName() : Performance->Name.ToString();
+        return TEXT("Performance (missing)");
+    default: return TEXT("Idle");
+    }
+}
+
+bool AGratiaPreviewCharacter::SetPerformance(int32 Index)
+{
+    if (!CharacterProfile || !CharacterProfile->PerformanceClips.IsValidIndex(Index) || !CharacterProfile->PerformanceClips[Index].Clip)
+    {
+        UE_LOG(LogGratiaPreview, Warning, TEXT("Performance %d is not available in profile %s"), Index, *GetNameSafe(CharacterProfile));
+        return false;
+    }
+    PerformanceIndex = Index;
+    SetPreviewPose(EGratiaPreviewPose::Performance);
+    return true;
+}
+
 void AGratiaPreviewCharacter::SetPreviewPose(EGratiaPreviewPose Pose)
 {
+    if (Pose == EGratiaPreviewPose::Performance && !GetPerformance()) Pose = EGratiaPreviewPose::Idle;
     PreviewPose = Pose;
     if (SoftBodyInteraction) SoftBodyInteraction->ResetSoftBody();
     BlinkElapsed = -1.0f;
@@ -202,23 +244,24 @@ void AGratiaPreviewCharacter::SetPreviewPose(EGratiaPreviewPose Pose)
         return;
     }
 
-    const bool bIdle = IsIdlePreview();
+    const bool bPlaying = IsAnimatedPreview();
+    const FGratiaPerformanceClip* Performance = Pose == EGratiaPreviewPose::Performance ? GetPerformance() : nullptr;
+    const bool bLoop = IsIdlePreview() || (Performance && Performance->bLoop);
     // The diagnostic clips hold their largest pose at the midpoint, avoiding screenshot timing races.
-    const float Position = bIdle ? 0.0f : Animation->GetPlayLength() * 0.5f;
+    const float Position = bPlaying ? 0.0f : Animation->GetPlayLength() * 0.5f;
     CharacterMesh->SetAnimInstanceClass(CharacterProfile->AnimationClass ? CharacterProfile->AnimationClass.Get() : UGratiaAnimInstance::StaticClass());
     // OverrideAnimationData serializes state but does not refresh an existing SingleNode instance.
     if (UAnimSingleNodeInstance* Instance = CharacterMesh->GetSingleNodeInstance())
     {
-        Instance->SetAnimationAsset(Animation, bIdle, 1.0f);
-        Instance->SetPlaying(bIdle);
+        Instance->SetAnimationAsset(Animation, bLoop, 1.0f);
+        Instance->SetPlaying(bPlaying);
         Instance->SetPosition(Position, false);
         CharacterMesh->TickAnimation(0.0f, false);
         CharacterMesh->RefreshBoneTransforms();
     }
     if (SecondaryMotion) SecondaryMotion->ResetPhysics();
-    UE_LOG(LogGratiaPreview, Display, TEXT("Preview pose=%s animation=%s time=%.3f mode=%s"),
-        bIdle ? TEXT("Idle") : Pose == EGratiaPreviewPose::Arms ? TEXT("Arms") : TEXT("Head"),
-        *Animation->GetPathName(), Position, bIdle ? TEXT("loop") : TEXT("fixed pose"));
+    UE_LOG(LogGratiaPreview, Display, TEXT("Preview pose=%s animation=%s time=%.3f mode=%s"), *GetPreviewPoseLabel(),
+        *Animation->GetPathName(), Position, bPlaying ? (bLoop ? TEXT("loop") : TEXT("once")) : TEXT("fixed pose"));
 }
 
 void AGratiaPreviewCharacter::ResetToIdle()
@@ -233,6 +276,17 @@ void AGratiaPreviewCharacter::CyclePreviewPose()
     {
     case EGratiaPreviewPose::Idle: SetPreviewPose(EGratiaPreviewPose::Arms); break;
     case EGratiaPreviewPose::Arms: SetPreviewPose(EGratiaPreviewPose::Head); break;
+    // After the diagnostic poses come the profile's performance clips, then idle again.
+    case EGratiaPreviewPose::Head:
+        if (!CharacterProfile || CharacterProfile->PerformanceClips.IsEmpty() || !SetPerformance(0)) ResetToIdle();
+        break;
+    case EGratiaPreviewPose::Performance:
+    {
+        int32 Next = PerformanceIndex + 1;
+        while (CharacterProfile && CharacterProfile->PerformanceClips.IsValidIndex(Next) && !CharacterProfile->PerformanceClips[Next].Clip) ++Next;
+        if (!CharacterProfile || !CharacterProfile->PerformanceClips.IsValidIndex(Next) || !SetPerformance(Next)) ResetToIdle();
+        break;
+    }
     default: ResetToIdle(); break;
     }
 }

@@ -1,4 +1,6 @@
-"""Render the isolated KM466 trial in live Blender MCP; restore scene settings."""
+"""HISTORICAL (rejected KM466 v2 trial, superseded by author_vam_mocap.py); do not run.
+
+Render the isolated KM466 trial in live Blender MCP; restore scene settings."""
 import bpy
 import json
 from pathlib import Path

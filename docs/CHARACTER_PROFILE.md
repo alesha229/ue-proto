@@ -11,6 +11,13 @@ The profile owns model-specific references and names:
 
 - Skeletal mesh, PhysicsAsset, optional animation class, idle and diagnostic clips,
   soft and bright reaction clips.
+- PerformanceClips: named full-body clips (Name, Clip, bLoop) that the Pose menu item
+  and F2 cycle through after Idle/Arms/Head. They play from the start with native
+  single-node playback; their own face curves replace the procedural blink, and
+  secondary motion stays active. `-GratiaPoseTest=Performance [-GratiaPerformance=N]`
+  starts one directly; runtime QA checks that each starts, loops as configured,
+  advances and has finite morph curves. Gratia: `KM466` (retargeted VaM mocap,
+  docs/MOCAP_KM466.md).
 - Semantic bone and morph maps. Gameplay asks for Head, LeftHand, BlinkLeft,
   Smile or Surprise; it does not contain exported Gratia bone names.
 - Character contact-zone geometry and hold permissions.

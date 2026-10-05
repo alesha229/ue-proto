@@ -9,7 +9,7 @@ $manifest = Get-Content -LiteralPath (Join-Path $workspaceRoot 'Builds\Windows\b
 $exeHash = (Get-FileHash -LiteralPath $exePath).Hash
 if ($exeHash -ne $manifest.executable_sha256) { throw 'Executable differs from manifest' }
 New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
-foreach ($pose in @('Arms','Head')) {
+foreach ($pose in @('Arms','Head','Performance')) {
     $logPath = Join-Path $evidenceRoot ("packaged_pose_$pose.log")
     $began = [DateTimeOffset]::UtcNow
     $arguments = @('-nohmd','-windowed','-ResX=1280','-ResY=720','-unattended','-GratiaSmokeTest',("-GratiaPoseTest=$pose"),('-abslog="' + $logPath + '"'))

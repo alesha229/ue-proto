@@ -252,11 +252,14 @@ void UGratiaRuntimeVerification::RunCharacterWorldChecks()
     }
     else if (Character->GetExpectedAnimation())
     {
+        const FGratiaPerformanceClip* Performance = Character->PreviewPose == EGratiaPreviewPose::Performance ? Character->GetPerformance() : nullptr;
+        const bool bLoop = Character->IsIdlePreview() || (Performance && Performance->bLoop);
         TestCheck(Animation && Animation->GetAnimationAsset() == Character->GetExpectedAnimation()
-            && (Character->IsIdlePreview() ? Animation->IsPlaying() && Animation->IsLooping() : !Animation->IsPlaying()),
+            && (Character->IsAnimatedPreview() ? Animation->IsPlaying() && Animation->IsLooping() == bLoop : !Animation->IsPlaying()),
             TEXT("The requested profile preview clip is active with the correct playback mode"));
     }
     else TestSkip(TEXT("No preview clip is supplied for this profile; reference pose is expected"));
+    VerifyPerformanceClips(Character, Profile, Component, Mesh);
     TestCheck(Character->GetActorScale3D().Equals(FVector::OneVector, 0.001)
         && Component->GetComponentScale().Equals(FVector::OneVector, 0.001)
         && !Mesh->GetBounds().BoxExtent.ContainsNaN() && Mesh->GetBounds().BoxExtent.Z > 0.0,
@@ -301,6 +304,51 @@ void UGratiaRuntimeVerification::RunCharacterWorldChecks()
     UE_LOG(LogGratiaVerification, Display, TEXT("CHARACTER TEST CONFIG: actor=%s profile=%s characters=%d mode=%d clip=%s bounds_height_cm=%.2f"),
         *Character->GetName(), *Profile->ProfileId.ToString(), CharacterCount, static_cast<int32>(Character->PreviewPose), *GetNameSafe(Character->GetExpectedAnimation()),
         Mesh->GetBounds().BoxExtent.Z * 2.0);
+}
+
+void UGratiaRuntimeVerification::VerifyPerformanceClips(AGratiaPreviewCharacter* Character, const UGratiaCharacterProfile* Profile,
+    USkeletalMeshComponent* Component, const USkeletalMesh* Mesh)
+{
+    if (Profile->PerformanceClips.IsEmpty()) { TestSkip(TEXT("This profile supplies no performance clips")); return; }
+    if (Profile->AnimationClass) { TestSkip(TEXT("Performance clips use native single-node playback; this profile's AnimationClass owns playback")); return; }
+    const EGratiaPreviewPose PreviousPose = Character->PreviewPose;
+    const int32 PreviousIndex = Character->PerformanceIndex;
+    bool bPlayback = true, bFinite = true;
+    int32 Driven = 0;
+    for (int32 Index = 0; Index < Profile->PerformanceClips.Num(); ++Index)
+    {
+        const FGratiaPerformanceClip& Entry = Profile->PerformanceClips[Index];
+        const bool bSet = Character->SetPerformance(Index);
+        UAnimSingleNodeInstance* Instance = Component->GetSingleNodeInstance();
+        const bool bStarted = bSet && Instance && Instance->GetAnimationAsset() == Entry.Clip && Instance->IsPlaying()
+            && Instance->IsLooping() == Entry.bLoop && Character->IsAnimatedPreview();
+        const float Start = Instance ? Instance->GetCurrentTime() : 0.0f;
+        Component->TickAnimation(0.25f, false);
+        Component->RefreshBoneTransforms();
+        const bool bAdvanced = Instance && Instance->GetCurrentTime() > Start + 0.2f;
+        bPlayback &= bStarted && bAdvanced;
+        // Face and corrective curves are sampled from the cooked clip by this model's own morph names.
+        float Peak = 0.0f;
+        FName PeakName;
+        if (Entry.Clip)
+            for (const UMorphTarget* Morph : Mesh->GetMorphTargets())
+                for (const float Fraction : {0.1f, 0.4f, 0.7f})
+                {
+                    const float Value = Entry.Clip->EvaluateCurveData(Morph->GetFName(),
+                        FAnimExtractContext(static_cast<double>(Entry.Clip->GetPlayLength() * Fraction)), false);
+                    bFinite &= FMath::IsFinite(Value);
+                    if (FMath::IsFinite(Value) && FMath::Abs(Value) > Peak) { Peak = FMath::Abs(Value); PeakName = Morph->GetFName(); }
+                }
+        Driven += Peak > 0.01f ? 1 : 0;
+        UE_LOG(LogGratiaVerification, Display, TEXT("PERFORMANCE CHECK: index=%d label=%s clip=%s length=%.2fs loop=%d started=%d advanced=%d morph_peak=%.3f curve=%s"),
+            Index, *Character->GetPreviewPoseLabel(), *GetPathNameSafe(Entry.Clip), Entry.Clip ? Entry.Clip->GetPlayLength() : 0.0f,
+            Entry.bLoop ? 1 : 0, bStarted ? 1 : 0, bAdvanced ? 1 : 0, Peak, *PeakName.ToString());
+    }
+    TestCheck(bPlayback, TEXT("Every performance clip starts from the Pose cycle with its loop mode and advances"));
+    TestCheck(bFinite, TEXT("Performance clip morph curves evaluate finite on this model's morph targets"));
+    if (!Driven) TestSkip(TEXT("No performance clip drives a morph target of this model"));
+    if (PreviousPose == EGratiaPreviewPose::Performance) Character->SetPerformance(PreviousIndex);
+    else Character->SetPreviewPose(PreviousPose);
 }
 
 void UGratiaRuntimeVerification::SampleCharacterAnimation(bool bFinish)

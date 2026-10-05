@@ -1,4 +1,6 @@
-"""Build/validate isolated KM466 trial correctives in the active Blender MCP.
+"""HISTORICAL (rejected KM466 v2 trial, superseded by author_vam_mocap.py); do not run.
+
+Build/validate isolated KM466 trial correctives in the active Blender MCP.
 
 Execute with PHASE = 'correct' (default), or PHASE = 'validate'. This source
 must be supplied to execute_blender_code; it does not launch Blender. Only the

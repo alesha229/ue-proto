@@ -38,7 +38,7 @@ void UGratiaSecondaryMotion::RefreshSettings(bool bForce)
     auto* Interaction = Character->Interaction.Get();
     const int32 Signature = Interaction->Quality | (Interaction->bHairMotion << 2)
         | (Interaction->bClothMotion << 3) | (Interaction->bBodyMotion << 4)
-        | (Interaction->bPhysicalMotion << 5) | (Character->IsIdlePreview() << 6) | (Interaction->bEarMotion << 7);
+        | (Interaction->bPhysicalMotion << 5) | (Character->IsAnimatedPreview() << 6) | (Interaction->bEarMotion << 7);
     if (!bForce && Signature == SettingsSignature && LastProfile.Get() == CharacterProfile) return;
     LastProfile = CharacterProfile;
     SettingsSignature = Signature;
@@ -50,7 +50,7 @@ void UGratiaSecondaryMotion::RefreshSettings(bool bForce)
     ActiveBones.Reset();
     Driver->SetSkeletalMeshComponent(Mesh);
     if (!CharacterProfile || !CharacterProfile->Capabilities.bSecondaryPhysics || !Mesh->GetSkeletalMeshAsset()
-        || !Mesh->GetPhysicsAsset() || !Interaction->bPhysicalMotion || !Character->IsIdlePreview() || bFault) return;
+        || !Mesh->GetPhysicsAsset() || !Interaction->bPhysicalMotion || !Character->IsAnimatedPreview() || bFault) return;
 
     // Sort in skeleton order so each selected chain begins at its anchored root.
     const FReferenceSkeleton& Skeleton = Mesh->GetSkeletalMeshAsset()->GetRefSkeleton();

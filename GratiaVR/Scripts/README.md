@@ -1,9 +1,18 @@
 # Активная подготовка, импорт и сборка
 
-`extract_vam_timeline.py` — отдельное чтение исходных VaM Timeline-кривых; оно
-не создаёт готовую анимацию. Пробный KM466-ретаргет отменён после неудачной
-проверки; его скрипты сохранены только в `evidence/05/kitty_mocap/failed_scripts`
-и не являются активным путём. См. [MOCAP_KM466.md](../../docs/MOCAP_KM466.md).
+Мокап VaM (KM466, активный путь, см. [MOCAP_KM466.md](../../docs/MOCAP_KM466.md)):
+
+1. `extract_vam_timeline.py` — чтение исходных VaM Timeline-кривых без изменений
+   (`evidence/05/kitty_mocap/trial10s_samples.json`).
+2. `author_vam_mocap.py` через `Blender-MCP.py code` с заголовком `PHASE = '...'`:
+   `preview` → `lift` → `author` (`RANGE = (1, 60)` и т. д., частями) → `validate` →
+   `correct` → `save` → `export`. Для `correct` нужен `GRATIA_MCP_TIMEOUT=1200`.
+3. `import_vam_mocap.py` — editor-коммандлет: переимпорт `SK_Gratia_Game` с формами
+   `Game_KM466_*`, импорт `A_Gratia_Game_KM466`, запись в `DA_Gratia.PerformanceClips`.
+
+`correct_kitty_mocap.py` и `preview_kitty_mocap.py` — **исторические** скрипты второй
+отклонённой попытки (GPT, 5 октября); остальные её скрипты лежат в
+`evidence/05/kitty_mocap/failed_scripts`. Не запускать.
 
 Обновление 4 октября: wrist-roll reference authoring исправлен без изменения
 порогов QA; source-shape actions используются по фактически возвращённым именам.

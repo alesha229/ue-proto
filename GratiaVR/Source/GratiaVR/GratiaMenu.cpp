@@ -140,9 +140,9 @@ void UGratiaMenu::Refresh()
     if(!Text || !Character.IsValid()) return;
     auto* I=Character->Interaction.Get();
     const TCHAR* Mood=I->Mood==0?TEXT("Calm"):I->Mood==1?TEXT("Cheerful"):TEXT("Reserved");
-    const TCHAR* Pose=Character->PreviewPose==EGratiaPreviewPose::Idle?TEXT("Idle"):Character->PreviewPose==EGratiaPreviewPose::Arms?TEXT("Arms"):TEXT("Head");
+    const FString Pose=Character->GetPreviewPoseLabel();
     TArray<FString> Rows={
-        FString::Printf(TEXT("Pose: %s"),Pose),FString::Printf(TEXT("Mood: %s"),Mood),FString::Printf(TEXT("Demo: %s"),I->bDemo?TEXT("ON"):TEXT("OFF")),
+        FString::Printf(TEXT("Pose: %s"),*Pose),FString::Printf(TEXT("Mood: %s"),Mood),FString::Printf(TEXT("Demo: %s"),I->bDemo?TEXT("ON"):TEXT("OFF")),
         TEXT("Recenter"),TEXT("Eye height +2 cm"),TEXT("Eye height -2 cm"),TEXT("Reset pose / contacts / height"),TEXT("Quality: ")+QualityLabel(),
         FString::Printf(TEXT("Hair motion: %s"),I->bHairMotion?TEXT("ON"):TEXT("OFF")),FString::Printf(TEXT("Cloth motion: %s"),I->bClothMotion?TEXT("ON"):TEXT("OFF")),
         FString::Printf(TEXT("Body motion: %s"),I->bBodyMotion?TEXT("ON"):TEXT("OFF")),FString::Printf(TEXT("Local springs: %s"),I->bLocalSpring?TEXT("ON"):TEXT("OFF")),

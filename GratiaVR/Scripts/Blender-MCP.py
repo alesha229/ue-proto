@@ -5,6 +5,7 @@ standalone Blender --python job. Input files avoid shell quoting ambiguities.
 """
 import argparse
 import json
+import os
 import pathlib
 import urllib.request
 
@@ -18,7 +19,7 @@ def post(payload, session_id=None):
     if session_id:
         headers["mcp-session-id"] = session_id
     request = urllib.request.Request(BASE, json.dumps(payload).encode("utf-8"), headers, method="POST")
-    with urllib.request.urlopen(request, timeout=240) as response:
+    with urllib.request.urlopen(request, timeout=int(os.environ.get("GRATIA_MCP_TIMEOUT", "240"))) as response:
         body = response.read().decode("utf-8", "replace")
         sid = response.headers.get("mcp-session-id") or session_id
         status = response.status

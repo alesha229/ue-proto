@@ -13,13 +13,16 @@ class UGratiaReactionPresentation;
 class UGratiaSoftBodyInteraction;
 class UGratiaSoftBodyVerification;
 class UGratiaBodySurface;
+struct FGratiaPerformanceClip;
 
 UENUM(BlueprintType)
 enum class EGratiaPreviewPose : uint8
 {
     Idle,
     Arms,
-    Head
+    Head,
+    /** CharacterProfile.PerformanceClips[PerformanceIndex], played from the start. */
+    Performance
 };
 
 /** Profile-driven character host; class name retained for existing placed assets. */
@@ -70,9 +73,18 @@ public:
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Gratia|Preview")
     EGratiaPreviewPose PreviewPose = EGratiaPreviewPose::Idle;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Gratia|Preview")
+    int32 PerformanceIndex = 0;
 
     UFUNCTION(BlueprintCallable, Category = "Gratia|Preview")
     void SetPreviewPose(EGratiaPreviewPose Pose);
+
+    /** Plays CharacterProfile.PerformanceClips[Index]; false (pose unchanged) when there is no such clip. */
+    UFUNCTION(BlueprintCallable, Category = "Gratia|Preview")
+    bool SetPerformance(int32 Index);
+
+    UFUNCTION(BlueprintPure, Category = "Gratia|Preview")
+    FString GetPreviewPoseLabel() const;
 
     UFUNCTION(BlueprintCallable, Category = "Gratia|Preview")
     void CyclePreviewPose();
@@ -86,6 +98,9 @@ public:
     UAnimSequence* GetReactionAnimation(bool bBright) const { return bBright ? BrightReaction.Get() : SoftReaction.Get(); }
     UAnimSequence* GetReactionAnimationForZone(FName ZoneName) const;
     bool IsIdlePreview() const { return PreviewPose == EGratiaPreviewPose::Idle; }
+    /** Continuously playing body animation (idle or a performance), as opposed to a held diagnostic pose. */
+    bool IsAnimatedPreview() const { return PreviewPose == EGratiaPreviewPose::Idle || PreviewPose == EGratiaPreviewPose::Performance; }
+    const FGratiaPerformanceClip* GetPerformance() const;
 
 protected:
     virtual void BeginPlay() override;
