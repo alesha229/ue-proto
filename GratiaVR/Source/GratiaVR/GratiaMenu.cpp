@@ -55,17 +55,10 @@ UGratiaMenu::UGratiaMenu()
 void UGratiaMenu::BeginPlay()
 {
     Super::BeginPlay();
-    if (MenuMapping)
-    {
-        ActiveMenuMapping = DuplicateObject<UInputMappingContext>(MenuMapping, this, TEXT("GratiaMenuInstanceMapping"));
-        if (NextAction) for (const FKey Key : {EKeys::OculusTouch_Left_Thumbstick_Y, EKeys::OculusTouch_Right_Thumbstick_Y,
-            EKeys::ValveIndex_Left_Thumbstick_Y, EKeys::ValveIndex_Right_Thumbstick_Y, EKeys::Gamepad_LeftY, EKeys::Gamepad_RightY})
-        {
-            // A positive stick Y moves up. A/X and the saved keyboard mappings stay intact.
-            auto& Mapping = ActiveMenuMapping->MapKey(NextAction, Key);
-            Mapping.Modifiers.Add(NewObject<UInputModifierNegate>(ActiveMenuMapping));
-        }
-    }
+    // The menu context is applied as the registered asset itself: OpenXR activates the action
+    // set of a registered mapping context only, so a runtime copy never received the trigger
+    // in the headset (desktop keys/mouse still worked). Stick navigation lives in the asset
+    // (setup_gratia_locomotion.py).
     Panel = NewObject<UWidgetComponent>(GetOwner(), TEXT("GratiaSettingsMenu"));
     GetOwner()->AddInstanceComponent(Panel);
     Panel->SetupAttachment(GetOwner()->GetRootComponent());
@@ -187,7 +180,7 @@ void UGratiaMenu::SetOpen(bool bValue)
     if (PC && PC->GetLocalPlayer())
     {
         auto* Input = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer());
-        if (Input && ActiveMenuMapping) { if (bOpen) Input->AddMappingContext(ActiveMenuMapping, 100); else Input->RemoveMappingContext(ActiveMenuMapping); }
+        if (Input && MenuMapping) { if (bOpen) Input->AddMappingContext(MenuMapping, 100); else Input->RemoveMappingContext(MenuMapping); }
         const auto* Runtime = Cast<AGratiaStage1Runtime>(GetOwner());
         if (!Runtime || !Runtime->bXRActive)
         {
@@ -484,7 +477,7 @@ FString UGratiaMenu::GetDiagnostics() const
     const auto* PC = BoundController.Get();
     const auto* Input = PC && PC->GetLocalPlayer() ? ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()) : nullptr;
     return FString::Printf(TEXT("open=%d widget=%d player=%d actions=%d context=%d pointer_down=%d"), bOpen, Widget != nullptr, PC != nullptr,
-        ToggleAction && NextAction && ApplyAction, Input && ActiveMenuMapping && Input->HasMappingContext(ActiveMenuMapping), bPointerDown);
+        ToggleAction && NextAction && ApplyAction, Input && MenuMapping && Input->HasMappingContext(MenuMapping), bPointerDown);
 }
 void UGratiaMenu::TickComponent(float Delta, ELevelTick Type, FActorComponentTickFunction* Tick)
 {

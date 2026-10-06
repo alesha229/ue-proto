@@ -56,7 +56,6 @@ private:
     UPROPERTY() TObjectPtr<UInputAction> ApplyAction;
     UPROPERTY() TObjectPtr<UInputMappingContext> MenuMapping;
     /** Per-instance input additions; the shared mapping asset is never changed in play. */
-    UPROPERTY(Transient) TObjectPtr<UInputMappingContext> ActiveMenuMapping;
     UPROPERTY() TObjectPtr<UEnhancedInputComponent> ActionInput;
     UPROPERTY(Transient) TObjectPtr<UWidgetComponent> Panel;
     UPROPERTY(Transient) TObjectPtr<UWidgetInteractionComponent> Pointer;

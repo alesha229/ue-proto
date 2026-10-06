@@ -129,6 +129,9 @@ for prefix, left_previous in [('OculusTouch', 'X'), ('ValveIndex', 'A')]:
     # Index has A/B buttons on both hands, rather than Touch's left X/Y.
     mapping(next_action, prefix + f'_Left_{left_previous}_Click', negative=True)
     mapping(apply_action, prefix + '_Right_Trigger_Axis')
+    # Either stick moves the menu focus (up = previous). In the asset, so OpenXR binds it.
+    for side in ('Left', 'Right'):
+        mapping(next_action, f'{prefix}_{side}_Thumbstick_Y', negative=True)
 mapping(next_action, 'Down')
 mapping(next_action, 'Up', negative=True)
 mapping(apply_action, 'Enter')

@@ -63,3 +63,7 @@ Exports/Gratia/Audio/*.wav
 .studioigor/autopilot/runner.log
 .studioigor/autopilot/LOG.md
 # <<< studioigor:base
+
+# Player-supplied music (commercial tracks): personal use only, never committed or distributed.
+Exports/Gratia/Audio/UserMusic/
+GratiaVR/Content/Gratia/UserMusic/
