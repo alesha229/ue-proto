@@ -32,7 +32,10 @@ if ($LASTEXITCODE -ne 0) { throw "Packaging failed ($LASTEXITCODE)" }
 & $pythonPath (Join-Path $PSScriptRoot 'create_build_manifest.py') --engine $EngineRoot --output $manifestPath --verify
 if ($LASTEXITCODE -ne 0) { throw 'Build fingerprint changed during packaging' }
 # Replace the previous package only now that this build succeeded; /MIR also removes stale files.
-& robocopy.exe $stagedRoot $packageRoot /MIR /R:3 /W:2 /NFL /NDL /NJH /NJS /NP | Out-Null
+# A running game locks the package: stop before touching it (the staged build stays for a rerun).
+if (Get-Process -Name GratiaVR -ErrorAction SilentlyContinue) { throw "The game is running from $packageRoot; close it and build again" }
+# Player logs and screenshots in the package (GratiaVR\Saved) are VR evidence: never mirrored away.
+& robocopy.exe $stagedRoot $packageRoot /MIR /XD (Join-Path $packageRoot 'GratiaVR\Saved') /R:3 /W:2 /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "Copy to $packageRoot failed (robocopy $LASTEXITCODE); close the running game and build again" }
 $packageFiles = @()
 foreach ($stagedFile in Get-ChildItem -LiteralPath $stagedRoot -File -Recurse) {

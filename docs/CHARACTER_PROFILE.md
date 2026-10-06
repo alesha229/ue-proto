@@ -26,7 +26,8 @@ The profile owns model-specific references and names:
   `PartnerMesh` + `PartnerTransform` + `PartnerPose` (a static partner body: each aim turns a bone
   so its reference child lies along From -> To in the partner's component space, parents first),
   `PartnerHiddenInViewpoint` and `bHasViewpoint`/`Viewpoint` (the partner's eyes; menu **View**
-  switches to them: lie down and Recenter, the head goes to the partner's eyes and the body axis
+  switches to them; Recenter while lying (HMD < 1.3 m, head tilted) enters it automatically and
+  Recenter while standing leaves it: the head goes to the partner's eyes and the body axis
   follows the top of the head). Runtime QA checks partner aims (<= 3 deg), the viewpoint and music
   sync. Gratia: KM466 performances use SKM_Manny_Simple posed like the VaM partner atom
   (`extract_vam_scene_partner.py`, `import_performance_scene.py`, docs/MOCAP_KM466.md).

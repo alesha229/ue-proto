@@ -25,6 +25,10 @@ public:
     int32 GetHandPushCount(bool bLeft) const { return HandPushCounts[bLeft ? 0 : 1]; }
     FName GetGrabbedBone(bool bLeft) const { return Hands[bLeft ? 0 : 1].GrabbedBone; }
     FString GetHandDiagnostics() const;
+    /** Game-thread time of the last hand-pressure pass (ms); PERF diagnostics. */
+    float GetHandPressureMs() const { return HandPressureMs; }
+    /** Bodies that got the exact sweep/distance queries in the last pass (after the bounds cull). */
+    int32 GetHandPressureQueries() const { return HandPressureQueries; }
     int32 GetActiveBodyCount() const { return ActiveBones.Num(); }
     bool HasFault() const { return bFault; }
 protected:
@@ -49,6 +53,8 @@ private:
     };
     FPhysicsHand Hands[2];
     int32 HandPushCounts[2] = {};
+    float HandPressureMs = 0.0f;
+    int32 HandPressureQueries = 0;
     double NextHandLog[2] = {};
     void ApplyHandPressure();
 };

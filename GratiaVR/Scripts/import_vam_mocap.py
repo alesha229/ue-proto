@@ -176,7 +176,9 @@ entry.set_editor_property("name", LABEL)
 entry.set_editor_property("clip", anims[0])
 entry.set_editor_property("segments", anims[1:])
 entry.set_editor_property("loop", True)
-clips = [c for c in profile.get_editor_property("performance_clips") if str(c.get_editor_property("name")) != LABEL] + [entry]
+# The full take starts with the same frames as the 10 s clip and supersedes it in the Pose cycle.
+replaced = (LABEL, "KM466") if LONG else (LABEL,)
+clips = [c for c in profile.get_editor_property("performance_clips") if str(c.get_editor_property("name")) not in replaced] + [entry]
 profile.set_editor_property("performance_clips", clips)
 profile.set_editor_property("expected_morph_count", len(morphs))
 validation = profile.validate_profile()

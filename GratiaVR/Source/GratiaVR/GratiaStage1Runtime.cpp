@@ -189,9 +189,11 @@ FString AGratiaStage1Runtime::GetPerformanceContext() const
             !Hand.CupBone.IsNone() ? TEXT("cup ") : TEXT(""), !Hand.GripBone.IsNone() ? TEXT("grip ") : TEXT(""),
             SoftBody && !SoftBody->GetGrabbedBone(bLeft).IsNone() ? TEXT("grab") : TEXT("-"));
     };
-    return FString::Printf(TEXT("reaction=%d pose=%s quality=%d %s %s"),
+    const auto* Physics = Character ? Character->SecondaryMotion.Get() : nullptr;
+    return FString::Printf(TEXT("reaction=%d pose=%s quality=%d %s %s hand_physics=%.2fms/%d"),
         Anim && Anim->IsReactionCuePlaying() ? 1 : 0, Character ? *Character->GetPreviewPoseLabel() : TEXT("none"),
-        Character && Character->Interaction ? Character->Interaction->Quality : -1, *HandText(LeftHand, true), *HandText(RightHand, false));
+        Character && Character->Interaction ? Character->Interaction->Quality : -1, *HandText(LeftHand, true), *HandText(RightHand, false),
+        Physics ? Physics->GetHandPressureMs() : 0.0f, Physics ? Physics->GetHandPressureQueries() : 0);
 }
 
 void AGratiaStage1Runtime::LogFramePerformance(float DeltaSeconds)
@@ -738,6 +740,22 @@ void AGratiaStage1Runtime::ResetHeight()
 void AGratiaStage1Runtime::Recenter()
 {
     if (!bPawnReady) return;
+    // Lying down in a scene with a partner: the head goes to the partner's eyes; standing up
+    // again leaves an automatically entered partner view.
+    AGratiaPreviewCharacter* Character = TargetCharacter.Get();
+    FTransform Eye;
+    const bool bViewpoint = Character && Character->PerformanceStage && Character->PerformanceStage->GetViewpoint(Eye);
+    if (bXRActive && !bPartnerView && bViewpoint && IsPlayerLying())
+    {
+        bPartnerViewAuto = SetPartnerView(true);
+        if (bPartnerViewAuto) return;
+    }
+    if (bXRActive && bPartnerView && bPartnerViewAuto && !IsPlayerLying())
+    {
+        bPartnerViewAuto = false;
+        SetPartnerView(false);
+        return;
+    }
     // A lying player has no meaningful HMD yaw; the partner view aligns the body axis itself.
     if (bXRActive && !bPartnerView)
     {
@@ -775,6 +793,7 @@ bool AGratiaStage1Runtime::SetPartnerView(bool bEnable)
     if (bEnable == bPartnerView) return true;
     bPartnerView = bEnable;
     if (Stage) Stage->SetViewpointActive(bEnable);
+    if (!bEnable) bPartnerViewAuto = false;
     if (bEnable) FreeHeightOffsetCm = HeightOffsetCm;
     else
     {
@@ -803,6 +822,13 @@ void AGratiaStage1Runtime::UpdatePartnerView()
         Camera->SetWorldLocationAndRotation(Eye.GetLocation(), Eye.GetRotation());
 }
 
+bool AGratiaStage1Runtime::IsPlayerLying() const
+{
+    if (!Camera.IsValid() || !TrackingOrigin.IsValid()) return false;
+    const double HeightCm = Camera->GetComponentLocation().Z - TrackingOrigin->GetComponentLocation().Z;
+    return HeightCm < 130.0 && FMath::Abs(Camera->GetComponentQuat().GetUpVector().Z) < 0.6;
+}
+
 bool AGratiaStage1Runtime::RecenterToPartnerView()
 {
     AGratiaPreviewCharacter* Character = TargetCharacter.Get();
@@ -813,7 +839,7 @@ bool AGratiaStage1Runtime::RecenterToPartnerView()
     // Lying: the top of the head gives the body axis (head -> partner's head). Standing: face
     // along the partner's body toward the feet, standing at the partner's eyes.
     const FQuat Head = Camera->GetComponentQuat();
-    const bool bLying = FMath::Abs(Head.GetUpVector().Z) < 0.6;
+    const bool bLying = IsPlayerLying();
     FVector Have = bLying ? Head.GetUpVector().GetSafeNormal2D() : Head.GetForwardVector().GetSafeNormal2D();
     FVector Want = bLying ? Eye.GetRotation().GetUpVector().GetSafeNormal2D() : -Eye.GetRotation().GetUpVector().GetSafeNormal2D();
     if (Have.IsNearlyZero() || Want.IsNearlyZero()) return false;

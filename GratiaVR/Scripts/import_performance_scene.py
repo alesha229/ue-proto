@@ -1,4 +1,4 @@
-"""Attach the KM466 scene (music, partner body and partner viewpoint) to DA_Gratia's KM466 performances.
+"""Attach the KM466 scene (music, partner body and partner viewpoint) to DA_Gratia's KM466 Full performance.
 
 Editor commandlet after the C++ editor build. Inputs:
 - Exports/Gratia/Audio/KM466_Music.wav: ffmpeg decode of the package's `Custom/Sounds/music over anim.mp3`
@@ -15,7 +15,7 @@ import unreal
 ROOT = Path(__file__).resolve().parents[2]
 WAV = ROOT / "Exports/Gratia/Audio/KM466_Music.wav"
 DATA = json.loads((ROOT / "evidence/05/kitty_mocap_full/km466_scene_partner.json").read_text(encoding="utf-8"))
-PERFORMANCES = ("KM466", "KM466 Full")
+PERFORMANCES = ("KM466 Full",)
 lib = unreal.EditorAssetLibrary
 assert WAV.is_file(), WAV
 

@@ -310,6 +310,8 @@ private:
     bool bPendingRecenter = false;
     bool bPartnerView = false;
     bool bPartnerViewRequested = false;
+    /** Partner view entered by recentering while lying (standing up and recentering leaves it). */
+    bool bPartnerViewAuto = false;
     float FreeHeightOffsetCm = 0.0f;
     float DebugRefreshSeconds = 0.0f;
 
@@ -322,6 +324,8 @@ private:
     void ApplyHeight();
     void FinishRecenter();
     bool RecenterToPartnerView();
+    /** HMD below 1.3 m (floor, bed, reclined) with the head tilted far from upright: the player lies. */
+    bool IsPlayerLying() const;
     void UpdatePartnerView();
     void UpdateDesktopCamera();
     void RunRequestedTests(float DeltaSeconds);

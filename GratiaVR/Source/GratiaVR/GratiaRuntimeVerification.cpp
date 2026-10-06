@@ -1114,6 +1114,11 @@ void UGratiaRuntimeVerification::RunHandPhysicsIntegration()
         const double Travel = Body ? FVector::Distance(HandPhysicsBefore, Body->GetUnrealWorldTransform().GetLocation()) : 0;
         TestCheck(FMath::IsFinite(Travel) && Travel > 0.000001 && !Physics->HasFault(), TEXT("Chaos test body moved after hand pressure without a safety fault"));
         UE_LOG(LogGratiaVerification, Display, TEXT("HAND_PHYSICS_QA displacement_cm=%.6f"), Travel);
+        // The pass that pushed: exact queries only for bodies near the hands (bounds cull).
+        const int32 Active = Physics->GetActiveBones().Num(), Queries = Physics->GetHandPressureQueries();
+        UE_LOG(LogGratiaVerification, Display, TEXT("HAND_PHYSICS_QA queries=%d active=%d cost_ms=%.3f"), Queries, Active, Physics->GetHandPressureMs());
+        TestCheck(Queries >= 1 && (Active < 12 || Queries * 4 < Active * 3),
+            *FString::Printf(TEXT("Hand pressure queries only bodies near the hands (%d of %d active)"), Queries, Active));
         HandPhysicsQAPhase = 2;
     }
     else if (HandPhysicsQAPhase == 2)

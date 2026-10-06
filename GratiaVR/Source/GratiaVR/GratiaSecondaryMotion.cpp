@@ -1,4 +1,5 @@
 #include "GratiaSecondaryMotion.h"
+#include "Misc/ScopeExit.h"
 #include "GratiaCharacterProfile.h"
 #include "GratiaPreviewCharacter.h"
 #include "GratiaInteraction.h"
@@ -145,10 +146,23 @@ void UGratiaSecondaryMotion::ApplyHandPressure()
     const FGratiaHandPhysicsSettings& Settings = Character->CharacterProfile->HandPhysics;
     if (!Settings.bEnabled) { ClearHands(); return; }
     auto* Mesh = Character->CharacterMesh.Get();
+    const double Started = FPlatformTime::Seconds();
+    int32 Queries = 0, Processed = 0;
+    ON_SCOPE_EXIT
+    {
+        HandPressureMs = float((FPlatformTime::Seconds() - Started) * 1000.0);
+        if (Processed) HandPressureQueries = Queries;
+    };
     for (int32 Index = 0; Index < 2; ++Index)
     {
         FPhysicsHand& Hand = Hands[Index];
         if (!Hand.bPending) continue;
+        ++Processed;
+        // Broad phase: exact sweep/distance queries only for bodies whose bounds reach the hand's
+        // swept sphere (High quality has ~140 bodies; querying all of them cost several ms a frame).
+        FBox Reach(ForceInit);
+        Reach += Hand.Previous; Reach += Hand.Current;
+        Reach = Reach.ExpandBy(Settings.RadiusCm + 1.0);
         Hand.bPending = false; // never replay stale tracking data
         const FVector Velocity = ((Hand.Current - Hand.Previous) / Hand.Delta).GetClampedToMaxSize(Settings.MaxSpeedCmPerSecond);
         if (Hand.bGrabPressed)
@@ -159,6 +173,7 @@ void UGratiaSecondaryMotion::ApplyHandPressure()
             {
                 if (Hands[1 - Index].GrabbedBone == Bone) continue;
                 FBodyInstance* Body = Mesh->GetBodyInstance(Bone);
+                if (!Body || !Body->GetBodyBounds().Intersect(Reach.ExpandBy(BestDistance))) continue;
                 FVector Point;
                 const float Distance = Body && Body->IsInstanceSimulatingPhysics() ? Body->GetDistanceToBody(Hand.Current, Point) : -1;
                 if (!FMath::IsFinite(Distance) || Distance < 0 || Distance >= BestDistance || Point.ContainsNaN()) continue;
@@ -191,7 +206,8 @@ void UGratiaSecondaryMotion::ApplyHandPressure()
         for (FName Bone : ActiveBones)
         {
             FBodyInstance* Body = Mesh->GetBodyInstance(Bone);
-            if (!Body || !Body->IsInstanceSimulatingPhysics()) continue;
+            if (!Body || !Body->IsInstanceSimulatingPhysics() || !Body->GetBodyBounds().Intersect(Reach)) continue;
+            ++Queries;
             FHitResult Hit;
             const bool bSwept = Body->Sweep(Hit, Hand.Previous, Hand.Current, FQuat::Identity,
                 FCollisionShape::MakeSphere(Settings.RadiusCm), false);
