@@ -267,6 +267,17 @@ struct GRATIAVR_API FGratiaSoftBodyChain
     float GrabMovement = 0.5f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Grab", meta = (ClampMin = "0", Units = "cm"))
     float MaxGrabStretchCm = 6.0f;
+    /** Jiggle as a mass on a spring (the bone is translated) instead of a swinging KawaiiPhysics
+     *  bone: flesh around a limb (thighs) wobbles with the body's motion; a swinging bone along
+     *  the limb would shear the front and back of the flesh up and down. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Jiggle")
+    bool bTranslational = false;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Jiggle", meta = (ClampMin = "0.5", ClampMax = "10", Units = "Hz"))
+    float JiggleFrequencyHz = 3.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Jiggle", meta = (ClampMin = "0.02", ClampMax = "1"))
+    float JiggleDampingRatio = 0.2f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Jiggle", meta = (ClampMin = "0", ClampMax = "10", Units = "cm"))
+    float MaxJiggleCm = 2.0f;
 };
 
 /** Source body collision approximated by spheres that follow a skinning bone. */
@@ -483,7 +494,7 @@ struct GRATIAVR_API FGratiaSoftBodySettings
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Haptics", meta = (ClampMin = "0", ClampMax = "0.5", Units = "s"))
     float HapticPulseSeconds = 0.06f;
     /** Surface press of skin and clothing (material vertex offset). Receives hand spheres
-     *  Sphere00..Sphere23, soft zones Zone0..Zone7 and Config (softness, -, zone falloff,
+     *  Sphere00..Sphere23, soft zones Zone0..Zone3 and Config (softness, -, zone falloff,
      *  strength). Materials reference the same collection; empty disables the press. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press")
     TObjectPtr<UMaterialParameterCollection> PressCollection;

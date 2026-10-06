@@ -29,7 +29,7 @@
 кожа под плотной тканью на ≥2,5 мм внутрь, кости `DEF-thigh_soft`) → `validate` → `save` →
 `export` (`Gratia_Game_mesh.fbx`). Затем коммандлеты `reimport_game_mesh.py` (меш, скелет
 дополняется, ожидаемые количества профиля) → `setup_soft_body.py` → `setup_body_surface.py`
-→ `setup_soft_press_material.py` (8 зон вмятины).
+→ `setup_soft_press_material.py` (вмятина: 4 слота, ближайшие к рукам зоны).
 
 `correct_kitty_mocap.py` и `preview_kitty_mocap.py` — **исторические** скрипты второй
 отклонённой попытки (GPT, 5 октября); остальные её скрипты лежат в

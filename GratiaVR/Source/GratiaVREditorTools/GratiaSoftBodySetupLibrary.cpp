@@ -15,6 +15,58 @@ DEFINE_LOG_CATEGORY_STATIC(LogGratiaSoftBodySetup, Log, All);
 
 namespace GratiaSoftBodySetup
 {
+/** Surface fits keep the skin and clothing lying on it; loose clothing (skirt edges, flaps)
+ *  farther than MaxGapCm from any skin vertex is left out (SetSurfaceSkinFilter). */
+struct FSkinFilter
+{
+    FName SkinSlot;
+    float MaxGapCm = 0.0f;
+    TWeakObjectPtr<const USkeletalMesh> Mesh;
+    TMap<FIntVector, TArray<FVector>> Grid;
+};
+FSkinFilter GSkinFilter;
+
+FIntVector SkinCell(const FVector& Position)
+{
+    return FIntVector(FMath::FloorToInt(Position.X / GSkinFilter.MaxGapCm), FMath::FloorToInt(Position.Y / GSkinFilter.MaxGapCm),
+        FMath::FloorToInt(Position.Z / GSkinFilter.MaxGapCm));
+}
+
+bool KeepVertex(const USkeletalMesh* SkeletalMesh, FName Slot, const FVector& Position)
+{
+    if (GSkinFilter.MaxGapCm <= 0.0f || Slot == GSkinFilter.SkinSlot) return true;
+    if (GSkinFilter.Mesh.Get() != SkeletalMesh)
+    {
+        GSkinFilter.Mesh = SkeletalMesh; GSkinFilter.Grid.Reset();
+        const TArray<FSkeletalMaterial>& Materials = SkeletalMesh->GetMaterials();
+        for (const FSkelMeshSection& Section : SkeletalMesh->GetImportedModel()->LODModels[0].Sections)
+            if (Materials.IsValidIndex(Section.MaterialIndex) && Materials[Section.MaterialIndex].ImportedMaterialSlotName == GSkinFilter.SkinSlot)
+                for (const FSoftSkinVertex& Vertex : Section.SoftVertices)
+                    GSkinFilter.Grid.FindOrAdd(SkinCell(FVector(Vertex.Position))).Add(FVector(Vertex.Position));
+    }
+    const FIntVector Cell = SkinCell(Position);
+    for (int32 X = -1; X <= 1; ++X) for (int32 Y = -1; Y <= 1; ++Y) for (int32 Z = -1; Z <= 1; ++Z)
+        if (const TArray<FVector>* Points = GSkinFilter.Grid.Find(Cell + FIntVector(X, Y, Z)))
+            for (const FVector& Point : *Points)
+                if (FVector::DistSquared(Point, Position) <= FMath::Square(GSkinFilter.MaxGapCm)) return true;
+    return false;
+}
+
+FName SlotOf(const USkeletalMesh* SkeletalMesh, const FSkelMeshSection& Section)
+{
+    const TArray<FSkeletalMaterial>& Materials = SkeletalMesh->GetMaterials();
+    return Materials.IsValidIndex(Section.MaterialIndex) ? Materials[Section.MaterialIndex].ImportedMaterialSlotName : NAME_None;
+}
+
+uint16 OwnWeight(const FSkelMeshSection& Section, const FSoftSkinVertex& Vertex, int32 Bone)
+{
+    uint16 Own = 0;
+    for (int32 I = 0; I < MAX_TOTAL_INFLUENCES; ++I)
+        if (Section.BoneMap.IsValidIndex(Vertex.InfluenceBones[I]) && Section.BoneMap[Vertex.InfluenceBones[I]] == Bone)
+            Own = FMath::Max(Own, Vertex.InfluenceWeights[I]);
+    return Own;
+}
+
 bool ReadVector(const TSharedPtr<FJsonValue>& Value, FVector& Out)
 {
     if (!Value.IsValid() || Value->Type != EJson::Array) return false;
@@ -209,6 +261,7 @@ bool UGratiaSoftBodySetupLibrary::MeasureLimbSurface(USkeletalMesh* SkeletalMesh
         if (!IncludeSlots.IsEmpty() && !IncludeSlots.Contains(Slot)) continue;
         for (const FSoftSkinVertex& Vertex : Section.SoftVertices)
         {
+            if (!KeepVertex(SkeletalMesh, Slot, FVector(Vertex.Position))) continue;
             // Merged soft bones count for their parent (one limb surface).
             TMap<int32, uint32, TInlineSetAllocator<8>> Weights;
             for (int32 I = 0; I < MAX_TOTAL_INFLUENCES; ++I)
@@ -376,6 +429,7 @@ TMap<int32, TArray<FVector>> OwnedVertices(USkeletalMesh* SkeletalMesh, const TA
         if (!IncludeSlots.IsEmpty() && !IncludeSlots.Contains(Slot)) continue;
         for (const FSoftSkinVertex& Vertex : Section.SoftVertices)
         {
+            if (!KeepVertex(SkeletalMesh, Slot, FVector(Vertex.Position))) continue;
             int32 Dominant = INDEX_NONE; uint16 Best = 0;
             for (int32 I = 0; I < MAX_TOTAL_INFLUENCES; ++I)
                 if (Vertex.InfluenceWeights[I] > Best && Section.BoneMap.IsValidIndex(Vertex.InfluenceBones[I]))
@@ -399,17 +453,14 @@ TArray<FGratiaSurfaceInfluence> RegionInfluences(USkeletalMesh* SkeletalMesh, co
         if (!IncludeSlots.IsEmpty() && !IncludeSlots.Contains(Slot)) continue;
         for (const FSoftSkinVertex& Vertex : Section.SoftVertices)
         {
-            if (FVector::Distance(FVector(Vertex.Position), Center) > Radius) continue;
-            // Only the part's own skin (dominated by its bone), not the chest/hip around it.
-            int32 Dominant = INDEX_NONE; uint16 Best = 0;
-            for (int32 I = 0; I < MAX_TOTAL_INFLUENCES; ++I)
-                if (Vertex.InfluenceWeights[I] > Best && Section.BoneMap.IsValidIndex(Vertex.InfluenceBones[I]))
-                { Best = Vertex.InfluenceWeights[I]; Dominant = Section.BoneMap[Vertex.InfluenceBones[I]]; }
-            if (Dominant != OwnerBone) continue;
+            if (FVector::Distance(FVector(Vertex.Position), Center) > Radius || !KeepVertex(SkeletalMesh, Slot, FVector(Vertex.Position))) continue;
+            // Only the part's own skin (its bone carries >= 0.25), weighted by how much it owns it.
+            const double OwnShare = OwnWeight(Section, Vertex, OwnerBone) / 65535.0;
+            if (OwnShare < 0.25) continue;
             for (int32 I = 0; I < MAX_TOTAL_INFLUENCES; ++I)
                 if (Vertex.InfluenceWeights[I] > 0 && Section.BoneMap.IsValidIndex(Vertex.InfluenceBones[I]))
                 {
-                    const double Weight = Vertex.InfluenceWeights[I] / 65535.0;
+                    const double Weight = OwnShare * Vertex.InfluenceWeights[I] / 65535.0;
                     Sum.FindOrAdd(Section.BoneMap[Vertex.InfluenceBones[I]]) += Weight;
                     Total += Weight;
                 }
@@ -443,12 +494,23 @@ bool UGratiaSoftBodySetupLibrary::MeasureSphereSurface(USkeletalMesh* SkeletalMe
     Capsules.Reset();
     if (!SkeletalMesh || !SkeletalMesh->GetImportedModel() || SkeletalMesh->GetImportedModel()->LODModels.IsEmpty()) return false;
     const FReferenceSkeleton& Ref = SkeletalMesh->GetRefSkeleton();
-    const TMap<int32, TArray<FVector>> Buckets = OwnedVertices(SkeletalMesh, IncludeSlots);
     for (const FName Name : Bones)
     {
         const int32 Bone = Ref.FindBoneIndex(Name);
-        const TArray<FVector>* Points = Bone != INDEX_NONE ? Buckets.Find(Bone) : nullptr;
-        if (!Points || Points->Num() < 16) continue;
+        if (Bone == INDEX_NONE) continue;
+        // The whole part (its bone carries >= 0.25), not only the core it dominates: a butt
+        // fitted to its dominated centre was a ball far smaller than the cheek.
+        TArray<FVector> Owned;
+        for (const FSkelMeshSection& Section : SkeletalMesh->GetImportedModel()->LODModels[0].Sections)
+        {
+            const FName Slot = SlotOf(SkeletalMesh, Section);
+            if (!IncludeSlots.IsEmpty() && !IncludeSlots.Contains(Slot)) continue;
+            for (const FSoftSkinVertex& Vertex : Section.SoftVertices)
+                if (OwnWeight(Section, Vertex, Bone) >= 16384 && KeepVertex(SkeletalMesh, Slot, FVector(Vertex.Position)))
+                    Owned.Add(FVector(Vertex.Position));
+        }
+        const TArray<FVector>* Points = &Owned;
+        if (Points->Num() < 16) continue;
         // Algebraic sphere fit |p|^2 + D.p + G = 0 about the centroid (well conditioned).
         FVector Mean = FVector::ZeroVector;
         for (const FVector& Point : *Points) Mean += Point;
@@ -499,7 +561,10 @@ bool UGratiaSoftBodySetupLibrary::MeasureSphereSurface(USkeletalMesh* SkeletalMe
         Capsules.Add(Capsule);
         FString Shares;
         for (const FGratiaSurfaceInfluence& Influence : Capsule.Influences) Shares += FString::Printf(TEXT(" %s=%.2f"), *Influence.Bone.ToString(), Influence.Weight);
-        UE_LOG(LogGratiaSoftBodySetup, Display, TEXT("BODY_SURFACE %s sphere vertices=%d radius_cm=%.2f follows%s"), *Name.ToString(), Points->Num(), Capsule.RadiusCm, *Shares);
+        TArray<double> Residual;
+        for (const double Distance : Distances) Residual.Add(FMath::Abs(Distance - Radius));
+        UE_LOG(LogGratiaSoftBodySetup, Display, TEXT("BODY_SURFACE %s sphere vertices=%d radius_cm=%.2f fit_p50=%.2fcm fit_p90=%.2fcm follows%s"), *Name.ToString(),
+            Points->Num(), Capsule.RadiusCm, PercentileOf(Residual, 0.5), PercentileOf(Residual, 0.9), *Shares);
     }
     return !Capsules.IsEmpty();
 }
@@ -658,4 +723,12 @@ bool UGratiaSoftBodySetupLibrary::BuildBodyColliders(USkeletalMesh* SkeletalMesh
     UE_LOG(LogGratiaSoftBodySetup, Display, TEXT("SOFT_BODY_COLLIDERS spheres=%d range_cm=%.1f surface_gap_mean_cm=%.2f max_cm=%.2f"),
         Colliders.Num(), RangeCm, GapCount ? GapSum / GapCount : 0.0, WorstGap);
     return !Colliders.IsEmpty();
+}
+
+void UGratiaSoftBodySetupLibrary::SetSurfaceSkinFilter(FName SkinSlot, float MaxClothGapCm)
+{
+    using namespace GratiaSoftBodySetup;
+    GSkinFilter = FSkinFilter();
+    GSkinFilter.SkinSlot = SkinSlot;
+    GSkinFilter.MaxGapCm = FMath::Max(0.0f, MaxClothGapCm);
 }

@@ -28,8 +28,11 @@ presets = {
                    world_rotation=0.4, collision=3.0, limit=30.0, gravity=0.2, grab=0.5, stretch=6.0),
     'Butt': dict(bones=['DEF-ass_L', 'DEF-ass_R'], damping=0.1, stiffness=0.03, world_location=0.45,
                  world_rotation=0.45, collision=2.5, limit=25.0, gravity=0.2, grab=0.4, stretch=4.0),
+    # Thighs wobble as masses on springs (translation), not swinging bones (user: they "jerked
+    # up and down", the front/back flesh sheared around the bone's pivot).
     'Thigh': dict(bones=['DEF-thigh_soft_L', 'DEF-thigh_soft_R', 'DEF-thigh_soft_L_001', 'DEF-thigh_soft_R_001'], damping=0.12, stiffness=0.08, world_location=0.55,
-                  world_rotation=0.55, collision=2.0, limit=8.0, gravity=0.1, grab=0.3, stretch=3.0),
+                  world_rotation=0.55, collision=2.0, limit=8.0, gravity=0.1, grab=0.6, stretch=3.0,
+                  translational=True, frequency=3.0, damping_ratio=0.18, max_jiggle=2.0),
 }
 chains, soft_bones, report = [], [], []
 for group, p in presets.items():
@@ -43,7 +46,9 @@ for group, p in presets.items():
                       damping=p['damping'], stiffness=p['stiffness'], world_damping_location=p['world_location'],
                       world_damping_rotation=p['world_rotation'], collision_radius_cm=p['collision'],
                       limit_angle_degrees=p['limit'], gravity_scale=p['gravity'], contact_radius_cm=radius,
-                      contact_center_along_bone=along, allow_grab=True, grab_movement=p['grab'], max_grab_stretch_cm=p['stretch'])
+                      contact_center_along_bone=along, allow_grab=True, grab_movement=p['grab'], max_grab_stretch_cm=p['stretch'],
+                      translational=p.get('translational', False), jiggle_frequency_hz=p.get('frequency', 3.0),
+                      jiggle_damping_ratio=p.get('damping_ratio', 0.2), max_jiggle_cm=p.get('max_jiggle', 2.0))
         for key, value in values.items():
             chain.set_editor_property(key, value)
         chains.append(chain)

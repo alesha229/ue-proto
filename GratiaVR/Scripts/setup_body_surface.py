@@ -59,6 +59,9 @@ def tagged(capsules, grip, soft_part):
 
 
 # 80th percentile: the hand meets the outer layer (clothing, skirt panels), not the middle of it.
+# Hands meet the skin and the clothing lying on it; loose clothing (skirt edges, coat flaps)
+# farther than 3 cm from the skin is not body surface (a waist coat within 3 cm stays) (user: the hand caught on the skirt edge).
+setup.set_surface_skin_filter("Body_skin", 3.0)
 # Thigh jiggle bones share the thigh's flesh: their skin counts for the thigh capsules.
 limb_soft = [b for b in soft if "thigh" in b.lower()]
 limbs = tagged(setup.measure_limb_surface(mesh, include, excluded, limb_soft, 40, 0.8), True, False)

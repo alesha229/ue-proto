@@ -36,6 +36,18 @@ struct FGratiaKawaiiChain
 
 constexpr int32 GratiaKawaiiMaxHandSpheres = 24;
 
+/** Translational soft part: a mass on a spring following its bone (world space, so it lags
+ *  behind body accelerations and wobbles back). */
+struct FGratiaJiggle
+{
+    FName Bone;
+    FVector TipAxis = FVector::XAxisVector;
+    float TipLengthCm = 0.0f;
+    float Omega = 0.0f, Zeta = 0.2f, MaxCm = 2.0f;
+    FVector Mass = FVector::ZeroVector, Velocity = FVector::ZeroVector;
+    bool bInitialized = false;
+};
+
 FVector GratiaAnimAxisVector(EGratiaBoneAxis Axis)
 {
     switch (Axis)
@@ -94,6 +106,8 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
     TWeakObjectPtr<USkeletalMesh> CachedMesh;
     TArray<FGratiaSpringBone> Springs;
     TArray<FGratiaKawaiiChain> Kawaii;
+    TArray<FGratiaJiggle> Jiggles;
+    float JiggleDelta = 0.0f;
     bool bSoftBody = false;
     bool bSoftBodyReset = false;
     TArray<FGratiaSoftBodyGrab> Grabs;
@@ -103,6 +117,7 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
     void BuildSoftBody(const UGratiaCharacterProfile* Profile, const USkeletalMesh* Mesh, UAnimInstance* InInstance)
     {
         Kawaii.Reset();
+        Jiggles.Reset();
         if (!Profile || !Mesh || !Profile->SoftBody.bEnabled) return;
         const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
         for (const FGratiaSoftBodyChain& Definition : Profile->SoftBody.Chains)
@@ -110,6 +125,20 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
             TArray<FName> Roots;
             for (const FName Bone : Definition.RootBones) if (Ref.FindBoneIndex(Bone) != INDEX_NONE) Roots.Add(Bone);
             if (Roots.IsEmpty()) continue;
+            if (Definition.bTranslational)
+            {
+                for (const FName Bone : Roots)
+                {
+                    FGratiaJiggle& Jiggle = Jiggles.AddDefaulted_GetRef();
+                    Jiggle.Bone = Bone;
+                    Jiggle.TipAxis = GratiaAnimAxisVector(Definition.ForwardAxis);
+                    Jiggle.TipLengthCm = Definition.DummyBoneLengthCm;
+                    Jiggle.Omega = 2.0f * PI * FMath::Clamp(Definition.JiggleFrequencyHz, 0.5f, 10.0f);
+                    Jiggle.Zeta = FMath::Clamp(Definition.JiggleDampingRatio, 0.02f, 1.0f);
+                    Jiggle.MaxCm = FMath::Max(0.0f, Definition.MaxJiggleCm);
+                }
+                continue;
+            }
             FGratiaKawaiiChain& Chain = Kawaii.AddDefaulted_GetRef();
             Chain.Roots = Roots;
             Chain.Node = MakeUnique<FGratiaKawaiiNode>();
@@ -192,12 +221,56 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
             if (bSoftBodyReset) Chain.Node->ResetDynamics(ETeleportType::ResetPhysics);
             Chain.Node->Update_AnyThread(InContext);
         }
+        if (bSoftBodyReset) for (FGratiaJiggle& Jiggle : Jiggles) Jiggle.bInitialized = false;
         bSoftBodyReset = false;
+    }
+
+    void EvaluateJiggles(FComponentSpacePoseContext& ComponentPose, int32& Active)
+    {
+        const FBoneContainer& Bones = ComponentPose.Pose.GetPose().GetBoneContainer();
+        const FTransform ToWorld = GetComponentTransform();
+        const double Scale = ToWorld.GetScale3D().GetAbsMax();
+        const float Time = FMath::Clamp(JiggleDelta, 0.0f, 0.05f);
+        for (FGratiaJiggle& Jiggle : Jiggles)
+        {
+            const int32 MeshIndex = Bones.GetPoseBoneIndexForBoneName(Jiggle.Bone);
+            if (MeshIndex == INDEX_NONE) continue;
+            const FCompactPoseBoneIndex Index = Bones.MakeCompactPoseIndex(FMeshPoseBoneIndex(MeshIndex));
+            if (Index.GetInt() == INDEX_NONE) continue;
+            FTransform Bone = ComponentPose.Pose.GetComponentSpaceTransform(Index);
+            const FVector Anchor = ToWorld.TransformPosition(Bone.GetLocation());
+            // A grab pulls the part's tip toward the hand (the mass follows, within the stretch).
+            FVector Pull = FVector::ZeroVector;
+            for (const FGratiaSoftBodyGrab& Grab : Grabs)
+            {
+                if (Grab.RootBone != Jiggle.Bone) continue;
+                const FVector Tip = Bone.GetLocation() + Bone.GetRotation().RotateVector(Jiggle.TipAxis) * Jiggle.TipLengthCm;
+                Pull = ToWorld.TransformVector((Grab.TargetCS - Tip).GetClampedToMaxSize(Grab.MaxStretchCm) * FMath::Clamp(Grab.Movement, 0.0f, 1.0f));
+            }
+            if (!Jiggle.bInitialized || Anchor.ContainsNaN() || FVector::Distance(Anchor, Jiggle.Mass) > 50.0 * Scale)
+            {
+                Jiggle.Mass = Anchor; Jiggle.Velocity = FVector::ZeroVector; Jiggle.bInitialized = true;
+            }
+            // Damped spring toward the anchor, a few substeps per frame.
+            const FVector Rest = Anchor + Pull;
+            for (int32 Step = 0; Step < 4 && Time > 0.0f; ++Step)
+            {
+                const float Dt = Time / 4.0f;
+                Jiggle.Velocity += (FMath::Square(Jiggle.Omega) * (Rest - Jiggle.Mass) - 2.0f * Jiggle.Zeta * Jiggle.Omega * Jiggle.Velocity) * Dt;
+                Jiggle.Mass += Jiggle.Velocity * Dt;
+            }
+            FVector Offset = (Jiggle.Mass - Anchor).GetClampedToMaxSize((Jiggle.MaxCm + Pull.Size() / Scale) * Scale);
+            if (Offset.ContainsNaN()) { Jiggle.bInitialized = false; continue; }
+            Jiggle.Mass = Anchor + Offset;
+            Bone.SetLocation(Bone.GetLocation() + ToWorld.InverseTransformVector(Offset));
+            ComponentPose.Pose.SetComponentSpaceTransform(Index, Bone);
+            ++Active;
+        }
     }
 
     void EvaluateSoftBody(FPoseContext& Output)
     {
-        if (!bSoftBody || Kawaii.IsEmpty()) { if (ActiveChainsOut) *ActiveChainsOut = 0; return; }
+        if (!bSoftBody || (Kawaii.IsEmpty() && Jiggles.IsEmpty())) { if (ActiveChainsOut) *ActiveChainsOut = 0; return; }
         FComponentSpacePoseContext ComponentPose(this);
         ComponentPose.Pose.InitPose(Output.Pose);
         ComponentPose.Curve = Output.Curve;
@@ -224,6 +297,7 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
             Chain.Node->EvaluateComponentSpace_AnyThread(ComponentPose);
             ++Active;
         }
+        EvaluateJiggles(ComponentPose, Active);
         FCSPose<FCompactPose>::ConvertComponentPosesToLocalPoses(ComponentPose.Pose, Output.Pose);
         // Squeeze: scale the simulated root bone in its own space (skin compresses toward the body).
         const FBoneContainer& Bones = Output.Pose.GetBoneContainer();
@@ -285,6 +359,7 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
         // Soft body input: hand spheres move the reserved root-driven limits.
         bSoftBody = Instance->bSoftBody && !Kawaii.IsEmpty() && Profile && Mesh;
         bSoftBodyReset |= Instance->SoftBodyInput.bReset;
+        JiggleDelta = DeltaSeconds;
         Instance->SoftBodyInput.bReset = false;
         Grabs = Instance->SoftBodyInput.Grabs;
         Scales = Instance->SoftBodyInput.Scales;

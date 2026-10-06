@@ -36,6 +36,11 @@ public:
     static bool MeasureBodySurface(USkeletalMesh* SkeletalMesh, const TArray<FName>& IncludeSlots, const TArray<FName>& ExcludeBones,
         int32 MinVertices, float RadiusPercentile, TArray<FGratiaSurfaceCapsule>& Capsules);
 
+    /** Following surface fits keep SkinSlot and clothing within MaxClothGapCm of it; loose clothing
+     *  (skirt edges, flaps) is not body surface. 0 disables the filter. */
+    UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
+    static void SetSurfaceSkinFilter(FName SkinSlot, float MaxClothGapCm);
+
     /** MeasureBodySurface where the weights of MergeIntoParent bones (soft bones sharing a limb's
      *  flesh, e.g. thigh jiggle bones) count for their parent bone: the limb keeps its whole surface. */
     UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
