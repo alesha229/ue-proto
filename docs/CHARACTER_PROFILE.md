@@ -16,8 +16,17 @@ The profile owns model-specific references and names:
   single-node playback; their own face curves replace the procedural blink, and
   secondary motion stays active. `-GratiaPoseTest=Performance [-GratiaPerformance=N]`
   starts one directly; runtime QA checks that each starts, loops as configured,
-  advances and has finite morph curves. Gratia: `KM466` (retargeted VaM mocap,
-  docs/MOCAP_KM466.md).
+  advances and has finite morph curves. Gratia: `Idle ZZZ`, `KM466` (retargeted VaM mocap,
+  docs/MOCAP_KM466.md). `Segments` (optional) continue a long take part by part as one
+  performance (each part plays once; the whole performance loops; parts share their
+  boundary frame); the menu shows `Name n/N`, QA checks the chain.
+- StrongReactionClip and MoodReactionClips: a touch faster than
+  `ContactSettings.StrongReactionSpeedCmPerSecond` plays StrongReactionClip; otherwise the
+  current mood (`Calm`, `Cheerful`, `Reserved`; menu item Mood) selects MoodReactionClips;
+  otherwise ReactionClips zone routing. Gratia: ReactStartle (fast), ReactHappy (Cheerful),
+  ReactShy (Reserved), ReactPout (zone Hair) — Zenless-Zone-Zero-style clips from
+  `author_anime_clips.py`. Runtime QA checks the selection; reaction QA
+  `-GratiaReactionMood=N` checks the mood clips in the packaged game.
 - Semantic bone and morph maps. Gameplay asks for Head, LeftHand, BlinkLeft,
   Smile or Surprise; it does not contain exported Gratia bone names.
 - Character contact-zone geometry and hold permissions.

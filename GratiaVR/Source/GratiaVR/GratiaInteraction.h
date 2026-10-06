@@ -68,6 +68,8 @@ public:
     int32 ReactionSerial = 0;
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Interaction|Response")
     FName LastReactionZoneName;
+    /** Hand speed (cm/s) of the contact that started the last reaction; 0 for demo/synthetic zone events. */
+    float LastReactionSpeed = 0.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction|Settings", meta = (ClampMin = "0", ClampMax = "2"))
     int32 Mood = 0;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction|Settings", meta = (ClampMin = "0", ClampMax = "2"))

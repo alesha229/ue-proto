@@ -74,6 +74,7 @@ void UGratiaRuntimeVerification::ConfigureFromCommandLine()
     bSelfTest = FParse::Param(FCommandLine::Get(), TEXT("GratiaSelfTest"));
     bReactionQAEnabled = FParse::Value(FCommandLine::Get(), TEXT("GratiaReactionZone="), ReactionQAZone);
     FParse::Value(FCommandLine::Get(), TEXT("GratiaExpectedReactionClip="), ReactionQAExpectedClip);
+    FParse::Value(FCommandLine::Get(), TEXT("GratiaReactionMood="), ReactionQAMood);
     FParse::Value(FCommandLine::Get(), TEXT("GratiaCorrectivePrefix="), ReactionQACorrectivePrefix);
     FParse::Value(FCommandLine::Get(), TEXT("GratiaSoakSeconds="), SoakDuration);
     FParse::Value(FCommandLine::Get(), TEXT("GratiaPerfSeconds="), PerfDuration);
@@ -253,13 +254,26 @@ void UGratiaRuntimeVerification::RunCharacterWorldChecks()
     else if (Character->GetExpectedAnimation())
     {
         const FGratiaPerformanceClip* Performance = Character->PreviewPose == EGratiaPreviewPose::Performance ? Character->GetPerformance() : nullptr;
-        const bool bLoop = Character->IsIdlePreview() || (Performance && Performance->bLoop);
+        const bool bLoop = Character->IsIdlePreview() || (Performance && Performance->bLoop && Performance->Segments.IsEmpty());
         TestCheck(Animation && Animation->GetAnimationAsset() == Character->GetExpectedAnimation()
             && (Character->IsAnimatedPreview() ? Animation->IsPlaying() && Animation->IsLooping() == bLoop : !Animation->IsPlaying()),
             TEXT("The requested profile preview clip is active with the correct playback mode"));
     }
     else TestSkip(TEXT("No preview clip is supplied for this profile; reference pose is expected"));
     VerifyPerformanceClips(Character, Profile, Component, Mesh);
+    // Reaction selection: a fast touch plays the strong clip, a slow one the mood clip, else the zone clip.
+    if (Profile->Capabilities.bReactionAnimations && (Profile->StrongReactionClip || !Profile->MoodReactionClips.IsEmpty()))
+    {
+        const FName Zone = Profile->ContactZones.IsEmpty() ? NAME_None : Profile->ContactZones[0].Name;
+        const float Fast = Profile->ContactSettings.StrongReactionSpeedCmPerSecond + 1.0f;
+        bool bSelected = !Profile->StrongReactionClip || Character->GetReactionAnimation(Zone, Fast, 0) == Profile->StrongReactionClip;
+        for (int32 Mood = 0; Mood < 3; ++Mood)
+            if (const auto* Clip = Profile->MoodReactionClips.Find(AGratiaPreviewCharacter::MoodName(Mood)))
+                bSelected &= Character->GetReactionAnimation(Zone, 0.0f, Mood) == Clip->Get();
+        bSelected &= Profile->MoodReactionClips.Contains(AGratiaPreviewCharacter::MoodName(0))
+            || Character->GetReactionAnimation(Zone, 0.0f, 0) == Character->GetReactionAnimationForZone(Zone);
+        TestCheck(bSelected, TEXT("Fast touches select the strong reaction, slow ones the mood clip or the zone clip"));
+    }
     TestCheck(Character->GetActorScale3D().Equals(FVector::OneVector, 0.001)
         && Component->GetComponentScale().Equals(FVector::OneVector, 0.001)
         && !Mesh->GetBounds().BoxExtent.ContainsNaN() && Mesh->GetBounds().BoxExtent.Z > 0.0,
@@ -321,28 +335,42 @@ void UGratiaRuntimeVerification::VerifyPerformanceClips(AGratiaPreviewCharacter*
         const bool bSet = Character->SetPerformance(Index);
         UAnimSingleNodeInstance* Instance = Component->GetSingleNodeInstance();
         const bool bStarted = bSet && Instance && Instance->GetAnimationAsset() == Entry.Clip && Instance->IsPlaying()
-            && Instance->IsLooping() == Entry.bLoop && Character->IsAnimatedPreview();
+            && Instance->IsLooping() == (Entry.bLoop && Entry.Segments.IsEmpty()) && Character->IsAnimatedPreview();
         const float Start = Instance ? Instance->GetCurrentTime() : 0.0f;
         Component->TickAnimation(0.25f, false);
         Component->RefreshBoneTransforms();
         const bool bAdvanced = Instance && Instance->GetCurrentTime() > Start + 0.2f;
         bPlayback &= bStarted && bAdvanced;
+        // A segmented take continues with its next part at the end of each part.
+        bool bChained = true;
+        for (int32 Part = 0; Part + 1 < Entry.NumParts() && Instance; ++Part)
+        {
+            Instance->SetPosition(Entry.GetPart(Part)->GetPlayLength(), false);
+            Component->TickAnimation(0.05f, false);
+            Character->UpdatePerformance();
+            bChained &= Instance->GetAnimationAsset() == Entry.GetPart(Part + 1) && Character->PerformancePart == Part + 1;
+        }
+        if (Entry.NumParts() > 1)
+            TestCheck(bChained, TEXT("A segmented performance continues part by part to its last segment"));
         // Face and corrective curves are sampled from the cooked clip by this model's own morph names.
         float Peak = 0.0f;
         FName PeakName;
-        if (Entry.Clip)
+        for (int32 Part = 0; Part < Entry.NumParts(); ++Part)
+            if (const UAnimSequence* Clip = Entry.GetPart(Part))
             for (const UMorphTarget* Morph : Mesh->GetMorphTargets())
                 for (const float Fraction : {0.1f, 0.4f, 0.7f})
                 {
-                    const float Value = Entry.Clip->EvaluateCurveData(Morph->GetFName(),
-                        FAnimExtractContext(static_cast<double>(Entry.Clip->GetPlayLength() * Fraction)), false);
+                    const float Value = Clip->EvaluateCurveData(Morph->GetFName(),
+                        FAnimExtractContext(static_cast<double>(Clip->GetPlayLength() * Fraction)), false);
                     bFinite &= FMath::IsFinite(Value);
                     if (FMath::IsFinite(Value) && FMath::Abs(Value) > Peak) { Peak = FMath::Abs(Value); PeakName = Morph->GetFName(); }
                 }
         Driven += Peak > 0.01f ? 1 : 0;
-        UE_LOG(LogGratiaVerification, Display, TEXT("PERFORMANCE CHECK: index=%d label=%s clip=%s length=%.2fs loop=%d started=%d advanced=%d morph_peak=%.3f curve=%s"),
-            Index, *Character->GetPreviewPoseLabel(), *GetPathNameSafe(Entry.Clip), Entry.Clip ? Entry.Clip->GetPlayLength() : 0.0f,
-            Entry.bLoop ? 1 : 0, bStarted ? 1 : 0, bAdvanced ? 1 : 0, Peak, *PeakName.ToString());
+        float Length = 0.0f;
+        for (int32 Part = 0; Part < Entry.NumParts(); ++Part) Length += Entry.GetPart(Part) ? Entry.GetPart(Part)->GetPlayLength() : 0.0f;
+        UE_LOG(LogGratiaVerification, Display, TEXT("PERFORMANCE CHECK: index=%d label=%s clip=%s parts=%d length=%.2fs loop=%d started=%d advanced=%d chained=%d morph_peak=%.3f curve=%s"),
+            Index, *Character->GetPreviewPoseLabel(), *GetPathNameSafe(Entry.Clip), Entry.NumParts(), Length,
+            Entry.bLoop ? 1 : 0, bStarted ? 1 : 0, bAdvanced ? 1 : 0, bChained ? 1 : 0, Peak, *PeakName.ToString());
     }
     TestCheck(bPlayback, TEXT("Every performance clip starts from the Pose cycle with its loop mode and advances"));
     TestCheck(bFinite, TEXT("Performance clip morph curves evaluate finite on this model's morph targets"));
@@ -635,14 +663,17 @@ void UGratiaRuntimeVerification::RunReactionResourceQA(float DeltaSeconds)
             TEXT("The requested resource fixture supports contacts, authored reaction clips and facial curves"));
         if (bTestFailed) { FinishReactionResourceQA(); return; }
         UAnimSequence* Expected = ReactionQAExpectedClip.IsEmpty() ? nullptr : LoadObject<UAnimSequence>(nullptr, *ReactionQAExpectedClip);
-        const TObjectPtr<UAnimSequence>* RoutedClip = Profile->ReactionClips.Find(FName(*ReactionQAZone));
-        TestCheck(Expected && RoutedClip && RoutedClip->Get() == Expected && Component->GetSkeletalMeshAsset()
+        // The requested mood selects the clip as in play (a slow touch: zone or mood routing).
+        Interaction->Mood = FMath::Clamp(ReactionQAMood, 0, 2);
+        const UAnimSequence* RoutedClip = Character->GetReactionAnimation(FName(*ReactionQAZone), 0.0f, Interaction->Mood);
+        TestCheck(Expected && RoutedClip == Expected && Component->GetSkeletalMeshAsset()
             && Expected->GetSkeleton() == Component->GetSkeletalMeshAsset()->GetSkeleton() && Expected->GetPlayLength() > 0.0f,
-            TEXT("The actual profile zone mapping references the exact expected cooked clip and compatible skeleton"));
+            TEXT("The actual profile zone/mood routing references the exact expected cooked clip and compatible skeleton"));
         if (bTestFailed) { FinishReactionResourceQA(); return; }
         ReactionQAClip = Expected;
         bReactionQARequireCorrective = !ReactionQACorrectivePrefix.IsEmpty();
         Interaction->ResetState();
+        Interaction->Mood = FMath::Clamp(ReactionQAMood, 0, 2);
         Interaction->bDemo = false;
         for (int32 Index = 0; Index < Interaction->Zones.Num(); ++Index)
             if (Interaction->Zones[Index].Name == FName(*ReactionQAZone)) { ReactionQAZoneIndex = Index; break; }

@@ -117,12 +117,20 @@ bool UGratiaCharacterProfile::ValidateProfile(TArray<FString>& Errors, TArray<FS
     for (const auto& Pair : ReactionClips)
         if (Pair.Key.IsNone() || !Pair.Value || Pair.Value->GetSkeleton() != Mesh->GetSkeleton())
             Errors.Add(FString::Printf(TEXT("Reaction routing %s requires a clip on this profile's skeleton."), *Pair.Key.ToString()));
+    if (StrongReactionClip && StrongReactionClip->GetSkeleton() != Mesh->GetSkeleton())
+        Errors.Add(TEXT("StrongReactionClip uses a different skeleton."));
+    for (const auto& Pair : MoodReactionClips)
+        if (Pair.Key.IsNone() || !Pair.Value || Pair.Value->GetSkeleton() != Mesh->GetSkeleton())
+            Errors.Add(FString::Printf(TEXT("Mood reaction %s requires a clip on this profile's skeleton."), *Pair.Key.ToString()));
     for (int32 Index = 0; Index < PerformanceClips.Num(); ++Index)
     {
-        const UAnimSequence* Clip = PerformanceClips[Index].Clip;
-        if (!Clip || Clip->GetSkeleton() != Mesh->GetSkeleton() || Clip->GetPlayLength() <= 0.0f)
-            Errors.Add(FString::Printf(TEXT("Performance clip %d (%s) requires a non-empty clip on this profile's skeleton."),
-                Index, *PerformanceClips[Index].Name.ToString()));
+        for (int32 Part = 0; Part < PerformanceClips[Index].NumParts(); ++Part)
+        {
+            const UAnimSequence* Clip = PerformanceClips[Index].GetPart(Part);
+            if (!Clip || Clip->GetSkeleton() != Mesh->GetSkeleton() || Clip->GetPlayLength() <= 0.0f)
+                Errors.Add(FString::Printf(TEXT("Performance clip %d (%s) part %d requires a non-empty clip on this profile's skeleton."),
+                    Index, *PerformanceClips[Index].Name.ToString(), Part));
+        }
     }
     auto ValidateReactionSound = [&Errors](const USoundBase* Sound, const FString& Label)
     {

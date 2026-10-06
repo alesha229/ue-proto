@@ -336,6 +336,7 @@ void UGratiaInteraction::React(int32 ZoneIndex)
     const FGratiaContactZone& Zone = Zones[ZoneIndex];
     LastReactionZoneName = Zone.Name;
     const float Speed = Zone.Hand != INDEX_NONE ? Hands[Zone.Hand].Speed : 0.0f;
+    LastReactionSpeed = FMath::IsFinite(Speed) ? Speed : 0.0f;
     Impulse = FMath::Clamp(Speed / FMath::Max(UE_SMALL_NUMBER, ContactSettings.ImpulseSpeedCmPerSecond), 0.15f, 1.0f);
     OnContactReaction.Broadcast(Zone.Name, Zone.Hand, Speed, Mood);
     UE_LOG(LogGratiaContact, Display, TEXT("CONTACT REACTION: zone=%s hand=%d source=%s speed=%.2f mood=%d impulse=%.2f"),
@@ -345,7 +346,7 @@ void UGratiaInteraction::React(int32 ZoneIndex)
 void UGratiaInteraction::ResetState()
 {
     RebuildProfileZones();
-    LastReactionZoneName = NAME_None; LastResponseTime = -100.0;
+    LastReactionZoneName = NAME_None; LastReactionSpeed = 0.0f; LastResponseTime = -100.0;
     bDemo = false;
 }
 

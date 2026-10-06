@@ -75,6 +75,12 @@ public:
     EGratiaPreviewPose PreviewPose = EGratiaPreviewPose::Idle;
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Gratia|Preview")
     int32 PerformanceIndex = 0;
+    /** Current part (0 = Clip, then Segments) of a segmented performance. */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Gratia|Preview")
+    int32 PerformancePart = 0;
+
+    /** Continues a segmented performance with its next part when the current one ends. */
+    void UpdatePerformance();
 
     UFUNCTION(BlueprintCallable, Category = "Gratia|Preview")
     void SetPreviewPose(EGratiaPreviewPose Pose);
@@ -97,6 +103,9 @@ public:
     UAnimSequence* GetPreviewAnimation(EGratiaPreviewPose Pose) const;
     UAnimSequence* GetReactionAnimation(bool bBright) const { return bBright ? BrightReaction.Get() : SoftReaction.Get(); }
     UAnimSequence* GetReactionAnimationForZone(FName ZoneName) const;
+    /** Fast touch -> StrongReactionClip; else the current mood's clip; else zone routing. */
+    UAnimSequence* GetReactionAnimation(FName ZoneName, float HandSpeed, int32 Mood) const;
+    static FName MoodName(int32 Mood);
     bool IsIdlePreview() const { return PreviewPose == EGratiaPreviewPose::Idle; }
     /** Continuously playing body animation (idle or a performance), as opposed to a held diagnostic pose. */
     bool IsAnimatedPreview() const { return PreviewPose == EGratiaPreviewPose::Idle || PreviewPose == EGratiaPreviewPose::Performance; }

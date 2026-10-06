@@ -8,9 +8,9 @@ if (-not (Test-Path -LiteralPath $taskCopy)) {
 }
 $taskBridge = Get-NetTCPConnection -State Listen -LocalPort 9876 -ErrorAction SilentlyContinue
 if (-not $taskBridge) {
-    $taskArgs = '--background "' + $taskCopy.Replace('\','/') + '" --online-mode --disable-autoexec --command blender_mcp --host 127.0.0.1 --port 9876'
+    $taskArgs = '--background "' + $taskCopy.Replace('\','/') + '" --online-mode --disable-autoexec --addons bl_ext.user_default.mcp --command blender_mcp --host 127.0.0.1 --port 9876'
     Start-Process -FilePath 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' -ArgumentList $taskArgs -WorkingDirectory $taskWorkspace -WindowStyle Hidden -RedirectStandardOutput (Join-Path $taskEvidence 'bridge.log') -RedirectStandardError (Join-Path $taskEvidence 'bridge_stderr.log') | Out-Null
-    $taskDeadline = (Get-Date).AddSeconds(30)
+    $taskDeadline = (Get-Date).AddSeconds(120)
     do {
         Start-Sleep -Milliseconds 500
         $taskBridge = Get-NetTCPConnection -State Listen -LocalPort 9876 -ErrorAction SilentlyContinue
@@ -19,6 +19,14 @@ if (-not $taskBridge) {
 }
 $taskServer = Get-NetTCPConnection -State Listen -LocalPort 8100 -ErrorAction SilentlyContinue
 if (-not $taskServer) {
+    # An already installed server (uv tool cache) starts without network access.
+    $taskCached = Get-ChildItem -Path (Join-Path $env:TEMP 'claude\uvcache-mcp\archive-v0') -Filter 'blender-mcp.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($taskCached) {
+        Start-Process -FilePath $taskCached.FullName -ArgumentList '--transport http --host 127.0.0.1 --port 8100' -WorkingDirectory $taskWorkspace -WindowStyle Hidden -RedirectStandardOutput (Join-Path $taskEvidence 'server.log') -RedirectStandardError (Join-Path $taskEvidence 'server_stderr.log') | Out-Null
+        Write-Output 'Blender Lab MCP uses Gratia_mvp.blend: http://127.0.0.1:8100/ (bridge 127.0.0.1:9876).'
+        return
+    }
+    $env:UV_LINK_MODE = 'copy'
     $taskUv = (Get-Command uv.exe -ErrorAction Stop).Source
     $taskPackage = Join-Path $taskWorkspace 'evidence\00\blender_mcp\blender_mcp_src\mcp'
     if (-not (Test-Path -LiteralPath $taskPackage)) {

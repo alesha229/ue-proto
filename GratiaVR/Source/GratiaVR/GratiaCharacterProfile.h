@@ -294,8 +294,15 @@ struct GRATIAVR_API FGratiaPerformanceClip
     FName Name;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance")
     TObjectPtr<UAnimSequence> Clip;
+    /** A long take split for import: played after Clip in order, as one performance. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance")
+    TArray<TObjectPtr<UAnimSequence>> Segments;
+    /** Loop the whole performance (all segments); otherwise hold the last frame. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance")
     bool bLoop = true;
+
+    int32 NumParts() const { return 1 + Segments.Num(); }
+    UAnimSequence* GetPart(int32 Index) const { return Index == 0 ? Clip.Get() : Segments.IsValidIndex(Index - 1) ? Segments[Index - 1].Get() : nullptr; }
 };
 
 /** Capsule fitted to the visible skin/clothing around one bone (reference pose, bone space). */
@@ -498,6 +505,12 @@ public:
     /** Contact zone name -> authored response. Default is optional restrained fallback. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animations")
     TMap<FName, TObjectPtr<UAnimSequence>> ReactionClips;
+    /** A fast touch (above ContactSettings.StrongReactionSpeedCmPerSecond) plays this instead of the zone clip. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animations")
+    TObjectPtr<UAnimSequence> StrongReactionClip;
+    /** Mood name (Calm, Cheerful, Reserved) -> reaction played for every zone in that mood; missing moods use zone routing. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animations")
+    TMap<FName, TObjectPtr<UAnimSequence>> MoodReactionClips;
     /** Selectable after Idle/Arms/Head in the Pose menu item; their own face curves replace the procedural blink. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animations")
     TArray<FGratiaPerformanceClip> PerformanceClips;

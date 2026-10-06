@@ -164,6 +164,22 @@ UAnimSequence* AGratiaPreviewCharacter::GetExpectedAnimation() const
     return GetPreviewAnimation(PreviewPose);
 }
 
+FName AGratiaPreviewCharacter::MoodName(int32 Mood)
+{
+    return Mood == 1 ? FName(TEXT("Cheerful")) : Mood == 2 ? FName(TEXT("Reserved")) : FName(TEXT("Calm"));
+}
+
+UAnimSequence* AGratiaPreviewCharacter::GetReactionAnimation(FName ZoneName, float HandSpeed, int32 Mood) const
+{
+    if (!CharacterProfile || !CharacterProfile->Capabilities.bReactionAnimations) return nullptr;
+    if (CharacterProfile->StrongReactionClip && FMath::IsFinite(HandSpeed)
+        && HandSpeed > CharacterProfile->ContactSettings.StrongReactionSpeedCmPerSecond)
+        return CharacterProfile->StrongReactionClip;
+    if (const auto* Clip = CharacterProfile->MoodReactionClips.Find(MoodName(Mood)))
+        if (Clip->Get()) return Clip->Get();
+    return GetReactionAnimationForZone(ZoneName);
+}
+
 UAnimSequence* AGratiaPreviewCharacter::GetReactionAnimationForZone(FName ZoneName) const
 {
     if (!CharacterProfile || !CharacterProfile->Capabilities.bReactionAnimations) return nullptr;
@@ -186,7 +202,8 @@ UAnimSequence* AGratiaPreviewCharacter::GetPreviewAnimation(EGratiaPreviewPose P
     case EGratiaPreviewPose::Arms: return ArmsAnimation ? ArmsAnimation.Get() : IdleAnimation.Get();
     case EGratiaPreviewPose::Head: return HeadAnimation ? HeadAnimation.Get() : IdleAnimation.Get();
     case EGratiaPreviewPose::Performance:
-        if (const FGratiaPerformanceClip* Performance = GetPerformance()) return Performance->Clip.Get();
+        if (const FGratiaPerformanceClip* Performance = GetPerformance())
+            if (UAnimSequence* Part = Performance->GetPart(PerformancePart)) return Part;
         return IdleAnimation.Get();
     default: return IdleAnimation.Get();
     }
@@ -200,7 +217,10 @@ FString AGratiaPreviewCharacter::GetPreviewPoseLabel() const
     case EGratiaPreviewPose::Head: return TEXT("Head");
     case EGratiaPreviewPose::Performance:
         if (const FGratiaPerformanceClip* Performance = GetPerformance())
-            return Performance->Name.IsNone() ? Performance->Clip->GetName() : Performance->Name.ToString();
+        {
+            const FString Name = Performance->Name.IsNone() ? Performance->Clip->GetName() : Performance->Name.ToString();
+            return Performance->Segments.IsEmpty() ? Name : FString::Printf(TEXT("%s %d/%d"), *Name, PerformancePart + 1, Performance->NumParts());
+        }
         return TEXT("Performance (missing)");
     default: return TEXT("Idle");
     }
@@ -214,8 +234,34 @@ bool AGratiaPreviewCharacter::SetPerformance(int32 Index)
         return false;
     }
     PerformanceIndex = Index;
+    PerformancePart = 0;
     SetPreviewPose(EGratiaPreviewPose::Performance);
     return true;
+}
+
+void AGratiaPreviewCharacter::UpdatePerformance()
+{
+    const FGratiaPerformanceClip* Performance = PreviewPose == EGratiaPreviewPose::Performance ? GetPerformance() : nullptr;
+    UAnimSingleNodeInstance* Instance = CharacterMesh ? CharacterMesh->GetSingleNodeInstance() : nullptr;
+    if (!Performance || Performance->Segments.IsEmpty() || !Instance || !Instance->GetAnimationAsset()) return;
+    const UAnimSequence* Current = Performance->GetPart(PerformancePart);
+    if (Instance->GetAnimationAsset() != Current) return;
+    if (Instance->IsPlaying() && Instance->GetCurrentTime() < Current->GetPlayLength() - 1.0e-3f) return;
+    // Next part; parts share their boundary frame, so the pose continues without a jump.
+    int32 Next = PerformancePart + 1;
+    if (Next >= Performance->NumParts())
+    {
+        if (!Performance->bLoop) return;
+        Next = 0;
+    }
+    UAnimSequence* Part = Performance->GetPart(Next);
+    if (!Part) return;
+    PerformancePart = Next;
+    Instance->SetAnimationAsset(Part, false, 1.0f);
+    Instance->SetPlaying(true);
+    Instance->SetPosition(0.0f, false);
+    UE_LOG(LogGratiaPreview, Display, TEXT("Performance %s part %d/%d %s"), *GetPreviewPoseLabel(), PerformancePart + 1,
+        Performance->NumParts(), *Part->GetName());
 }
 
 void AGratiaPreviewCharacter::SetPreviewPose(EGratiaPreviewPose Pose)
@@ -246,7 +292,8 @@ void AGratiaPreviewCharacter::SetPreviewPose(EGratiaPreviewPose Pose)
 
     const bool bPlaying = IsAnimatedPreview();
     const FGratiaPerformanceClip* Performance = Pose == EGratiaPreviewPose::Performance ? GetPerformance() : nullptr;
-    const bool bLoop = IsIdlePreview() || (Performance && Performance->bLoop);
+    // A segmented performance loops as a whole; each part plays once.
+    const bool bLoop = IsIdlePreview() || (Performance && Performance->bLoop && Performance->Segments.IsEmpty());
     // The diagnostic clips hold their largest pose at the midpoint, avoiding screenshot timing races.
     const float Position = bPlaying ? 0.0f : Animation->GetPlayLength() * 0.5f;
     CharacterMesh->SetAnimInstanceClass(CharacterProfile->AnimationClass ? CharacterProfile->AnimationClass.Get() : UGratiaAnimInstance::StaticClass());
@@ -300,6 +347,7 @@ void AGratiaPreviewCharacter::Tick(float DeltaSeconds)
         if (Controller->WasInputKeyJustPressed(EKeys::F3)) ResetToIdle();
     }
     if (IsIdlePreview()) UpdateBlink(DeltaSeconds);
+    UpdatePerformance();
 }
 
 void AGratiaPreviewCharacter::UpdateBlink(float DeltaSeconds)

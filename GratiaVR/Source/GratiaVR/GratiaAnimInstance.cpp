@@ -414,7 +414,7 @@ void UGratiaAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
     if (Profile->Capabilities.bReactionAnimations && bProcedural && Interaction->ReactionSerial != 0 && Interaction->ReactionSerial != LastReactionSerial)
     {
         LastReactionSerial = Interaction->ReactionSerial;
-        ReactionClip = Character->GetReactionAnimationForZone(Interaction->LastReactionZoneName);
+        ReactionClip = Character->GetReactionAnimation(Interaction->LastReactionZoneName, Interaction->LastReactionSpeed, Interaction->Mood);
         ReactionClipDuration = ReactionClip ? ReactionClip->GetPlayLength() : 0.0f;
         ReactionTime = 0.0f;
     }

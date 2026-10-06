@@ -34,14 +34,18 @@ from mathutils import Euler, Matrix, Quaternion, Vector
 
 ROOT = Path("E:/coding/ue proto")
 OUT = ROOT / "Exports/Gratia/GameRig"
-EVIDENCE = ROOT / "evidence/05/kitty_mocap_v3"
+# LONG = True: the whole take (566.9 s) in 60 s segments with one shared corrective basis.
+LONG = globals().get("LONG", False)
+EVIDENCE = ROOT / ("evidence/05/kitty_mocap_full" if LONG else "evidence/05/kitty_mocap_v3")
 EVIDENCE.mkdir(parents=True, exist_ok=True)
-SAMPLES = ROOT / "evidence/05/kitty_mocap/trial10s_samples.json"
+SAMPLES = ROOT / ("evidence/05/kitty_mocap/trial566.9s_samples.json" if LONG else "evidence/05/kitty_mocap/trial10s_samples.json")
 PHASE = globals().get("PHASE", "preview")
 PREVIEW_TIMES = globals().get("PREVIEW_TIMES", [0.0, 2.5, 5.0, 7.5, 10.0])
-CLIP = "KM466"
+CLIP = "KM466Full" if LONG else "KM466"
+STEM = CLIP.lower()
 FPS = 30
-DURATION = 10.0
+DURATION = 566.9 if LONG else 10.0
+SEGMENT_FRAMES = 1800
 SCALE = 0.955 / 0.932
 assert Path(bpy.data.filepath).resolve() == (ROOT / "Exports/Gratia/Gratia_mvp.blend").resolve()
 for filename, expected in [
@@ -59,9 +63,11 @@ scene = bpy.context.scene
 assert source.matrix_world == Matrix.Identity(4), "source rig must sit at the origin"
 manifest = json.loads((OUT / "game_rig_manifest.json").read_text(encoding="utf-8"))
 pairs = [(bpy.data.objects[item["source"]], bpy.data.objects[item["candidate"]]) for item in manifest["meshes"]]
-report_path = EVIDENCE / "km466_validation.json"
+report_path = EVIDENCE / ("%s_validation.json" % STEM)
 data = json.loads(SAMPLES.read_text(encoding="utf-8"))
-assert data["sample_rate_hz"] == 60 and data["frame_count"] == 601
+RATE = data["sample_rate_hz"]
+COUNT = data["frame_count"]
+assert COUNT == int(round(data["duration_seconds"] * RATE)) + 1 and abs(data["duration_seconds"] - DURATION) < 1e-6
 frames = data["frames"]
 PB = source.pose.bones
 
@@ -110,7 +116,7 @@ def aligned(index):
 
 
 def sample_at(t):
-    index = min(600, max(0, int(round(t * 60))))
+    index = min(COUNT - 1, max(0, int(round(t * RATE))))
     return index, aligned(index)
 
 
@@ -124,8 +130,9 @@ for side, prefix in (("L", "l"), ("R", "r")):
         d = (Vector(c[prefix + "HandControl"]["position_xyz"]) - Vector(c[prefix + "ElbowControl"]["position_xyz"])).length
         error = abs(d - ELBOW_LENGTH[side])
         weights.append(1.0 - min(1.0, max(0.0, (error - 0.015) / 0.015)))
-    kernel = np.ones(31) / 31
-    padded = np.pad(np.array(weights), 15, mode="edge")
+    width = int(0.5 * RATE) | 1
+    kernel = np.ones(width) / width
+    padded = np.pad(np.array(weights), width // 2, mode="edge")
     elbow_weight[side] = np.convolve(padded, kernel, mode="valid").tolist()
 
 # ---------------------------------------------------------------- Gratia rest calibration
@@ -236,6 +243,13 @@ def hinge(upper_dir, lower_dir, fallback, sign):
     return (cross.normalized() * weight + fallback.normalized() * (1.0 - weight)).normalized()
 
 
+# Bend-plane continuity per limb: when the arm is nearly straight the pole crosses the
+# shoulder-wrist line and the elbow would jump to the other side in one frame; the plane
+# turns at most 12 degrees per frame instead (a short swing, not a pop).
+BEND_PLANE = {}
+MAX_PLANE_STEP = math.radians(12.0)
+
+
 def solve_two_bone(upper, lower, start, target, pole, side_key):
     length_a, length_b = PB[upper].bone.length, PB[lower].bone.length
     relative = target - start
@@ -247,16 +261,26 @@ def solve_two_bone(upper, lower, start, target, pole, side_key):
         plane = REST[upper].col[2].copy()
         plane = plane - forward * plane.dot(forward)
     plane.normalize()
+    previous = BEND_PLANE.get(side_key)
+    if previous is not None:
+        previous = previous - forward * previous.dot(forward)
+        if previous.length > 1e-6:
+            previous.normalize()
+            angle = previous.angle(plane, 0.0)
+            if angle > MAX_PLANE_STEP:
+                plane = (Quaternion(forward, MAX_PLANE_STEP if previous.cross(plane).dot(forward) >= 0 else -MAX_PLANE_STEP) @ previous).normalized()
+    BEND_PLANE[side_key] = plane.copy()
     along = (length_a * length_a - length_b * length_b + distance * distance) / (2 * distance)
     middle = start + forward * along + plane * math.sqrt(max(0.0, length_a * length_a - along * along))
     end = start + forward * distance
     return middle, end, max(0.0, relative.length - (length_a + length_b))
 
 
-def pose_chain(upper, lower, start, middle, end, sign):
+def pose_chain(upper, lower, start, middle, end, sign, fallback=None):
     upper_dir = (middle - start).normalized()
     lower_dir = (end - middle).normalized()
-    fallback = PB[upper].matrix.to_3x3().col[0].copy()
+    if fallback is None:
+        fallback = PB[upper].matrix.to_3x3().col[0].copy()
     axis = hinge(upper_dir, lower_dir, fallback, sign)
     set_world(upper, frame_from(axis, upper_dir), start)
     set_world(lower, frame_from(axis, lower_dir), PB[lower].matrix.translation.copy())
@@ -308,7 +332,11 @@ def pose_at(t, lift):
         w = elbow_weight[side][index]
         pole = elbow * w + natural * (1.0 - w)
         middle, end, short = solve_two_bone(upper, lower, shoulder, wrist, pole, side)
-        pose_chain(upper, lower, shoulder, middle, end, HINGE[(upper, lower)])
+        # Nearly straight, the elbow hinge tends to plane x forward (the limit of upper x lower):
+        # a continuous fallback, so the upper arm never twists when the elbow straightens.
+        forward = (wrist - shoulder).normalized()
+        plane_hinge = BEND_PLANE[side].cross(forward) * HINGE[(upper, lower)]
+        pose_chain(upper, lower, shoulder, middle, end, HINGE[(upper, lower)], plane_hinge)
         set_world("hand_fk." + side, rotation[prefix + "HandControl"] @ HAND_T[side])
         solves["arm." + side] = {"unreachable_m": short, "elbow_weight": w}
         # Leg: aim along the source segments; the knee hinge lies in the bend plane.
@@ -451,7 +479,7 @@ def render_views(prefix, views, xray=False):
 # ---------------------------------------------------------------- authoring
 END = int(round(DURATION * FPS)) + 1
 PREFIX = CLIP + "_"
-LIFT_PATH = EVIDENCE / "km466_floor.json"
+LIFT_PATH = EVIDENCE / ("%s_floor.json" % STEM)
 SOURCE_KEYS = (["torso", "hips", "chest", "neck", "head"]
                + [n + "." + s for s in ("L", "R") for n in ("upper_arm_fk", "forearm_fk", "hand_fk", "thigh_fk", "shin_fk",
                                                            "foot_fk", "toe_fk", "shoulder")]
@@ -512,11 +540,11 @@ def create_actions():
         action = bpy.data.actions.new(PREFIX + "Shapes_" + obj.name)
         action.use_fake_user = True
         names["shapes"][obj.name] = action.name
-    (EVIDENCE / "km466_actions.json").write_text(json.dumps(names, indent=2), encoding="utf-8")
+    (EVIDENCE / ("%s_actions.json" % STEM)).write_text(json.dumps(names, indent=2), encoding="utf-8")
 
 
 def action_names():
-    return json.loads((EVIDENCE / "km466_actions.json").read_text(encoding="utf-8"))
+    return json.loads((EVIDENCE / ("%s_actions.json" % STEM)).read_text(encoding="utf-8"))
 
 
 def assign(names):
@@ -591,6 +619,46 @@ def positions(obj, depsgraph):
     return coords.reshape((-1, 3)).astype(np.float64) @ world[:3, :3].T + world[:3, 3]
 
 
+def validate_range(names, start, stop):
+    """validate() over [start, stop] for one long-take segment (actions already assigned)."""
+    assign(names)
+    global END_VALIDATE
+    END_VALIDATE = (start, stop)
+    try:
+        return validate(names)
+    finally:
+        END_VALIDATE = None
+
+
+END_VALIDATE = None
+
+
+def export_range(names, start, stop, filename):
+    assign(names)
+    scene.render.fps, scene.render.fps_base = FPS, 1
+    scene.frame_start, scene.frame_end = start, stop
+    frame_set(start)
+    selected = [game] + [candidate for _, candidate in pairs]
+    for obj in scene.objects:
+        obj.select_set(False)
+    for obj in selected:
+        obj.select_set(True)
+    bpy.context.view_layer.objects.active = game
+    path = OUT / filename
+    with bpy.context.temp_override(active_object=game, object=game, selected_objects=selected, selected_editable_objects=selected):
+        assert "FINISHED" in bpy.ops.export_scene.fbx(
+            filepath=str(path), use_selection=True, object_types={"MESH", "ARMATURE"}, global_scale=1,
+            apply_unit_scale=True, apply_scale_options="FBX_SCALE_UNITS", axis_forward="-Y", axis_up="Z",
+            use_mesh_modifiers=False, mesh_smooth_type="FACE", add_leaf_bones=False,
+            use_armature_deform_only=True, armature_nodetype="NULL", path_mode="AUTO", embed_textures=False,
+            bake_anim=True, bake_anim_use_all_bones=True, bake_anim_use_nla_strips=False,
+            bake_anim_use_all_actions=False, bake_anim_force_startend_keying=True,
+            bake_anim_step=1, bake_anim_simplify_factor=0)
+    with path.open("rb") as stream:
+        return {"exported": True, "fbx": str(path), "bytes": path.stat().st_size, "sha256": hashlib.file_digest(stream, "sha256").hexdigest(),
+                "frames": [start, stop]}
+
+
 def validate(names):
     """Whole and half frames: game rig + LBS candidates against the source evaluated meshes.
 
@@ -603,7 +671,8 @@ def validate(names):
     worst_frames = {original.name: None for original, _ in pairs}
     worst_bones, max_angle, samples = {}, 0.0, 0
     contact = {"source_min_z": math.inf, "game_min_z": math.inf}
-    for frame in np.arange(1, END + 0.1, 0.5):
+    first, last_frame = END_VALIDATE or (1, END)
+    for frame in np.arange(first, last_frame + 0.1, 0.5):
         depsgraph = frame_set(float(frame))
         eval_source = source.evaluated_get(depsgraph)
         eval_game = game.evaluated_get(depsgraph)
@@ -633,6 +702,7 @@ def validate(names):
     worst = max(max_errors.values())
     return {
         "clip": CLIP, "duration_seconds": DURATION, "fps": FPS, "frames": END, "samples": samples,
+        "validated_frames": [first, last_frame],
         "source_action": names["source"], "game_action": names["game"], "shape_actions": names["shapes"],
         "max_vertex_error_metres": max_errors, "max_between_keys_vertex_error_metres": between_errors,
         "worst_vertex_frames": worst_frames, "max_bone_angle_error_degrees": max_angle,
@@ -642,6 +712,141 @@ def validate(names):
         "passed": worst <= tolerance["vertex_m"] and max(between_errors.values()) <= tolerance["between_keys_vertex_m"]
                   and max_angle <= tolerance["angle_deg"],
         "exported": False}
+
+
+# ---------------------------------------------------------------- long take
+CHUNKS = EVIDENCE / "chunks"
+BASIS_PATH = EVIDENCE / ("%s_basis.npz" % STEM)
+TOP_GAME_BONES = [bone.name for bone in ordered if bone.parent is None]
+
+
+def source_values():
+    """Keyed source control channels: torso location and every control rotation (quaternion or Euler)."""
+    rotations = []
+    for name in SOURCE_KEYS:
+        bone = PB[name]
+        if bone.rotation_mode == "QUATERNION":
+            rotations.append(list(bone.rotation_quaternion))
+        else:
+            rotations.append(list(bone.rotation_euler) + [0.0])
+    return list(PB["torso"].location), rotations
+
+
+def game_values(depsgraph, last):
+    evaluated = source.evaluated_get(depsgraph)
+    transform = game.matrix_world.inverted() @ source.matrix_world
+    targets = {bone.name: transform @ evaluated.pose.bones[bone.name].matrix.copy() for bone in ordered}
+    rows = []
+    for bone in ordered:
+        kwargs = {"parent_matrix": targets[bone.parent.name], "parent_matrix_local": bone.parent.bone.matrix_local} if bone.parent else {}
+        basis = bone.bone.convert_local_to_pose(targets[bone.name], bone.bone.matrix_local, invert=True, **kwargs)
+        position, rotation, scale = basis.decompose()
+        if bone.name in last and rotation.dot(last[bone.name]) < 0:
+            rotation.negate()
+        last[bone.name] = rotation.copy()
+        rows.append(list(position) + list(rotation) + list(scale))
+    return rows
+
+
+def segments():
+    """Inclusive frame ranges; consecutive segments share their boundary frame (continuous playback)."""
+    out, start = [], 1
+    while start < END:
+        stop = min(END, start + SEGMENT_FRAMES)
+        out.append((start, stop))
+        start = stop
+    return out
+
+
+def load_collected():
+    frames, src_loc, src_rot, game_rows, low_frames, low_values = [], [], [], [], [], []
+    for path in sorted(CHUNKS.glob("collect_*.npz")):
+        data_chunk = np.load(path)
+        frames.append(data_chunk["frames"]); src_loc.append(data_chunk["src_loc"]); src_rot.append(data_chunk["src_rot"])
+        game_rows.append(data_chunk["game"]); low_frames.append(data_chunk["low_frames"]); low_values.append(data_chunk["low_values"])
+    frames = np.concatenate(frames)
+    order = np.argsort(frames)
+    assert np.array_equal(frames[order], np.arange(1, END + 1)), "collect is incomplete or overlapping"
+    lf = np.concatenate(low_frames); lv = np.concatenate(low_values)
+    lo = np.argsort(lf)
+    return (np.concatenate(src_loc)[order], np.concatenate(src_rot)[order], np.concatenate(game_rows)[order], lf[lo], lv[lo])
+
+
+def lift_curve(low_frames, low_values):
+    """Per-frame floor offset: the lowest body point touches the floor, lightly smoothed (0.3 s)."""
+    lows = np.interp(np.arange(1, END + 1), low_frames, low_values)
+    width = 9
+    padded = np.pad(lows, width // 2, mode="edge")
+    smooth = np.convolve(padded, np.ones(width) / width, mode="valid")
+    return -smooth
+
+
+def apply_frame(src_loc, src_rot, game_row, lift):
+    """Set one collected frame directly on both rigs (no actions)."""
+    PB["torso"].location = Vector(src_loc) + Vector((0.0, 0.0, lift))
+    for name, value in zip(SOURCE_KEYS, src_rot):
+        bone = PB[name]
+        if bone.rotation_mode == "QUATERNION":
+            bone.rotation_quaternion = Quaternion(value)
+        else:
+            bone.rotation_euler = Euler(value[:3], bone.rotation_mode)
+    for bone, row in zip(ordered, game_row):
+        location = Vector(row[0:3])
+        if bone.name in TOP_GAME_BONES:
+            location = location + bone.bone.matrix_local.to_3x3().inverted() @ Vector((0.0, 0.0, lift))
+        bone.location, bone.rotation_quaternion, bone.scale = location, Quaternion(row[3:7]), Vector(row[7:10])
+    bpy.context.view_layer.update()
+    return bpy.context.evaluated_depsgraph_get()
+
+
+def bulk_curve(target, action, data_path, index, frames, values, group):
+    curve = action.fcurve_ensure_for_datablock(target, data_path, index=index, group_name=group)
+    curve.keyframe_points.clear()
+    curve.keyframe_points.add(len(frames))
+    co = np.empty(len(frames) * 2, dtype=np.float32)
+    co[0::2] = frames
+    co[1::2] = values
+    curve.keyframe_points.foreach_set("co", co)
+    curve.keyframe_points.foreach_set("interpolation", np.ones(len(frames), dtype=np.int32))
+    curve.update()
+
+
+def continuous(quaternions):
+    """Flip quaternion signs so consecutive keys stay on one hemisphere (axis 0 = time)."""
+    q = quaternions.copy()
+    for i in range(1, len(q)):
+        if np.dot(q[i], q[i - 1]) < 0:
+            q[i] = -q[i]
+    return q
+
+
+def rest_delta_factory():
+    weighted = {}
+    for _, candidate in pairs:
+        groups = {g.index: g.name for g in candidate.vertex_groups}
+        vi, bone_names, ws = [], [], []
+        for vertex in candidate.data.vertices:
+            for element in vertex.groups:
+                name = groups[element.group]
+                if name in game.data.bones and element.weight > 1e-8:
+                    vi.append(vertex.index); bone_names.append(name); ws.append(element.weight)
+        weighted[candidate.name] = (np.array(vi), bone_names, np.array(ws))
+    to_armature = np.array(game.matrix_world.inverted(), dtype=np.float64)[:3, :3]
+
+    def rest_delta(candidate, difference_world, depsgraph, idx):
+        rig = game.evaluated_get(depsgraph)
+        vi, bone_names, ws = weighted[candidate.name]
+        count = len(candidate.data.vertices)
+        skin = {n: np.array(rig.pose.bones[n].matrix @ game.data.bones[n].matrix_local.inverted(), dtype=np.float64)[:3, :3]
+                for n in set(bone_names)}
+        matrices = np.zeros((count, 3, 3)); total = np.zeros(count)
+        np.add.at(matrices, vi, np.array([skin[n] for n in bone_names]) * ws[:, None, None])
+        np.add.at(total, vi, ws)
+        mask = total > 1e-8
+        matrices[mask] /= total[mask, None, None]
+        matrices[~mask] = np.eye(3)
+        return np.linalg.solve(matrices[idx], (difference_world[idx] @ to_armature.T)[..., None])[..., 0]
+    return rest_delta
 
 
 VIEWS = [("front", (0, -3.0, 0.75), (85, 0, 0), 45), ("side", (3.0, 0.0, 0.75), (85, 0, 90), 45),
@@ -891,6 +1096,308 @@ try:
                   "between_mm": max(report["max_between_keys_vertex_error_metres"].values()) * 1000,
                   "angle_deg": report["max_bone_angle_error_degrees"],
                   "per_mesh_mm": {k: round(v * 1000, 2) for k, v in report["max_vertex_error_metres"].items()}}
+    elif PHASE == "collect":
+        assert LONG
+        CHUNKS.mkdir(parents=True, exist_ok=True)
+        start, stop = RANGE
+        measured = body_meshes()
+        hidden = hide_meshes()
+        frames_out, src_loc, src_rot, game_rows, low_frames, low_values = [], [], [], [], [], []
+        last = {}
+        try:
+            for frame in range(start, stop + 1):
+                pose_at((frame - 1) / FPS, 0.0)
+                loc, rot = source_values()
+                depsgraph = bpy.context.evaluated_depsgraph_get()
+                frames_out.append(frame); src_loc.append(loc); src_rot.append(rot); game_rows.append(game_values(depsgraph, last))
+                if frame % 3 == 1 or frame == END:
+                    for obj in measured:
+                        obj.hide_viewport = False
+                    low_frames.append(frame); low_values.append(lowest_point(bpy.context.evaluated_depsgraph_get()))
+                    for obj in measured:
+                        obj.hide_viewport = True
+        finally:
+            for obj in hidden:
+                obj.hide_viewport = False
+        np.savez(CHUNKS / ("collect_%05d.npz" % start), frames=np.array(frames_out), src_loc=np.array(src_loc, dtype=np.float32),
+                 src_rot=np.array(src_rot, dtype=np.float32), game=np.array(game_rows, dtype=np.float32),
+                 low_frames=np.array(low_frames), low_values=np.array(low_values, dtype=np.float64))
+        result = {"phase": PHASE, "range": [start, stop], "lowest_m": float(min(low_values))}
+    elif PHASE in ("basis_mask", "basis_rows"):
+        # Corrective basis inputs in parts (each call under the bridge timeout):
+        # mask = vertices that ever differ > 0.3 mm (every 16th frame), rows = rest-space deltas (every 8th).
+        assert LONG
+        first, last_frame = RANGE
+        src_loc, src_rot, game_rows, low_frames, low_values = load_collected()
+        lift_path = EVIDENCE / ("%s_lift.npy" % STEM)
+        if PHASE == "basis_mask" and first == 1:
+            lift = lift_curve(low_frames, low_values)
+            np.save(lift_path, lift)
+            LIFT_PATH.write_text(json.dumps({"lift_min_m": float(lift.min()), "lift_max_m": float(lift.max()),
+                                             "calibration": calibration}, indent=2), encoding="utf-8")
+        lift = np.load(lift_path)
+        reset_pose()
+        corrective_prefix = "Game_" + CLIP + "_"
+        for obj in shape_objects():
+            if obj.data.shape_keys.animation_data:
+                obj.data.shape_keys.animation_data.action = None
+            for key in obj.data.shape_keys.key_blocks[1:]:
+                key.value = 1.0 if key.name == "Game_NeutralCorrective" else 0.0
+        if source.animation_data:
+            source.animation_data.action = None
+        if game.animation_data:
+            game.animation_data.action = None
+        originals = {c.name: o for o, c in pairs}
+        parts_dir = EVIDENCE / "basis_parts"
+        parts_dir.mkdir(exist_ok=True)
+        if PHASE == "basis_mask":
+            active = {c.name: np.zeros(len(c.data.vertices), dtype=bool) for _, c in pairs}
+            for frame in range(first, last_frame + 1):
+                if (frame - 1) % 16:
+                    continue
+                i = frame - 1
+                depsgraph = apply_frame(src_loc[i], src_rot[i], game_rows[i], float(lift[i]))
+                for original, candidate in pairs:
+                    active[candidate.name] |= np.linalg.norm(positions(original, depsgraph) - positions(candidate, depsgraph), axis=1) > 0.0003
+            np.savez(parts_dir / ("mask_%05d.npz" % first), **{name: value for name, value in active.items()})
+            result = {"phase": PHASE, "range": [first, last_frame]}
+        else:
+            masks = [np.load(p) for p in sorted(parts_dir.glob("mask_*.npz"))]
+            layout = []
+            for _, candidate in pairs:
+                merged = np.zeros(len(candidate.data.vertices), dtype=bool)
+                for m in masks:
+                    merged |= m[candidate.name]
+                if merged.any():
+                    layout.append((candidate, np.nonzero(merged)[0]))
+            rest_delta = rest_delta_factory()
+            rows_out, frames_out = [], []
+            for frame in range(first, last_frame + 1):
+                if (frame - 1) % 8:
+                    continue
+                i = frame - 1
+                depsgraph = apply_frame(src_loc[i], src_rot[i], game_rows[i], float(lift[i]))
+                parts = []
+                for candidate, idx in layout:
+                    difference = positions(originals[candidate.name], depsgraph) - positions(candidate, depsgraph)
+                    parts.append(rest_delta(candidate, difference, depsgraph, idx).astype(np.float32).ravel())
+                rows_out.append(np.concatenate(parts))
+                frames_out.append(frame)
+            np.savez(parts_dir / ("rows_%05d.npz" % first), rows=np.array(rows_out, dtype=np.float32), frames=np.array(frames_out),
+                     names=np.array([c.name for c, _ in layout]), **{"idx_%d" % n: i for n, (_, i) in enumerate(layout)})
+            result = {"phase": PHASE, "range": [first, last_frame], "rows": len(rows_out)}
+    elif PHASE == "basis_fit":
+        # One corrective basis for the whole take: PCA of all row parts, signed shapes, projector.
+        assert LONG
+        parts = [np.load(p) for p in sorted((EVIDENCE / "basis_parts").glob("rows_*.npz"))]
+        names_ref = [str(n) for n in parts[0]["names"]]
+        assert all([str(n) for n in p["names"]] == names_ref for p in parts), "row parts use different layouts"
+        layout = [(bpy.data.objects[name], parts[0]["idx_%d" % n]) for n, name in enumerate(names_ref)]
+        D = np.concatenate([p["rows"] for p in parts]).astype(np.float32)
+        corrective_prefix = "Game_" + CLIP + "_"
+        for _, candidate in pairs:
+            for key in list(candidate.data.shape_keys.key_blocks):
+                if key.name.startswith(corrective_prefix):
+                    candidate.shape_key_remove(key)
+        max_rank = globals().get("MAX_RANK", 64)
+        values, vectors = np.linalg.eigh((D @ D.T).astype(np.float64))
+        vectors = vectors[:, values.argsort()[::-1]]
+        chosen, residuals = max_rank, []
+        for rank in range(8, max_rank + 1, 8):
+            U = vectors[:, :rank].astype(np.float32)
+            projected = U.T @ D
+            worst = 0.0
+            for block in range(0, len(D), 256):
+                rest = D[block:block + 256] - U[block:block + 256] @ projected
+                worst = max(worst, float(np.linalg.norm(rest.reshape(len(rest), -1, 3), axis=2).max()))
+            residuals.append((rank, worst * 1000))
+            if residuals[-1][1] <= 1.0:
+                chosen = rank
+                break
+        U = vectors[:, :chosen]
+        scales = np.array([max(1e-9, float(np.abs(U[:, k]).max())) for k in range(chosen)])
+        basis = (D.T @ U.astype(np.float32)).astype(np.float64) * scales
+        projector = basis @ np.linalg.inv(basis.T @ basis)
+        offset = 0
+        for candidate, idx in layout:
+            block = basis[offset:offset + 3 * len(idx)].reshape(len(idx), 3, chosen)
+            offset += 3 * len(idx)
+            base = np.empty(len(candidate.data.vertices) * 3, dtype=np.float32)
+            candidate.data.shape_keys.key_blocks["Basis"].data.foreach_get("co", base)
+            base = base.reshape(-1, 3)
+            for k in range(chosen):
+                shape = base.copy()
+                shape[idx] += block[:, :, k]
+                key = candidate.shape_key_add(name="%s%d" % (corrective_prefix, k + 1), from_mix=False)
+                key.slider_min, key.slider_max = -10.0, 10.0
+                key.data.foreach_set("co", shape.astype(np.float32).ravel())
+                key.value = 0.0
+        np.savez(BASIS_PATH, projector=projector.astype(np.float32), names=np.array(names_ref),
+                 counts=np.array([len(i) for _, i in layout]), **{"idx_%d" % n: i for n, (_, i) in enumerate(layout)})
+        result = {"phase": "basis", "rank": chosen, "residual_by_rank_mm": residuals, "rows": int(len(D)),
+                  "active_vertices": {c.name: int(len(i)) for c, i in layout}}
+    elif PHASE == "basis_restore":
+        # Recreate the corrective shapes from the saved projector P = B (B^T B)^-1:  B = P (P^T P)^-1.
+        assert LONG
+        basis_file = np.load(BASIS_PATH)
+        projector = basis_file["projector"].astype(np.float64)
+        basis = projector @ np.linalg.inv(projector.T @ projector)
+        chosen = basis.shape[1]
+        corrective_prefix = "Game_" + CLIP + "_"
+        offset = 0
+        for n, name in enumerate(basis_file["names"]):
+            candidate = bpy.data.objects[str(name)]
+            idx = basis_file["idx_%d" % n]
+            for key in list(candidate.data.shape_keys.key_blocks):
+                if key.name.startswith(corrective_prefix):
+                    candidate.shape_key_remove(key)
+            block = basis[offset:offset + 3 * len(idx)].reshape(len(idx), 3, chosen)
+            offset += 3 * len(idx)
+            base = np.empty(len(candidate.data.vertices) * 3, dtype=np.float32)
+            candidate.data.shape_keys.key_blocks["Basis"].data.foreach_get("co", base)
+            base = base.reshape(-1, 3)
+            for k in range(chosen):
+                shape = base.copy()
+                shape[idx] += block[:, :, k]
+                key = candidate.shape_key_add(name="%s%d" % (corrective_prefix, k + 1), from_mix=False)
+                key.slider_min, key.slider_max = -10.0, 10.0
+                key.data.foreach_set("co", shape.astype(np.float32).ravel())
+                key.value = 0.0
+        assert offset == basis.shape[0]
+        result = {"phase": PHASE, "rank": chosen, "max_offset_m": float(np.abs(basis).max())}
+    elif PHASE == "segment_setup":
+        # Segment actions from the collected seg_frames (corrective curves are added by segment_finish).
+        assert LONG
+        number = globals()["SEGMENT"]
+        start, stop = segments()[number - 1]
+        src_loc, src_rot, game_rows, _, _ = load_collected()
+        lift = np.load(EVIDENCE / ("%s_lift.npy" % STEM))
+        seg_frames = np.arange(start, stop + 1)
+        rows = slice(start - 1, stop)
+        seg_name = "%s_S%02d" % (CLIP, number)
+        for action in list(bpy.data.actions):
+            if action.name.startswith(seg_name + "_"):
+                bpy.data.actions.remove(action)
+        source.animation_data_create(); game.animation_data_create()
+        source_action = bpy.data.actions.new(seg_name + "_Source")
+        game_action = bpy.data.actions.new(seg_name + "_Game")
+        source_action.use_fake_user = game_action.use_fake_user = True
+        source.animation_data.action = source_action
+        game.animation_data.action = game_action
+        torso_loc = src_loc[rows].astype(np.float64).copy()
+        torso_loc[:, 2] += lift[rows]
+        for axis in range(3):
+            bulk_curve(source, source_action, 'pose.bones["torso"].location', axis, seg_frames, torso_loc[:, axis], "torso")
+        for k, name in enumerate(SOURCE_KEYS):
+            bone = PB[name]
+            values_k = src_rot[rows, k].astype(np.float64)
+            if bone.rotation_mode == "QUATERNION":
+                values_k = continuous(values_k)
+                for axis in range(4):
+                    bulk_curve(source, source_action, 'pose.bones["%s"].rotation_quaternion' % name, axis, seg_frames, values_k[:, axis], name)
+            else:
+                for axis in range(3):
+                    bulk_curve(source, source_action, 'pose.bones["%s"].rotation_euler' % name, axis, seg_frames, values_k[:, axis], name)
+        for b, bone in enumerate(ordered):
+            values_b = game_rows[rows, b].astype(np.float64).copy()
+            if bone.name in TOP_GAME_BONES:
+                values_b[:, 0:3] += np.outer(lift[rows], np.array(bone.bone.matrix_local.to_3x3().inverted() @ Vector((0.0, 0.0, 1.0))))
+            values_b[:, 3:7] = continuous(values_b[:, 3:7])
+            path = 'pose.bones["%s"].' % bone.name
+            for axis in range(3):
+                bulk_curve(game, game_action, path + "location", axis, seg_frames, values_b[:, axis], bone.name)
+                bulk_curve(game, game_action, path + "scale", axis, seg_frames, values_b[:, 7 + axis], bone.name)
+            for axis in range(4):
+                bulk_curve(game, game_action, path + "rotation_quaternion", axis, seg_frames, values_b[:, 3 + axis], bone.name)
+        corrective_prefix = "Game_" + CLIP + "_"
+        shape_names = {}
+        face = np.array([[face_values(int(round(((f - 1) / FPS) * RATE)))[key] for key in FACE_MAP] for f in seg_frames])
+        for obj in shape_objects():
+            keys = obj.data.shape_keys
+            keys.animation_data_create()
+            action = bpy.data.actions.new(seg_name + "_Shapes_" + obj.name)
+            action.use_fake_user = True
+            keys.animation_data.action = action
+            shape_names[obj.name] = action.name
+            for key in keys.key_blocks[1:]:
+                path = 'key_blocks["%s"].value' % key.name
+                if key.name in FACE_MAP:
+                    bulk_curve(keys, action, path, 0, seg_frames, face[:, list(FACE_MAP).index(key.name)], key.name)
+                elif not key.name.startswith(corrective_prefix):
+                    constant = 1.0 if key.name == "Game_NeutralCorrective" else 0.0
+                    bulk_curve(keys, action, path, 0, np.array([start, stop]), np.array([constant, constant]), key.name)
+        names = {"source": source_action.name, "game": game_action.name, "shapes": shape_names, "range": [start, stop]}
+        (EVIDENCE / ("%s_actions.json" % seg_name.lower())).write_text(json.dumps(names, indent=2), encoding="utf-8")
+        result = {"phase": PHASE, "segment": number, "range": [start, stop]}
+    elif PHASE == "segment_coef":
+        # Corrective coefficients for part of a segment: projection of the rest-space delta on the basis.
+        assert LONG
+        number = globals()["SEGMENT"]
+        seg_name = "%s_S%02d" % (CLIP, number)
+        names = json.loads((EVIDENCE / ("%s_actions.json" % seg_name.lower())).read_text(encoding="utf-8"))
+        first, last_frame = RANGE
+        assign(names)
+        reset_pose()
+        scene.render.fps, scene.render.fps_base = FPS, 1
+        basis = np.load(BASIS_PATH)
+        projector = basis["projector"].astype(np.float64)
+        layout = [(bpy.data.objects[str(name)], basis["idx_%d" % n]) for n, name in enumerate(basis["names"])]
+        originals = {c.name: o for o, c in pairs}
+        rest_delta = rest_delta_factory()
+        coefficients = []
+        for frame in range(first, last_frame + 1):
+            depsgraph = frame_set(frame)
+            parts = []
+            for candidate, idx in layout:
+                difference = positions(originals[candidate.name], depsgraph) - positions(candidate, depsgraph)
+                parts.append(rest_delta(candidate, difference, depsgraph, idx).ravel())
+            coefficients.append(np.concatenate(parts) @ projector)
+        (EVIDENCE / "coef").mkdir(exist_ok=True)
+        np.savez(EVIDENCE / "coef" / ("%s_%05d.npz" % (seg_name, first)), seg_frames=np.arange(first, last_frame + 1), values=np.array(coefficients))
+        result = {"phase": PHASE, "segment": number, "range": [first, last_frame]}
+    elif PHASE == "segment_finish":
+        # Corrective curves from the coefficient parts, then whole/half-frame validation.
+        assert LONG
+        number = globals()["SEGMENT"]
+        seg_name = "%s_S%02d" % (CLIP, number)
+        names = json.loads((EVIDENCE / ("%s_actions.json" % seg_name.lower())).read_text(encoding="utf-8"))
+        start, stop = names["range"]
+        parts = [np.load(p) for p in sorted((EVIDENCE / "coef").glob("%s_*.npz" % seg_name))]
+        seg_frames = np.concatenate([p["seg_frames"] for p in parts])
+        coefficients = np.concatenate([p["values"] for p in parts])
+        assert np.array_equal(seg_frames, np.arange(start, stop + 1)), "coefficient parts incomplete"
+        corrective_prefix = "Game_" + CLIP + "_"
+        basis = np.load(BASIS_PATH)
+        assign(names)
+        for name in basis["names"]:
+            keys = bpy.data.objects[str(name)].data.shape_keys
+            for key in keys.key_blocks:
+                if key.name.startswith(corrective_prefix):
+                    k = int(key.name[len(corrective_prefix):]) - 1
+                    bulk_curve(keys, bpy.data.actions[names["shapes"][str(name)]], 'key_blocks["%s"].value' % key.name, 0, seg_frames,
+                               coefficients[:, k], key.name)
+        report = validate_range(names, start, stop)
+        report.update(segment=number, coefficient_range=[float(coefficients.min()), float(coefficients.max())],
+                      allowed_failed=bool(globals().get("ALLOW_FAILED")) and not report["passed"])
+        (EVIDENCE / ("%s_S%02d_validation.json" % (STEM, number))).write_text(json.dumps(report, indent=2), encoding="utf-8")
+        result = {"phase": PHASE, "segment": number, "passed": report["passed"],
+                  "worst_mm": max(report["max_vertex_error_metres"].values()) * 1000,
+                  "between_mm": max(report["max_between_keys_vertex_error_metres"].values()) * 1000,
+                  "angle_deg": report["max_bone_angle_error_degrees"]}
+    elif PHASE == "segment_export":
+        assert LONG
+        number = globals()["SEGMENT"]
+        seg_name = "%s_S%02d" % (CLIP, number)
+        names = json.loads((EVIDENCE / ("%s_actions.json" % seg_name.lower())).read_text(encoding="utf-8"))
+        path = EVIDENCE / ("%s_S%02d_validation.json" % (STEM, number))
+        report = json.loads(path.read_text(encoding="utf-8"))
+        assert report["passed"] or report.get("allowed_failed"), "segment failed validation"
+        report.update(export_range(names, names["range"][0], names["range"][1], "Gratia_Game_%s_S%02d.fbx" % (CLIP, number)))
+        path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        if not globals().get("KEEP_ACTIONS"):
+            for name in [names["source"], names["game"]] + list(names["shapes"].values()):
+                bpy.data.actions.remove(bpy.data.actions[name])
+        result = {"phase": PHASE, "segment": number, "fbx": report["fbx"], "bytes": report["bytes"]}
     elif PHASE == "save":
         backup = EVIDENCE / "Gratia_mvp_before_km466_v3.blend"
         if not backup.exists():
@@ -934,5 +1441,5 @@ try:
 finally:
     restore()
 result["elapsed_seconds"] = time.time() - started
-(EVIDENCE / ("km466_%s.json" % PHASE)).write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
+(EVIDENCE / ("%s_%s.json" % (STEM, PHASE))).write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
 print(json.dumps(result, default=str)[:6000])

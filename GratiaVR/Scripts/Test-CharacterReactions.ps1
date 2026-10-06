@@ -11,7 +11,9 @@ New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
 $fixtures = @(
     @{cue='Face'; zone='Face'; corrective=''},
     @{cue='Hand'; zone='Left hand'; corrective='Game_HandRef_'},
-    @{cue='Cheer'; zone='Upper costume'; corrective='Game_CheerRef_'}
+    @{cue='Cheer'; zone='Upper costume'; corrective='Game_CheerRef_'},
+    @{cue='Happy'; zone='Upper costume'; corrective='Game_AnimeRef_ReactHappy_'; mood=1},
+    @{cue='Shy'; zone='Upper costume'; corrective='Game_AnimeRef_ReactShy_'; mood=2}
 )
 $results = @()
 foreach ($fixture in $fixtures) {
@@ -26,6 +28,7 @@ foreach ($fixture in $fixtures) {
             ('-GratiaExpectedReactionClip=' + $clipPath),
             ("-GratiaViewTest=$view"), ('-abslog="' + $logPath + '"'))
         if ($fixture.corrective) { $arguments += '-GratiaCorrectivePrefix=' + $fixture.corrective }
+        if ($fixture.mood) { $arguments += '-GratiaReactionMood=' + $fixture.mood }
         $gameProcess = Start-Process -FilePath $exePath -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent $exePath) -WindowStyle Hidden -PassThru
         if (-not $gameProcess.WaitForExit($TimeoutSeconds * 1000)) {
             Stop-Process -Id $gameProcess.Id -ErrorAction SilentlyContinue
