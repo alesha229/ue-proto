@@ -320,7 +320,9 @@ bool UGratiaCharacterProfile::ValidateProfile(TArray<FString>& Errors, TArray<FS
             if (SpringRoots.Contains(Index))
             { Errors.Add(FString::Printf(TEXT("Secondary bone %s is in a spring chain; turn off its Chaos simulation."), *Bone.Bone.ToString())); break; }
     }
-    if (!FMath::IsFinite(SpringGrabRadiusCm) || SpringGrabRadiusCm < 0) Errors.Add(TEXT("Spring grab radius must be finite and nonnegative."));
+    if (!FMath::IsFinite(SpringGrabRadiusCm) || SpringGrabRadiusCm < 0 || !FMath::IsFinite(SpringMinColliderRadiusCm) || SpringMinColliderRadiusCm < 0)
+        Errors.Add(TEXT("Spring grab and collider radii must be finite and nonnegative."));
+    if (!SpringChains.IsEmpty() && (!FMath::IsFinite(SpringHandRadiusCm) || SpringHandRadiusCm <= 0)) Errors.Add(TEXT("Spring hand radius must be positive."));
     const float HandSurfaceValues[] = {HandSurface.PalmContactRadiusCm, HandSurface.PalmThicknessCm, HandSurface.AdaptDistanceCm,
         HandSurface.GripReachCm, HandSurface.GripBreakDistanceCm, HandSurface.GripBlendSeconds};
     for (const float Value : HandSurfaceValues)

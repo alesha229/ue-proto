@@ -22,9 +22,10 @@ struct FGratiaSoftBodyAnimInput
 {
     /** Hand and finger collision spheres: component-space centre (XYZ) and radius (W). */
     TArray<FVector4> HandSpheres;
-    /** Soft parts collide with a fraction of the hand radius (the surface yields first);
-     *  spring chains (hair, decor) with the full hand. */
+    /** Soft parts collide with a fraction of the hand radius (the surface yields first). */
     float SoftPushFraction = 1.0f;
+    /** One sphere per hand for spring chains (hair, decor): component-space centre and radius. */
+    TArray<FVector4> SpringHandSpheres;
     TArray<FGratiaSoftBodyGrab> Grabs;
     /** Root bone -> local scale applied after the simulation (squeeze along the forward axis). */
     TArray<TPair<FName, FVector>> Scales;

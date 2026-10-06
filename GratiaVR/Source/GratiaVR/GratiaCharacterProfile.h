@@ -694,9 +694,17 @@ public:
     /** Hair, clothing decor, ears and tails as KawaiiPhysics spring chains (menu groups 1/2/4). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion|Spring Chains", meta = (TitleProperty = "Name"))
     TArray<FGratiaSpringChain> SpringChains;
-    /** A trigger grabs the nearest spring bone within this gap of the palm or a finger. */
+    /** Spring chains meet each hand as one sphere around palm and fingers (no finger spheres:
+     *  hair is not combed by every finger, and it costs 2 limits per chain instead of 24). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion|Spring Chains", meta = (ClampMin = "1", ClampMax = "15", Units = "cm"))
+    float SpringHandRadiusCm = 6.0f;
+    /** A trigger grabs the nearest spring bone within this gap of the hand sphere. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion|Spring Chains", meta = (ClampMin = "0", ClampMax = "20", Units = "cm"))
-    float SpringGrabRadiusCm = 4.0f;
+    float SpringGrabRadiusCm = 2.0f;
+    /** Spring chains collide only with BodySurface capsules at least this thick (head, neck,
+     *  torso, shoulders, hips): a simplified body without hands and forearms. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion|Spring Chains", meta = (ClampMin = "0", ClampMax = "20", Units = "cm"))
+    float SpringMinColliderRadiusCm = 4.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion")
     TArray<FGratiaSecondaryBoneDefinition> SecondaryBones;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion")

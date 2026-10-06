@@ -30,7 +30,7 @@ protected:
 
 private:
     enum class EPhase : uint8 { Settle, Baseline, Approach, Press, Squeeze, SideSqueeze, Cup, Arm, Grab, Pull, Release, Lost, NextZone, Conform, BodyGrip, Disabled, Resumed, Tilt, Upright,
-        SpringRest, SpringPush, SpringArm, SpringGrab, SpringPull, SpringRelease, SpringToggle };
+        SpringRest, SpringPush, SpringFinger, SpringArm, SpringGrab, SpringPull, SpringRelease, SpringToggle };
     bool Check(bool bPass, const FString& Description);
     void Advance(EPhase Next) { Phase = Next; PhaseSeconds = 0; }
     void Finish();

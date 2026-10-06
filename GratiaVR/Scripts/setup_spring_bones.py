@@ -65,7 +65,10 @@ for name, kind, roots, tip_cm in definitions:
     report.append(dict(chain=name, kind=kind, group=p['group'], roots=roots, axis=str(axis), bones=count, tip_cm=round(tip_cm, 2), limit=limit))
 
 profile.set_editor_property('spring_chains', chains)
-profile.set_editor_property('spring_grab_radius_cm', 4.0)
+# Hair meets each hand as one 6 cm sphere (no finger spheres) and only the thick body capsules.
+profile.set_editor_property('spring_hand_radius_cm', 6.0)
+profile.set_editor_property('spring_grab_radius_cm', 2.0)
+profile.set_editor_property('spring_min_collider_radius_cm', 4.0)
 # Bones below a spring root are KawaiiPhysics bones now; Chaos must not simulate them too.
 parents = {}
 for group in manifest['groups']:

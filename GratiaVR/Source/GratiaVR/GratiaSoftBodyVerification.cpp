@@ -349,11 +349,12 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
         Check(FMath::IsNearlyEqual(CupHalf, 0.5f * Settings.SquashAmount, 0.06f) && FMath::IsNearlyEqual(Full, Settings.SquashAmount, 0.06f),
             FString::Printf(TEXT("%s cup squeeze follows the trigger: %.2f at half, %.2f at full (expected %.2f / %.2f)"),
                 *Zone->Chain.ToString(), CupHalf, Full, 0.5f * Settings.SquashAmount, Settings.SquashAmount));
-        // Ball in the hand: two directions close in (palm, finger curl), one goes out.
+        // Ball in a fist: narrower all around across the palm (two axes alike), not flattened
+        // along the palm (that axis rises a little).
         const FVector Ball = SoftBody->GetSquashScale(Zone->Bone);
         int32 Closed = 0, Opened = 0;
-        for (int32 Axis = 0; Axis < 3; ++Axis) { Closed += Ball[Axis] < 0.9; Opened += Ball[Axis] > 1.1; }
-        Check(Closed == 2 && Opened == 1, FString::Printf(TEXT("%s full cup squeezes like a ball in the hand (scale %s)"), *Zone->Chain.ToString(), *Ball.ToString()));
+        for (int32 Axis = 0; Axis < 3; ++Axis) { Closed += Ball[Axis] < 0.85; Opened += Ball[Axis] > 1.05; }
+        Check(Closed == 2 && Opened == 1, FString::Printf(TEXT("%s full cup squeezes like a ball in a fist, not flat (scale %s)"), *Zone->Chain.ToString(), *Ball.ToString()));
         Advance(EPhase::Arm);
         break;
     }
@@ -723,27 +724,42 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
     }
     case EPhase::SpringPush:
     {
-        // The palm overlaps the strand from one side: the strand must yield to the hand.
+        // The hand sphere overlaps the strand from one side: the strand must yield to the hand.
         Submit(SpringWorld(SpringRest) + SpringDir * 0.5, Delta, 0);
         if (PhaseSeconds < 0.4f) break;
         const double Moved = FVector::Distance(SpringLocal(SpringBone), SpringRest);
         Check(Moved >= 0.8, FString::Printf(TEXT("hand pushes spring bone %s by %.2fcm (min 0.8)"), *SpringBone.ToString(), Moved));
+        Advance(EPhase::SpringFinger);
+        break;
+    }
+    case EPhase::SpringFinger:
+    {
+        // Fingers alone (the palm 16 cm away) do not touch hair: only the one hand sphere does.
+        TArray<FVector> Fingers;
+        Fingers.Init(SpringWorld(SpringRest), 10);
+        const FVector Palm = SpringWorld(SpringRest) + SpringDir * 16.0;
+        Character->SoftBodyInteraction->SubmitHand(true, Palm, Palm, true, Delta, 0, Fingers);
+        Character->SoftBodyInteraction->SubmitHand(false, FVector::ZeroVector, FVector::ZeroVector, false, Delta, 0, TArray<FVector>());
+        if (PhaseSeconds < 0.8f) break;
+        const double Moved = FVector::Distance(SpringLocal(SpringBone), SpringRest);
+        Check(Moved <= 0.5, FString::Printf(TEXT("fingers alone leave spring bone %s (moved %.2fcm, max 0.5)"), *SpringBone.ToString(), Moved));
         Advance(EPhase::SpringArm);
         break;
     }
     case EPhase::SpringArm:
-        Submit(SpringWorld(SpringRest) + SpringDir * 3.0, Delta, 0);
+        // Next to the strand without touching it (hand sphere + 2 cm): its rest stays the rest.
+        Submit(SpringWorld(SpringRest) + SpringDir * (Character->CharacterProfile->SpringHandRadiusCm + 2.0), Delta, 0);
         if (PhaseSeconds >= 0.6f) Advance(EPhase::SpringGrab);
         break;
     case EPhase::SpringGrab:
     {
-        Submit(SpringWorld(SpringRest) + SpringDir * 3.0, Delta, 1);
+        Submit(SpringWorld(SpringRest) + SpringDir * (Character->CharacterProfile->SpringHandRadiusCm + 2.0), Delta, 1);
         if (PhaseSeconds < 0.1f) break;
         SpringHeld = SoftBody->GetGrabbedBone(true);
         if (!Check(!SpringHeld.IsNone(), FString::Printf(TEXT("trigger next to %s grabs a spring bone"), *SpringBone.ToString())))
         { Advance(EPhase::SpringToggle); break; }
         SpringHeldRest = SpringLocal(SpringHeld);
-        Start = SpringWorld(SpringRest) + SpringDir * 3.0;
+        Start = SpringWorld(SpringRest) + SpringDir * (Character->CharacterProfile->SpringHandRadiusCm + 2.0);
         Advance(EPhase::SpringPull);
         break;
     }
@@ -760,7 +776,9 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
     }
     case EPhase::SpringRelease:
     {
-        Submit(Start + SpringDir * 8.0, Delta, 0);
+        // Release, then take the hand away (the hand sphere would keep pushing the strand).
+        if (PhaseSeconds < 0.1f) Submit(Start + SpringDir * 8.0, Delta, 0);
+        else Submit(FVector(0, 0, -1.0e5), Delta, 0, false);
         if (PhaseSeconds < 2.0f) break;
         const double Back = FVector::Distance(SpringLocal(SpringHeld), SpringHeldRest);
         Check(SoftBody->GetGrabbedBone(true).IsNone(), TEXT("trigger release frees the spring bone"));

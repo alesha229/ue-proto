@@ -106,8 +106,10 @@ private:
 
     void SetFault(const FString& Reason);
     void ReleaseGrab(FHand& Hand) { Hand.GrabBone = NAME_None; Hand.GrabSpringChain = INDEX_NONE; }
-    /** Nearest simulated spring bone (hair, decor) within SpringGrabRadiusCm of the palm or a finger. */
+    /** Nearest simulated spring bone (hair, decor) within SpringGrabRadiusCm of the hand sphere. */
     void GrabSpringBone(FHand& Hand, const FHand& Other, const FVector& Press, const FVector& Visible, const TArray<FVector>& Fingers);
+    /** The one sphere a hand meets spring chains with: between the palm and the finger centroid. */
+    static FVector SpringHandCenter(const FVector& Palm, const TArray<FVector>& Fingers);
     void PushToAnimation(bool bReset);
     void PushPress();
 
@@ -127,8 +129,6 @@ private:
     TMap<FName, FVector2D> Squash;
     /** Press direction per soft bone, in bone space (unit; the last one is kept for the spring-back). */
     TMap<FName, FVector> SquashDirection;
-    /** Knuckle line (index to pinky) of the hand cupping a soft bone, bone space, across the press. */
-    TMap<FName, FVector> SquashSide;
     /** 0: a press flattens the part; 1: a cupping hand squeezes it like a ball (blended). */
     TMap<FName, float> SquashGrip;
     void UpdateSquash(float Delta);

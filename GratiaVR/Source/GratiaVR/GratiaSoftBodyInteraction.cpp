@@ -79,7 +79,6 @@ void UGratiaSoftBodyInteraction::ResetSoftBody()
     ClearHands();
     Squash.Reset();
     SquashDirection.Reset();
-    SquashSide.Reset();
     SquashGrip.Reset();
     PushToAnimation(true);
 }
@@ -258,6 +257,14 @@ void UGratiaSoftBodyInteraction::SubmitHand(bool bLeft, const FVector& Visible, 
     Hand.bReady = true;
 }
 
+FVector UGratiaSoftBodyInteraction::SpringHandCenter(const FVector& Palm, const TArray<FVector>& Fingers)
+{
+    if (Fingers.IsEmpty()) return Palm;
+    FVector Centroid = FVector::ZeroVector;
+    for (const FVector& Finger : Fingers) Centroid += Finger;
+    return 0.5 * (Palm + Centroid / Fingers.Num());
+}
+
 void UGratiaSoftBodyInteraction::GrabSpringBone(FHand& Hand, const FHand& Other, const FVector& Press, const FVector& Visible, const TArray<FVector>& Fingers)
 {
     const UGratiaCharacterProfile* Profile = Character->CharacterProfile;
@@ -276,8 +283,10 @@ void UGratiaSoftBodyInteraction::GrabSpringBone(FHand& Hand, const FHand& Other,
         for (const FName Bone : Definition.RootBones)
             if (const int32 Index = Ref.FindBoneIndex(Bone); Index != INDEX_NONE) { ChainOf[Index] = Chain; Root[Index] = true; }
     }
-    const FGratiaSoftBodySettings& Settings = Profile->SoftBody;
     const double Scale = Mesh->GetComponentTransform().GetScale3D().GetAbsMax();
+    TArray<FVector> Pressed = Fingers;
+    for (FVector& Finger : Pressed) Finger += Press - Visible;
+    const FVector Center = SpringHandCenter(Press, Pressed);
     double Best = Profile->SpringGrabRadiusCm * Scale;
     for (int32 Index = 0; Index < Ref.GetNum(); ++Index)
     {
@@ -289,9 +298,7 @@ void UGratiaSoftBodyInteraction::GrabSpringBone(FHand& Hand, const FHand& Other,
         if (Other.GrabBone == Name) continue;
         const FVector Location = Mesh->GetBoneLocation(Name);
         const double Thickness = Profile->SpringChains[ChainOf[Index]].CollisionRadiusCm * Scale;
-        double Gap = FVector::Distance(Press, Location) - Settings.PalmRadiusCm * Scale - Thickness;
-        for (const FVector& Finger : Fingers)
-            Gap = FMath::Min(Gap, FVector::Distance(Finger + (Press - Visible), Location) - Settings.FingerRadiusCm * Scale - Thickness);
+        const double Gap = FVector::Distance(Center, Location) - Profile->SpringHandRadiusCm * Scale - Thickness;
         if (Gap >= Best) continue;
         Best = Gap; Hand.GrabBone = Name; Hand.GrabSpringChain = ChainOf[Index];
     }
@@ -305,6 +312,7 @@ void UGratiaSoftBodyInteraction::PushToAnimation(bool bReset)
     const bool bEnabled = IsEnabled();
     Anim->bSoftBody = bEnabled;
     Anim->SoftBodyInput.HandSpheres.Reset();
+    Anim->SoftBodyInput.SpringHandSpheres.Reset();
     Anim->SoftBodyInput.Grabs.Reset();
     Anim->SoftBodyInput.Scales.Reset();
     Anim->SoftBodyInput.bReset |= bReset || bEnabled != bWasEnabled;
@@ -336,6 +344,8 @@ void UGratiaSoftBodyInteraction::PushToAnimation(bool bReset)
         {
             Add(Hand.Press, Settings.PalmRadiusCm);
             for (const FVector& Finger : Hand.Fingers) Add(Finger, Settings.FingerRadiusCm);
+            const FVector Center = Component.InverseTransformPosition(SpringHandCenter(Hand.Press, Hand.Fingers));
+            Anim->SoftBodyInput.SpringHandSpheres.Emplace(Center.X, Center.Y, Center.Z, Character->CharacterProfile->SpringHandRadiusCm);
         }
         if (Hand.GrabBone.IsNone()) continue;
         if (Hand.GrabSpringChain != INDEX_NONE)
@@ -422,9 +432,8 @@ void UGratiaSoftBodyInteraction::UpdateSquash(float Delta)
             const FVector Outward = (Deepest - Zone.Center).GetSafeNormal();
             Extent = FMath::Max(0.5 * Zone.Radius, FVector::DotProduct(Zone.Center - Zone.Pivot, Outward) + Zone.Radius);
         }
-        // A cupping hand squeezes like a ball in the hand: toward the palm and across the curl of
-        // the fingers, the flesh going out along the knuckle line (user: a trigger squeeze felt
-        // like pressing straight in). A press without a cup still flattens along the press.
+        // A cupping hand squeezes like a ball in a fist: the fingers close around the part (user:
+        // a trigger squeeze flattened it). A press without a cup still flattens along the press.
         float& Grip = SquashGrip.FindOrAdd(Zone.Bone);
         if (Cupping)
         {
@@ -434,16 +443,6 @@ void UGratiaSoftBodyInteraction::UpdateSquash(float Delta)
                 FVector& Direction = SquashDirection.FindOrAdd(Zone.Bone, Palm);
                 Direction = FMath::Lerp(Direction, Palm, FMath::Min(1.0f, Step * 20.0f)).GetSafeNormal();
                 if (Direction.IsNearlyZero()) Direction = Palm;
-                // Fingers: thumb, index, middle, ring, pinky (distal joint and tip each).
-                FVector Knuckles = Cupping->Fingers.Num() >= 10 ? Zone.Rotation.UnrotateVector(
-                    Cupping->Fingers[8] + Cupping->Fingers[9] - Cupping->Fingers[2] - Cupping->Fingers[3]) : FVector::ZeroVector;
-                Knuckles = FVector::VectorPlaneProject(Knuckles, Direction).GetSafeNormal();
-                if (Knuckles.IsNearlyZero()) { FVector Other; Direction.FindBestAxisVectors(Knuckles, Other); }
-                FVector& Side = SquashSide.FindOrAdd(Zone.Bone, Knuckles);
-                // The knuckle line has no sign: follow the closer orientation.
-                const FVector Toward = FVector::DotProduct(Side, Knuckles) < 0 ? -Knuckles : Knuckles;
-                Side = FVector::VectorPlaneProject(FMath::Lerp(Side, Toward, FMath::Min(1.0f, Step * 20.0f)), Direction).GetSafeNormal();
-                if (Side.IsNearlyZero()) Side = Knuckles;
             }
             Grip = FMath::FInterpTo(Grip, 1.0f, Step, 12.0f);
         }
@@ -472,27 +471,25 @@ FVector UGratiaSoftBodyInteraction::GetSquashScale(FName Bone) const
     const FZone* Zone = Zones.FindByPredicate([Bone](const FZone& Value) { return Value.Bone == Bone; });
     const FVector* Stored = SquashDirection.Find(Bone);
     const FVector Direction = Stored ? *Stored : Zone ? Zone->Axis : FVector::XAxisVector;
-    // Press: compressed along the press direction, volume-preserving bulge across it.
-    // Cup (ball in the hand): palm and finger curl both close in, the flesh goes out along the
-    // knuckle line (at most 1.5x). Frame: press N, curl C, knuckles L; per bone axis the factors
-    // blend by the squared frame components (exact for axis-aligned frames).
+    // Press: compressed along the press direction, volume-preserving bulge across it (flattens).
+    // Cup (ball in a fist): narrower all around across the palm, where the fingers close in, and
+    // the flesh rises into the palm instead of being flattened (at most 1.25x). Per bone axis the
+    // factors blend by the squared direction component (exact for axis-aligned directions).
     const float X = float(State->X);
     const float Bulge = FMath::Clamp(Profile->SoftBody.SquashBulge, 0.0f, 1.0f);
     const float Along = FMath::Clamp(1.0f - X, 0.4f, 1.4f);
     const float Across = 1.0f + (1.0f / FMath::Sqrt(Along) - 1.0f) * Bulge;
-    const float Ball = FMath::Clamp(1.0f - 0.75f * X, 0.4f, 1.4f);
-    const float Out = FMath::Min(1.5f, 1.0f + (1.0f / Ball - 1.0f) * Bulge);
+    const float Ring = FMath::Clamp(1.0f - 0.45f * X, 0.5f, 1.4f);
+    const float Rise = FMath::Min(1.25f, 1.0f + (1.0f / FMath::Square(Ring) - 1.0f) * Bulge * 0.35f);
     const float* GripState = SquashGrip.Find(Bone);
     const float Grip = GripState ? FMath::Clamp(*GripState, 0.0f, 1.0f) : 0.0f;
-    const FVector* StoredSide = SquashSide.Find(Bone);
-    FVector Side = StoredSide ? FVector::VectorPlaneProject(*StoredSide, Direction).GetSafeNormal() : FVector::ZeroVector;
-    if (Side.IsNearlyZero()) { FVector Other; Direction.FindBestAxisVectors(Side, Other); }
-    const FVector Curl = FVector::CrossProduct(Direction, Side).GetSafeNormal();
-    const float ScaleN = FMath::Lerp(Along, Ball, Grip), ScaleC = FMath::Lerp(Across, Ball, Grip), ScaleL = FMath::Lerp(Across, Out, Grip);
+    const float ScaleN = FMath::Lerp(Along, Rise, Grip), ScaleAcross = FMath::Lerp(Across, Ring, Grip);
     FVector Result;
     for (int32 Axis = 0; Axis < 3; ++Axis)
-        Result[Axis] = FMath::Pow(ScaleN, float(FMath::Square(Direction[Axis]))) * FMath::Pow(ScaleC, float(FMath::Square(Curl[Axis])))
-            * FMath::Pow(ScaleL, float(FMath::Square(Side[Axis])));
+    {
+        const float Weight = float(FMath::Square(Direction[Axis]));
+        Result[Axis] = FMath::Pow(ScaleN, Weight) * FMath::Pow(ScaleAcross, 1.0f - Weight);
+    }
     return Result.ContainsNaN() ? FVector::OneVector : Result;
 }
 

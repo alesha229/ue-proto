@@ -40,6 +40,8 @@ struct FGratiaKawaiiChain
 };
 
 constexpr int32 GratiaKawaiiMaxHandSpheres = 24;
+/** Spring chains: one sphere per hand. */
+constexpr int32 GratiaKawaiiSpringHandSpheres = 2;
 
 /** Translational soft part: a mass on a spring following its bone (world space, so it lags
  *  behind body accelerations and wobbles back). */
@@ -213,7 +215,7 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
         // Hand/finger slots are driven from the root bone and moved every update.
         FGratiaKawaiiNode& Node = *Chain.Node;
         Chain.FirstHandLimit = Node.SphericalLimits.Num();
-        for (int32 I = 0; I < GratiaKawaiiMaxHandSpheres; ++I)
+        for (int32 I = 0; I < (Chain.bSpring ? GratiaKawaiiSpringHandSpheres : GratiaKawaiiMaxHandSpheres); ++I)
         {
             FSphericalLimit Limit;
             Limit.DrivingBone = FBoneReference(Ref.GetBoneName(0));
@@ -250,6 +252,8 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
             const FTransform BoneRef = GratiaKawaiiRefTransform(Ref, Bone);
             const FVector A = BoneRef.TransformPosition(Capsule.StartCm), B = BoneRef.TransformPosition(Capsule.EndCm);
             float Radius = Capsule.RadiusCm;
+            // Simplified body: thick parts only (no hands/forearms), within the chain's reach.
+            if (Radius < Profile->SpringMinColliderRadiusCm) continue;
             if (FMath::PointDistToSegment(RootPoint, A, B) - Radius > Reach + Definition.CollisionRadiusCm) continue;
             float Gap = FLT_MAX;
             for (const FVector& Point : Points) Gap = FMath::Min(Gap, float(FMath::PointDistToSegment(Point, A, B)) - Definition.CollisionRadiusCm);
@@ -548,14 +552,18 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
                 Chain.Node->Gravity = Gravity.ContainsNaN() ? FVector::ZeroVector : Gravity;
             }
             for (FGratiaKawaiiChain& Chain : Kawaii)
-                for (int32 I = 0; I < GratiaKawaiiMaxHandSpheres; ++I)
+            {
+                const TArray<FVector4>& Spheres = Chain.bSpring ? Instance->SoftBodyInput.SpringHandSpheres : Instance->SoftBodyInput.HandSpheres;
+                const int32 Slots = Chain.bSpring ? GratiaKawaiiSpringHandSpheres : GratiaKawaiiMaxHandSpheres;
+                for (int32 I = 0; I < Slots; ++I)
                 {
                     FSphericalLimit& Limit = Chain.Node->SphericalLimits[Chain.FirstHandLimit + I];
-                    const bool bActive = Instance->SoftBodyInput.HandSpheres.IsValidIndex(I);
-                    const FVector4 Sphere = bActive ? Instance->SoftBodyInput.HandSpheres[I] : FVector4(0, 0, -1.0e6, 0);
+                    const bool bActive = Spheres.IsValidIndex(I);
+                    const FVector4 Sphere = bActive ? Spheres[I] : FVector4(0, 0, -1.0e6, 0);
                     Limit.OffsetLocation = Root.InverseTransformPosition(FVector(Sphere.X, Sphere.Y, Sphere.Z));
                     Limit.Radius = bActive ? float(Sphere.W) * (Chain.bSpring ? 1.0f : SoftPushFraction) : 0.0f;
                 }
+            }
         }
         if (!bEnabled) return;
         if (!FMath::IsFinite(DeltaSeconds) || DeltaSeconds <= 0.0f) return;

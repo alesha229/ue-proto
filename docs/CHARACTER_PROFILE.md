@@ -49,8 +49,9 @@ The profile owns model-specific references and names:
 - SpringChains (hair, clothing decor, ears/tail; menu groups 1/2/4): KawaiiPhysics chains
   from root bones to tip dummies (`TipLengthCm` along `ForwardAxis`), spring/damping/world
   damping, gravity relative to the authored pose, collision with BodySurface capsules within
-  the chain's reach (shrunk to the rest pose) and the hand spheres, trigger grab within
-  `SpringGrabRadiusCm`. Validation rejects a spring-chain bone that is still a Chaos
+  the chain's reach (shrunk to the rest pose; only capsules at least `SpringMinColliderRadiusCm`
+  thick) and one sphere per hand (`SpringHandRadiusCm`, no finger spheres), trigger grab within
+  `SpringGrabRadiusCm` of that sphere. Validation rejects a spring-chain bone that is still a Chaos
   secondary body (`bSafeSimulation`). A chain rooted below another chain's root is excluded
   from it and simulated after it (strands branching off a ponytail).
 - Separate sphere/capsule hand collision proxies. The initial profiles cover
