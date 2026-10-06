@@ -129,4 +129,5 @@ private:
     /** Each profile performance clip starts from the Pose cycle, advances and has finite morph curves; restores the pose. */
     void VerifyPerformanceClips(class AGratiaPreviewCharacter* Character, const UGratiaCharacterProfile* Profile,
         class USkeletalMeshComponent* Component, const class USkeletalMesh* Mesh);
+    void VerifyPerformanceScene(AGratiaPreviewCharacter* Character, int32 Index);
 };

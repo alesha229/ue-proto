@@ -29,11 +29,11 @@ protected:
     virtual void TickComponent(float Delta, ELevelTick Type, FActorComponentTickFunction* Tick) override;
 
 private:
-    enum class EPhase : uint8 { Settle, Baseline, Approach, Press, Squeeze, SideSqueeze, Arm, Grab, Pull, Release, Lost, NextZone, Conform, BodyGrip, Disabled, Resumed, Tilt, Upright };
+    enum class EPhase : uint8 { Settle, Baseline, Approach, Press, Squeeze, SideSqueeze, Cup, Arm, Grab, Pull, Release, Lost, NextZone, Conform, BodyGrip, Disabled, Resumed, Tilt, Upright };
     bool Check(bool bPass, const FString& Description);
     void Advance(EPhase Next) { Phase = Next; PhaseSeconds = 0; }
     void Finish();
-    void Submit(const FVector& Hand, float Delta, float Trigger, bool bAllowed = true);
+    void Submit(const FVector& Hand, float Delta, float Trigger, bool bAllowed = true, FName SqueezeBone = NAME_None, float Squeeze = 0.0f);
     FVector CurrentTip() const;
     /** Zone tip in its parent bone frame (cm): independent of idle body motion. */
     TArray<FVector> TipsInParentFrame() const;
@@ -60,6 +60,7 @@ private:
     /** Palm-skin gap when squash/vibration first appear; squash scale of the front press. */
     double OnsetGapCm = 100.0;
     FVector FrontScale = FVector::OneVector;
+    float CupHalf = -1.0f;
     int32 BaselineSamples = 0;
     double PressTipCm = 0, PullTipCm = 0, ReturnTipCm = 0;
     TArray<FVector2D> DepthAmplitude;

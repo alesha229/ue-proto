@@ -31,6 +31,8 @@ public:
         FVector Axis = FVector::XAxisVector;
         /** Soft bone world rotation (squash direction is kept in bone space). */
         FQuat Rotation = FQuat::Identity;
+        /** Soft bone origin: the squash scales the part about this point. */
+        FVector Pivot = FVector::ZeroVector;
     };
 
     UGratiaSoftBodyInteraction();
@@ -38,9 +40,10 @@ public:
     /** Visible: proxy-constrained palm centre. Raw: controller target of the palm centre.
      *  Grab: max of trigger and grip. Fingers: world finger points of the visible hand.
      *  PoseOwned: the body-surface helper places the hand (cup/wrap); the hand is not moved
-     *  toward the controller, and a grabbed part follows the controller (no hand/part loop). */
+     *  toward the controller, and a grabbed part follows the controller (no hand/part loop).
+     *  SqueezeBone/Squeeze: a cupping hand squeezes that soft bone (0..1, trigger/grip). */
     void SubmitHand(bool bLeft, const FVector& Visible, const FVector& Raw, bool bAllowed, float Delta, float Grab,
-        const TArray<FVector>& Fingers, bool bPoseOwned = false);
+        const TArray<FVector>& Fingers, bool bPoseOwned = false, FName SqueezeBone = NAME_None, float Squeeze = 0.0f);
     void ClearHands();
     UFUNCTION(BlueprintCallable, Category = "Soft Body") void ResetSoftBody();
 
@@ -57,7 +60,7 @@ public:
     void GetConformSpheres(const FVector& Point, float Range, TArray<FVector4>& OutWorld, float ZoneShrinkCm = 0.0f) const;
     /** Palm/finger spheres written to the press collection last tick (diagnostics/QA). */
     int32 GetPressSphereCount() const { return PressSpheres; }
-    /** Current squeeze of a soft bone (0 rest, SquashAmount at full press depth). */
+    /** Current squeeze of a soft bone (0 rest, up to SquashAmount). */
     float GetSquash(FName Bone) const { const FVector2D* State = Squash.Find(Bone); return State ? float(State->X) : 0.0f; }
     /** Bone-space scale of a soft bone: compressed along the press direction, bulging across it. */
     FVector GetSquashScale(FName Bone) const;
@@ -95,6 +98,8 @@ private:
         FVector GrabOffset = FVector::ZeroVector;
         /** Point the grab follows: the pressed hand, or the controller when the pose is owned. */
         FVector Grabber = FVector::ZeroVector;
+        FName SqueezeBone;
+        float Squeeze = 0.0f;
     };
 
     void SetFault(const FString& Reason);

@@ -284,6 +284,56 @@ struct GRATIAVR_API FGratiaBodyColliderSphere
 };
 
 /** A full-body clip the Pose menu item (F2) can play after the preview poses, e.g. retargeted mocap. */
+/** One partner bone aimed so that its reference child lies along From -> To (partner component space, cm). */
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaPartnerAim
+{
+    GENERATED_BODY()
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance|Partner")
+    FName Bone;
+    /** Child bone whose direction from Bone is aimed (reference skeleton). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance|Partner")
+    FName Child;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance|Partner", meta = (Units = "cm"))
+    FVector From = FVector::ZeroVector;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance|Partner", meta = (Units = "cm"))
+    FVector To = FVector::ZeroVector;
+    /** Also place Bone at From (the chain root, e.g. the pelvis). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance|Partner")
+    bool bPlace = false;
+};
+
+/** Everything a performance brings besides the character clip: synchronized music, a posed
+ *  partner body and the partner's eye viewpoint. Transforms are relative to the character actor. */
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaPerformanceScene
+{
+    GENERATED_BODY()
+    /** Plays in sync with the performance time (one track for all segments). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance|Scene")
+    TObjectPtr<USoundBase> Music;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance|Scene", meta = (ClampMin = "0", ClampMax = "2"))
+    float MusicVolume = 0.8f;
+    /** Static partner body (any skeletal mesh); posed by PartnerPose in its own component space. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance|Scene")
+    TObjectPtr<USkeletalMesh> PartnerMesh;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance|Scene")
+    FTransform PartnerTransform;
+    /** Applied in order (parents before children). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance|Scene")
+    TArray<FGratiaPartnerAim> PartnerPose;
+    /** Hidden while the player watches from the partner's eyes. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance|Scene")
+    TArray<FName> PartnerHiddenInViewpoint;
+    /** Partner eyes: X looks forward, Z is the top of the head. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance|Scene")
+    bool bHasViewpoint = false;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance|Scene")
+    FTransform Viewpoint;
+
+    bool HasPartner() const { return PartnerMesh != nullptr && !PartnerPose.IsEmpty(); }
+};
+
 USTRUCT(BlueprintType)
 struct GRATIAVR_API FGratiaPerformanceClip
 {
@@ -300,6 +350,9 @@ struct GRATIAVR_API FGratiaPerformanceClip
     /** Loop the whole performance (all segments); otherwise hold the last frame. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance")
     bool bLoop = true;
+    /** Music, partner and viewpoint of the original scene (optional). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance")
+    FGratiaPerformanceScene Scene;
 
     int32 NumParts() const { return 1 + Segments.Num(); }
     UAnimSequence* GetPart(int32 Index) const { return Index == 0 ? Clip.Get() : Segments.IsValidIndex(Index - 1) ? Segments[Index - 1].Get() : nullptr; }
@@ -435,17 +488,21 @@ struct GRATIAVR_API FGratiaSoftBodySettings
     /** With full grip the fingers may sink this far into a soft zone; the surface yields under them. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press", meta = (ClampMin = "0", ClampMax = "6", Units = "cm"))
     float SquishDepthCm = 3.5f;
-    /** Volumetric squeeze: the soft bone compresses along its forward axis by up to this
-     *  fraction at full press depth (zone radius) and springs back with a wobble. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press", meta = (ClampMin = "0", ClampMax = "0.8"))
-    float SquashAmount = 0.45f;
+    /** Volumetric squeeze: the soft bone compresses along the press direction by up to this
+     *  fraction (also the squeeze of a full-trigger cup) and springs back with a wobble. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press", meta = (ClampMin = "0", ClampMax = "0.6"))
+    float SquashAmount = 0.55f;
+    /** 1: the skin under the hand moves with the press depth (no gap, no sinking); above 1
+     *  the part compresses more than the hand presses. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press", meta = (ClampMin = "0.25", ClampMax = "3"))
+    float SquashResponse = 1.0f;
     /** Sideways spread while compressed (0 none, 1 volume preserving). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press", meta = (ClampMin = "0", ClampMax = "1"))
     float SquashBulge = 0.5f;
     /** Hand sphere size for pushing the KawaiiPhysics bone; below 1 the surface yields
      *  (press dent and squash) before the whole soft part swings away. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press", meta = (ClampMin = "0", ClampMax = "1"))
-    float HandPushFraction = 1.0f;
+    float HandPushFraction = 0.4f;
 };
 
 USTRUCT(BlueprintType)

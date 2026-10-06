@@ -10,6 +10,7 @@ class UGratiaCharacterProfile;
 class UTextRenderComponent;
 class UAudioComponent;
 class USoundBase;
+class USoundAttenuation;
 
 /** Optional local caption/audio presenter. Contact detection only emits events. */
 UCLASS(ClassGroup = (Interaction), meta = (BlueprintSpawnableComponent))
@@ -38,6 +39,10 @@ public:
     FColor CaptionColor = FColor(230, 240, 255);
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction|Presentation", meta = (ClampMin = "0.0", ClampMax = "1.0"))
     float SoundVolume = 0.3f;
+    /** Reaction sounds come from the touched zone: distance falloff and direction relative to the
+     *  listener's head. Empty: BeginPlay creates a spatialized sphere (30 cm inner, 12 m falloff). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction|Presentation")
+    TObjectPtr<USoundAttenuation> ReactionAttenuation;
 
 protected:
     virtual void BeginPlay() override;

@@ -55,7 +55,10 @@ settings.set_editor_property('squish_depth_cm', 3.5)
 # nothing squeezes, dents or vibrates before the visible palm reaches the skin.
 settings.set_editor_property('palm_radius_cm', 1.5)
 settings.set_editor_property('press_palm_radius_cm', 1.5)
-settings.set_editor_property('hand_push_fraction', 1.0)
+# The skin yields first (squash follows the press depth), then the whole part moves away.
+settings.set_editor_property('hand_push_fraction', 0.4)
+settings.set_editor_property('squash_amount', 0.55)
+settings.set_editor_property('squash_response', 1.0)
 settings.set_editor_property('body_colliders', colliders)
 profile.set_editor_property('soft_body', settings)
 # KawaiiPhysics owns these bones; the rigid secondary path must not simulate them too.

@@ -10,6 +10,19 @@
 3. `import_vam_mocap.py` — editor-коммандлет: переимпорт `SK_Gratia_Game` с формами
    `Game_KM466_*`, импорт `A_Gratia_Game_KM466`, запись в `DA_Gratia.PerformanceClips`.
 
+Полная запись (566,9 с): `LONG = True` в заголовке `author_vam_mocap.py`. Фазы, каждая
+короче лимита MCP 300 с: `collect` (`RANGE` по 600 кадров) → `basis_mask` / `basis_rows` →
+`fit_mocap_basis.py 64` (системный Python, вне Blender) → `basis_restore` → `save` → по частям
+`segment_setup` / `segment_coef` (`RANGE` по 600) / `segment_finish` (`ALLOW_FAILED = True`:
+общий базис не проходит допуск 2 мм) / `segment_export` → `save`. Затем
+`GRATIA_MOCAP_LONG=1` `import_vam_mocap.py` (части `A_Gratia_Game_KM466Full_SNN`, перформанс
+`KM466 Full`).
+
+Сцена (партнёр, музыка, вид партнёра): `extract_vam_scene_partner.py <scene.json>
+<samples.json> <out.json>` (системный Python), ffmpeg `music over anim.mp3` →
+`Exports/Gratia/Audio/KM466_Music.wav` (44,1 кГц, стерео, не в git), затем коммандлет
+`import_performance_scene.py` (после каждого импорта перформансов: он заново заполняет `Scene`).
+
 `correct_kitty_mocap.py` и `preview_kitty_mocap.py` — **исторические** скрипты второй
 отклонённой попытки (GPT, 5 октября); остальные её скрипты лежат в
 `evidence/05/kitty_mocap/failed_scripts`. Не запускать.

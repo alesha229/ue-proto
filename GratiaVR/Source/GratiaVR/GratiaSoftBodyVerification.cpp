@@ -125,10 +125,10 @@ void UGratiaSoftBodyVerification::Shoot(const FString& Name)
     UE_LOG(LogGratiaSoftBodyQA, Display, TEXT("SOFT_BODY_QA_SHOT %s"), *Name);
 }
 
-void UGratiaSoftBodyVerification::Submit(const FVector& Hand, float Delta, float Trigger, bool bAllowed)
+void UGratiaSoftBodyVerification::Submit(const FVector& Hand, float Delta, float Trigger, bool bAllowed, FName SqueezeBone, float Squeeze)
 {
     static const TArray<FVector> NoFingers;
-    Character->SoftBodyInteraction->SubmitHand(true, Hand, Hand, bAllowed, Delta, Trigger, NoFingers);
+    Character->SoftBodyInteraction->SubmitHand(true, Hand, Hand, bAllowed, Delta, Trigger, NoFingers, false, SqueezeBone, Squeeze);
     Character->SoftBodyInteraction->SubmitHand(false, FVector::ZeroVector, FVector::ZeroVector, false, Delta, 0, NoFingers);
 }
 
@@ -174,7 +174,7 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
         if (PhaseSeconds <= Delta)
         {
             BaselineTip = FVector::ZeroVector; BaselineSamples = 0; DepthAmplitude.Reset(); bSawGrab = false; PressTipCm = PullTipCm = 0;
-            OnsetGapCm = 100.0; FrontScale = FVector::OneVector;
+            OnsetGapCm = 100.0; FrontScale = FVector::OneVector; CupHalf = -1.0f;
             AimCamera(Zone->Center, (Zone->Tip - Zone->Center).GetSafeNormal());
         }
         Submit(FVector(0, 0, -1.0e5), Delta, 0, false);
@@ -235,8 +235,15 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
         Submit(Pressed, Delta, 0);
         if (!bShotOn && PhaseSeconds >= 0.3f)
         {
-            Check(SoftBody->GetSquash(Zone->Bone) >= 0.05f,
-                FString::Printf(TEXT("%s squeezes under the press (squash %.2f, min 0.05)"), *Zone->Chain.ToString(), SoftBody->GetSquash(Zone->Bone)));
+            // The skin under the palm follows the press: squash ~ depth / pivot-to-skin distance.
+            const double Scale = Character->CharacterMesh->GetComponentTransform().GetScale3D().GetAbsMax();
+            const FVector Out = (Pressed - Zone->Center).GetSafeNormal();
+            const double Extent = FMath::Max(0.5 * Zone->Radius, FVector::DotProduct(Zone->Center - Zone->Pivot, Out) + Zone->Radius);
+            const float Expected = FMath::Min(Settings.SquashAmount, Settings.SquashResponse * float(SoftBody->GetDepthCm(true) * Scale / Extent));
+            const float Squash = SoftBody->GetSquash(Zone->Bone);
+            Check(Squash >= 0.15f && Squash >= 0.8f * Expected - 0.02f,
+                FString::Printf(TEXT("%s squeezes with the press depth (squash %.2f at %.1fcm, expected %.2f, min 0.15)"),
+                    *Zone->Chain.ToString(), Squash, SoftBody->GetDepthCm(true), Expected));
             FrontScale = SoftBody->GetSquashScale(Zone->Bone);
             Check(SoftBody->GetPressSphereCount() >= 1 && Settings.PressCollection,
                 FString::Printf(TEXT("%s palm and finger spheres reach the press collection (%d)"), *Zone->Chain.ToString(), SoftBody->GetPressSphereCount()));
@@ -269,6 +276,19 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
         Check(FrontAxis == ExpectedFront && SideAxis == ExpectedSide && SideScale[SideAxis] < 0.98f,
             FString::Printf(TEXT("%s squashes along the press direction: front axis %d (expected %d), side axis %d (expected %d, scale %.3f)"),
                 *Zone->Chain.ToString(), FrontAxis, ExpectedFront, SideAxis, ExpectedSide, SideScale[SideAxis]));
+        Advance(EPhase::Cup);
+        break;
+    }
+    case EPhase::Cup:
+    {
+        // A cupping hand squeezes by its trigger: half trigger ~half, full trigger SquashAmount.
+        Submit(Start, Delta, 0, true, Zone->Bone, PhaseSeconds < 0.9f ? 0.5f : 1.0f);
+        if (PhaseSeconds >= 0.85f && CupHalf < 0) CupHalf = SoftBody->GetSquash(Zone->Bone);
+        if (PhaseSeconds < 1.8f) break;
+        const float Full = SoftBody->GetSquash(Zone->Bone);
+        Check(FMath::IsNearlyEqual(CupHalf, 0.5f * Settings.SquashAmount, 0.06f) && FMath::IsNearlyEqual(Full, Settings.SquashAmount, 0.06f),
+            FString::Printf(TEXT("%s cup squeeze follows the trigger: %.2f at half, %.2f at full (expected %.2f / %.2f)"),
+                *Zone->Chain.ToString(), CupHalf, Full, 0.5f * Settings.SquashAmount, Settings.SquashAmount));
         Advance(EPhase::Arm);
         break;
     }

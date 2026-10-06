@@ -5,6 +5,7 @@
 #include "GratiaAnimInstance.h"
 #include "GratiaSecondaryMotion.h"
 #include "GratiaCharacterProfile.h"
+#include "GratiaPerformanceStage.h"
 #include "GratiaSoftBodyInteraction.h"
 #include "GratiaSoftBodyVerification.h"
 
@@ -36,6 +37,7 @@ AGratiaPreviewCharacter::AGratiaPreviewCharacter()
     SoftBodyInteraction = CreateDefaultSubobject<UGratiaSoftBodyInteraction>(TEXT("SoftBodyInteraction"));
     SoftBodyVerification = CreateDefaultSubobject<UGratiaSoftBodyVerification>(TEXT("SoftBodyVerification"));
     BodySurface = CreateDefaultSubobject<UGratiaBodySurface>(TEXT("BodySurface"));
+    PerformanceStage = CreateDefaultSubobject<UGratiaPerformanceStage>(TEXT("PerformanceStage"));
     CharacterMesh->SetCollisionEnabled(ECollisionEnabled::PhysicsOnly);
     CharacterMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
     CharacterMesh->SetGenerateOverlapEvents(false);

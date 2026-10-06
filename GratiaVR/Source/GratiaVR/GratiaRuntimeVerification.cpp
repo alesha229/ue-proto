@@ -1,4 +1,7 @@
 #include "GratiaRuntimeVerification.h"
+#include "GratiaPerformanceStage.h"
+#include "Components/PoseableMeshComponent.h"
+#include "AudioDevice.h"
 #include "GratiaStage1Runtime.h"
 #include "GratiaStage1HUD.h"
 #include "GratiaPreviewCharacter.h"
@@ -99,6 +102,12 @@ void UGratiaRuntimeVerification::ConfigureCaptureView()
     if (View == TEXT("Left")) Eye = FVector(0, -250, 125);
     if (View == TEXT("Right")) Eye = FVector(0, 250, 125);
     if (View == TEXT("Face")) { Eye = FVector(-100, 0, 170); Target = FVector(0, 0, 169); }
+    // Scene: elevated three-quarter view in the character's frame (its performance partner lies in front).
+    if (View == TEXT("Scene"))
+    {
+        const FTransform Actor = Character->GetActorTransform();
+        Eye = Actor.TransformPosition(FVector(-230, 140, 210)); Target = Actor.TransformPosition(FVector(0, 50, 25));
+    }
     ACameraActor* CaptureView = GetWorld()->SpawnActor<ACameraActor>(Eye, (Target - Eye).Rotation());
     if (CaptureView)
     {
@@ -152,7 +161,7 @@ void UGratiaRuntimeVerification::RunWorldChecks()
     TestCheck(Runtime.PlayerController.IsValid() && Runtime.PlayerController->GetHUD() && Runtime.PlayerController->GetHUD()->IsA<AGratiaStage1HUD>(),
         TEXT("Stage 1 HUD is active"));
     TestCheck(Runtime.Camera.IsValid() && VerificationIsFiniteTransform(Runtime.Camera->GetComponentTransform()), TEXT("Camera transform is finite"));
-    TestCheck(!Runtime.Camera.IsValid() || Runtime.bXRActive || FMath::IsNearlyEqual(Runtime.Camera->GetRelativeLocation().Z,
+    TestCheck(!Runtime.Camera.IsValid() || Runtime.bXRActive || Runtime.bPartnerView || FMath::IsNearlyEqual(Runtime.Camera->GetRelativeLocation().Z,
         Runtime.OriginalCameraRelative.GetLocation().Z + Runtime.DesktopEyeHeightCm, 0.1), TEXT("Desktop preview camera height is applied when XR is inactive"));
     int32 MotionControllers = 0;
     if (Runtime.PlayerPawn.IsValid())
@@ -320,6 +329,42 @@ void UGratiaRuntimeVerification::RunCharacterWorldChecks()
         Mesh->GetBounds().BoxExtent.Z * 2.0);
 }
 
+void UGratiaRuntimeVerification::VerifyPerformanceScene(AGratiaPreviewCharacter* Character, int32 Index)
+{
+    const FGratiaPerformanceScene& Scene = Character->CharacterProfile->PerformanceClips[Index].Scene;
+    UGratiaPerformanceStage* Stage = Character->PerformanceStage;
+    if (!Scene.HasPartner() && !Scene.Music && !Scene.bHasViewpoint) return;
+    if (!Stage) { TestCheck(false, TEXT("A performance scene needs the character's PerformanceStage")); return; }
+    // From the start: partner posed, viewpoint, music at the performance clock.
+    Character->SetPerformance(Index);
+    Stage->UpdateStage();
+    if (Scene.HasPartner())
+        TestCheck(Stage->GetPartner() && Stage->GetPartner()->IsVisible() && Stage->GetPartnerPoseErrorDegrees() <= 3.0f,
+            *FString::Printf(TEXT("Performance %d partner is shown in its pose (largest aim error %.2f deg)"), Index, Stage->GetPartnerPoseErrorDegrees()));
+    FTransform Eye;
+    const bool bEye = Stage->GetViewpoint(Eye);
+    if (Scene.bHasViewpoint)
+        TestCheck(bEye && FVector::Distance(Eye.GetLocation(), Character->GetActorLocation()) < 500.0,
+            *FString::Printf(TEXT("Performance %d partner viewpoint is a finite pose near the character (%s)"), Index, *Eye.GetLocation().ToString()));
+    const bool bAudio = GEngine && GEngine->GetMainAudioDevice().IsValid() && Character->Interaction && Character->Interaction->bSound
+        && Character->CharacterProfile->Capabilities.bSound;
+    if (Scene.Music && bAudio)
+    {
+        const bool bStart = Stage->IsMusicPlaying() && FMath::Abs(Stage->GetMusicTime() - Stage->GetPerformanceTime()) < 0.3f;
+        // A seek (or loop) re-syncs the track to the performance clock.
+        UAnimSingleNodeInstance* Instance = Character->CharacterMesh->GetSingleNodeInstance();
+        const float Seek = FMath::Min(30.0f, Character->CharacterProfile->PerformanceClips[Index].Clip->GetPlayLength() * 0.5f);
+        if (Instance) Instance->SetPosition(Seek, false);
+        Stage->UpdateStage();
+        const bool bSeek = Stage->IsMusicPlaying() && FMath::Abs(Stage->GetMusicTime() - Seek) < 0.3f;
+        TestCheck(bStart && bSeek, *FString::Printf(TEXT("Performance %d music plays at the performance time and follows a seek (music %.2fs, performance %.2fs)"),
+            Index, Stage->GetMusicTime(), Stage->GetPerformanceTime()));
+    }
+    else if (Scene.Music) TestSkip(TEXT("Performance music check needs an audio device and sound enabled"));
+    UE_LOG(LogGratiaVerification, Display, TEXT("PERFORMANCE SCENE: index=%d %s"), Index, *Stage->GetDiagnostics());
+    Character->SetPerformance(Index);
+}
+
 void UGratiaRuntimeVerification::VerifyPerformanceClips(AGratiaPreviewCharacter* Character, const UGratiaCharacterProfile* Profile,
     USkeletalMeshComponent* Component, const USkeletalMesh* Mesh)
 {
@@ -352,6 +397,7 @@ void UGratiaRuntimeVerification::VerifyPerformanceClips(AGratiaPreviewCharacter*
         }
         if (Entry.NumParts() > 1)
             TestCheck(bChained, TEXT("A segmented performance continues part by part to its last segment"));
+        VerifyPerformanceScene(Character, Index);
         // Face and corrective curves are sampled from the cooked clip by this model's own morph names.
         float Peak = 0.0f;
         FName PeakName;

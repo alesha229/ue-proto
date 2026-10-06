@@ -248,9 +248,48 @@ def hinge(upper_dir, lower_dir, fallback, sign):
 # turns at most 12 degrees per frame instead (a short swing, not a pop).
 BEND_PLANE = {}
 MAX_PLANE_STEP = math.radians(12.0)
+# A large requested turn goes through the natural side (elbow back/down), never through its
+# opposite: there the upper arm rolls past 180 degrees from its rest relation and Rigify's arm
+# twist bones flip in one frame (KM466 frames 2688-2716). Frames where this changes the turn
+# direction are reported by the collect phase.
+PLANE_DETOURS = []
+CURRENT_INDEX = [0]
 
 
-def solve_two_bone(upper, lower, start, target, pole, side_key):
+# Wrist roll continuity: a VaM hand controller can spin a full turn around the forearm
+# (mocap artifact, KM466 frames 2690-2710). A hand roll passing 180 degrees flips Rigify's
+# forearm twist in one frame; the roll returns through 0 instead, at most 20 degrees per frame.
+# Frames without such a crossing keep the controller rotation exactly.
+WRIST_ROLL = {}
+MAX_ROLL_STEP = 20.0
+ROLL_FRAMES = []
+
+
+def continuous_hand(side, index, hand):
+    fore = PB["forearm_fk." + side].matrix.to_3x3().normalized()
+    rest_rel = REST["forearm_fk." + side].inverted() @ REST["hand_fk." + side]
+    q = (rest_rel.inverted() @ fore.inverted() @ hand.normalized()).to_quaternion()
+    raw = (math.degrees(2.0 * math.atan2(q.y, q.w)) + 180.0) % 360.0 - 180.0
+    out, active = raw, False
+    state = WRIST_ROLL.get(side)
+    if state is not None and state[0] == index - 1:
+        previous, active = state[1], state[2]
+        step = (raw - previous + 180.0) % 360.0 - 180.0
+        if abs(previous + step) > 180.0:
+            active = True
+            step -= math.copysign(360.0, step)
+        if active:
+            out = previous + max(-MAX_ROLL_STEP, min(MAX_ROLL_STEP, step))
+            active = abs(step) > MAX_ROLL_STEP
+    WRIST_ROLL[side] = (index, out, active)
+    if abs(out - raw) < 1e-6:
+        return hand
+    ROLL_FRAMES.append((side, index))
+    swing = q @ Quaternion((0.0, 1.0, 0.0), math.radians(raw)).inverted()
+    return fore @ rest_rel @ (swing @ Quaternion((0.0, 1.0, 0.0), math.radians(out))).to_matrix()
+
+
+def solve_two_bone(upper, lower, start, target, pole, side_key, reference=None):
     length_a, length_b = PB[upper].bone.length, PB[lower].bone.length
     relative = target - start
     distance = min(length_a + length_b - 1e-4, max(abs(length_a - length_b) + 1e-4, relative.length))
@@ -268,7 +307,18 @@ def solve_two_bone(upper, lower, start, target, pole, side_key):
             previous.normalize()
             angle = previous.angle(plane, 0.0)
             if angle > MAX_PLANE_STEP:
-                plane = (Quaternion(forward, MAX_PLANE_STEP if previous.cross(plane).dot(forward) >= 0 else -MAX_PLANE_STEP) @ previous).normalized()
+                direction = 1.0 if previous.cross(plane).dot(forward) >= 0 else -1.0
+                natural = None if reference is None else reference - start
+                if natural is not None:
+                    natural = natural - forward * natural.dot(forward)
+                if natural is not None and natural.length > 1e-6:
+                    natural.normalize()
+                    a = math.atan2(natural.cross(previous).dot(forward), natural.dot(previous))
+                    b = math.atan2(natural.cross(plane).dot(forward), natural.dot(plane))
+                    if (1.0 if b > a else -1.0) != direction:
+                        direction = -direction
+                        PLANE_DETOURS.append((side_key, CURRENT_INDEX[0]))
+                plane = (Quaternion(forward, MAX_PLANE_STEP * direction) @ previous).normalized()
     BEND_PLANE[side_key] = plane.copy()
     along = (length_a * length_a - length_b * length_b + distance * distance) / (2 * distance)
     middle = start + forward * along + plane * math.sqrt(max(0.0, length_a * length_a - along * along))
@@ -286,16 +336,30 @@ def pose_chain(upper, lower, start, middle, end, sign, fallback=None):
     set_world(lower, frame_from(axis, lower_dir), PB[lower].matrix.translation.copy())
 
 
+# KittyMocap face layer (ARKit-like, small amplitudes) -> Gratia's anime shapes. Gains lift the
+# subtle source values to readable anime expressions. Channels with a constant rest bias (Nose
+# Sneer, Mouth Upper Up / Lower Down, Mouth Shrug), jaw/mouth sideways, dimples and rolls have no
+# Gratia counterpart and are not transferred.
+K = "geometry/KittyMocap "
 FACE_MAP = {
     "Eye L close": [("geometry/Eyes Closed Left", 1.0)],
     "Eye R close": [("geometry/Eyes Closed Right", 1.0)],
-    "Mouth smile": [("geometry/KittyMocap Mouth Smile Left", 0.5), ("geometry/KittyMocap Mouth Smile Right", 0.5)],
-    "Mouth open 1": [("geometry/KittyMocap Jaw Open", 1.0)],
-    "Brows worry 1": [("geometry/KittyMocap Brow Inner Up", 1.0)],
-    "Brows angry 1": [("geometry/KittyMocap Brow Down Left", 0.5), ("geometry/KittyMocap Brow Down Right", 0.5)],
-    "Eyes smug": [("geometry/KittyMocap Eye Squint Left", 0.5), ("geometry/KittyMocap Eye Squint Right", 0.5)],
-    "Mouth kiss": [("geometry/KittyMocap Mouth Pucker", 1.0)],
-    "Mouth o": [("geometry/KittyMocap Mouth Funnel", 1.0)],
+    "Mouth smile": [(K + "Mouth Smile Left", 0.75), (K + "Mouth Smile Right", 0.75)],
+    "Mouth L up": [(K + "Mouth Smile Left", 1.5), (K + "Mouth Smile Right", -1.5)],
+    "Mouth R up": [(K + "Mouth Smile Right", 1.5), (K + "Mouth Smile Left", -1.5)],
+    "Mouth open 1": [(K + "Jaw Open", 2.5)],
+    "Brows worry 1": [(K + "Brow Inner Up", 1.5)],
+    "Brows angry 1": [(K + "Brow Down Left", 1.0), (K + "Brow Down Right", 1.0)],
+    "Brows up": [(K + "Brow Outer Up Left", 1.5), (K + "Brow Outer Up Right", 1.5)],
+    "Eyes smug": [(K + "Eye Squint Left", 0.5), (K + "Eye Squint Right", 0.5)],
+    "Eyes surprised": [(K + "Eye Wide Left", 2.0), (K + "Eye Wide Right", 2.0)],
+    "Mouth kiss": [(K + "Mouth Pucker", 1.5)],
+    "Mouth o": [(K + "Mouth Funnel", 2.0)],
+    "Mouth sad 1": [(K + "Mouth Frown Left Copy", 1.0), (K + "Mouth Frown Right Copy", 1.0)],
+    "Mouth puff out": [(K + "Cheek Puff", 3.0)],
+    "Mouth widen 1": [(K + "Mouth Stretch Left", 2.0), (K + "Mouth Stretch Right", 2.0)],
+    "Mouth shrink": [(K + "Mouth Press Left", 1.0), (K + "Mouth Press Right", 1.0)],
+    "Brows worry 2": [("geometry/morph: AAsex_sqntwrry1sm1", 0.6)],
 }
 
 
@@ -307,6 +371,7 @@ def face_values(index):
 def pose_at(t, lift):
     """Solve Gratia's controls for source time t; lift is the global floor offset (metres)."""
     index, s = sample_at(t)
+    CURRENT_INDEX[0] = index
     reset_pose()
     rotation = {k: v[1] for k, v in s.items()}
     position = {k: v[0] * SCALE + Vector((0.0, 0.0, lift)) for k, v in s.items()}
@@ -331,13 +396,13 @@ def pose_at(t, lift):
         natural = shoulder + chest_rot @ Vector((out_sign * 0.10, 0.30, -0.20))
         w = elbow_weight[side][index]
         pole = elbow * w + natural * (1.0 - w)
-        middle, end, short = solve_two_bone(upper, lower, shoulder, wrist, pole, side)
+        middle, end, short = solve_two_bone(upper, lower, shoulder, wrist, pole, side, natural)
         # Nearly straight, the elbow hinge tends to plane x forward (the limit of upper x lower):
         # a continuous fallback, so the upper arm never twists when the elbow straightens.
         forward = (wrist - shoulder).normalized()
         plane_hinge = BEND_PLANE[side].cross(forward) * HINGE[(upper, lower)]
         pose_chain(upper, lower, shoulder, middle, end, HINGE[(upper, lower)], plane_hinge)
-        set_world("hand_fk." + side, rotation[prefix + "HandControl"] @ HAND_T[side])
+        set_world("hand_fk." + side, continuous_hand(side, index, rotation[prefix + "HandControl"] @ HAND_T[side]))
         solves["arm." + side] = {"unreachable_m": short, "elbow_weight": w}
         # Leg: aim along the source segments; the knee hinge lies in the bend plane.
         thigh, shin = "thigh_fk." + side, "shin_fk." + side
@@ -1122,7 +1187,8 @@ try:
         np.savez(CHUNKS / ("collect_%05d.npz" % start), frames=np.array(frames_out), src_loc=np.array(src_loc, dtype=np.float32),
                  src_rot=np.array(src_rot, dtype=np.float32), game=np.array(game_rows, dtype=np.float32),
                  low_frames=np.array(low_frames), low_values=np.array(low_values, dtype=np.float64))
-        result = {"phase": PHASE, "range": [start, stop], "lowest_m": float(min(low_values))}
+        result = {"phase": PHASE, "range": [start, stop], "lowest_m": float(min(low_values)),
+                  "wrist_roll_frames": ROLL_FRAMES, "plane_detours": sorted(set(PLANE_DETOURS))}
     elif PHASE in ("basis_mask", "basis_rows"):
         # Corrective basis inputs in parts (each call under the bridge timeout):
         # mask = vertices that ever differ > 0.3 mm (every 16th frame), rows = rest-space deltas (every 8th).

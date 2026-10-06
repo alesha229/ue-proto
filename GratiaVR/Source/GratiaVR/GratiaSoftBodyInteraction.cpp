@@ -130,6 +130,7 @@ void UGratiaSoftBodyInteraction::UpdateZones()
             Zone.Radius = Chain.ContactRadiusCm * Scale;
             Zone.Axis = GratiaSoftBodyAxisVector(Chain.ForwardAxis);
             Zone.Rotation = World.GetRotation();
+            Zone.Pivot = World.GetLocation();
             // One surface for everything: press, squash and haptics use the same fitted shape
             // that stops the hand, so nothing starts before the palm reaches the skin.
             FVector SurfaceA, SurfaceB;
@@ -165,7 +166,7 @@ void UGratiaSoftBodyInteraction::GetConformSpheres(const FVector& Point, float R
 }
 
 void UGratiaSoftBodyInteraction::SubmitHand(bool bLeft, const FVector& Visible, const FVector& Raw, bool bAllowed, float Delta, float Grab,
-    const TArray<FVector>& Fingers, bool bPoseOwned)
+    const TArray<FVector>& Fingers, bool bPoseOwned, FName SqueezeBone, float Squeeze)
 {
     FHand& Hand = Hands[bLeft ? 0 : 1];
     const float Trigger = Grab;
@@ -234,6 +235,7 @@ void UGratiaSoftBodyInteraction::SubmitHand(bool bLeft, const FVector& Visible, 
         if (!Zone || FVector::Distance(Grabber + Hand.GrabOffset, Zone->Tip) > Settings.GrabBreakDistanceCm * Scale) ReleaseGrab(Hand);
     }
     Hand.Visible = Visible; Hand.Raw = Raw; Hand.Press = Press; Hand.Fingers = Fingers; Hand.Grabber = Grabber;
+    Hand.SqueezeBone = SqueezeBone; Hand.Squeeze = Squeeze;
     // Fingers were measured on the visible hand; the pressed hand is drawn at the press point.
     for (FVector& Finger : Hand.Fingers) Finger += Press - Visible;
     Hand.SubmitTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
@@ -318,8 +320,9 @@ void UGratiaSoftBodyInteraction::UpdateSquash(float Delta)
     {
         // Deepest hand sphere (palm or finger) inside the zone, relative to the zone radius;
         // the direction from the zone centre to it is where the part is squeezed.
-        double Depth = 0.0;
+        double Depth = 0.0, Extent = Zone.Radius;
         FVector Deepest = FVector::ZeroVector;
+        float Cup = 0.0f;
         auto Consider = [&](const FVector& Point, double RadiusCm)
         {
             const double Value = Zone.Radius + RadiusCm * Scale - FVector::Distance(Point, Zone.Center);
@@ -330,6 +333,7 @@ void UGratiaSoftBodyInteraction::UpdateSquash(float Delta)
             if (!Hand.bReady || Now - Hand.SubmitTime > 0.1) continue;
             Consider(Hand.Press, Settings.PalmRadiusCm);
             for (const FVector& Finger : Hand.Fingers) Consider(Finger, Settings.FingerRadiusCm);
+            if (Hand.SqueezeBone == Zone.Bone) Cup = FMath::Max(Cup, FMath::Clamp(Hand.Squeeze, 0.0f, 1.0f));
         }
         if (Depth > 0.0)
         {
@@ -340,8 +344,14 @@ void UGratiaSoftBodyInteraction::UpdateSquash(float Delta)
                 Direction = FMath::Lerp(Direction, Local, FMath::Min(1.0f, Step * 20.0f)).GetSafeNormal();
                 if (Direction.IsNearlyZero()) Direction = Local;
             }
+            // Scaled about the pivot, the skin under the hand moves by squash x its distance from
+            // the pivot along the press: squash = depth / distance keeps the skin on the hand.
+            const FVector Outward = (Deepest - Zone.Center).GetSafeNormal();
+            Extent = FMath::Max(0.5 * Zone.Radius, FVector::DotProduct(Zone.Center - Zone.Pivot, Outward) + Zone.Radius);
         }
-        const float Target = Settings.SquashAmount * float(FMath::Clamp(Depth / FMath::Max(Zone.Radius, 1.0f), 0.0, 1.0));
+        // A cupping hand squeezes by its trigger/grip; a press by its depth.
+        const float Target = FMath::Min(Settings.SquashAmount,
+            FMath::Max(Settings.SquashResponse * float(Depth / FMath::Max(Extent, 0.1)), Settings.SquashAmount * Cup));
         // Underdamped spring: soft follow while pressed, a short wobble on release.
         FVector2D& State = Squash.FindOrAdd(Zone.Bone);
         constexpr float Stiffness = 260.0f, Damping = 11.0f;

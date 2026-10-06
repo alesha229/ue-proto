@@ -20,6 +20,16 @@ The profile owns model-specific references and names:
   docs/MOCAP_KM466.md). `Segments` (optional) continue a long take part by part as one
   performance (each part plays once; the whole performance loops; parts share their
   boundary frame); the menu shows `Name n/N`, QA checks the chain.
+  `Scene` (optional) carries the rest of the source scene: `Music` (played by the character's
+  `UGratiaPerformanceStage` at the performance clock across segments, re-synced after a seek,
+  loop or hitch beyond `MusicResyncSeconds`; non-spatial; menu Sound switches it off),
+  `PartnerMesh` + `PartnerTransform` + `PartnerPose` (a static partner body: each aim turns a bone
+  so its reference child lies along From -> To in the partner's component space, parents first),
+  `PartnerHiddenInViewpoint` and `bHasViewpoint`/`Viewpoint` (the partner's eyes; menu **View**
+  switches to them: lie down and Recenter, the head goes to the partner's eyes and the body axis
+  follows the top of the head). Runtime QA checks partner aims (<= 3 deg), the viewpoint and music
+  sync. Gratia: KM466 performances use SKM_Manny_Simple posed like the VaM partner atom
+  (`extract_vam_scene_partner.py`, `import_performance_scene.py`, docs/MOCAP_KM466.md).
 - StrongReactionClip and MoodReactionClips: a touch faster than
   `ContactSettings.StrongReactionSpeedCmPerSecond` plays StrongReactionClip; otherwise the
   current mood (`Calm`, `Cheerful`, `Reserved`; menu item Mood) selects MoodReactionClips;

@@ -214,6 +214,12 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Stage 1|Calibration")
     void Recenter();
 
+    /** Watch the current performance from its partner's eyes (performance scene viewpoint).
+     *  In VR: lie down (floor or bed), then Recenter puts the head at the partner's eyes. */
+    UFUNCTION(BlueprintCallable, Category = "Stage 1|Calibration")
+    bool SetPartnerView(bool bEnable);
+    bool IsPartnerView() const { return bPartnerView; }
+
     UFUNCTION(BlueprintCallable, Category = "Stage 1|Calibration")
     void AdjustHeight(float DeltaCm);
 
@@ -302,6 +308,9 @@ private:
     double OriginalOriginZ = 0.0;
     bool bDesktopCameraApplied = false;
     bool bPendingRecenter = false;
+    bool bPartnerView = false;
+    bool bPartnerViewRequested = false;
+    float FreeHeightOffsetCm = 0.0f;
     float DebugRefreshSeconds = 0.0f;
 
     void BindPlayer();
@@ -312,6 +321,8 @@ private:
     FTransform GetParkedTransform(bool bLeft, const FVector& Scale) const;
     void ApplyHeight();
     void FinishRecenter();
+    bool RecenterToPartnerView();
+    void UpdatePartnerView();
     void UpdateDesktopCamera();
     void RunRequestedTests(float DeltaSeconds);
     void RunSoakAndMetrics(float DeltaSeconds);

@@ -1,4 +1,5 @@
 #include "GratiaStage1Runtime.h"
+#include "GratiaPerformanceStage.h"
 #include "GratiaRuntimeVerification.h"
 #include "GratiaPreviewCharacter.h"
 #include "GratiaLocomotion.h"
@@ -22,6 +23,8 @@
 #include "GameFramework/PlayerController.h"
 #include "HeadMountedDisplayFunctionLibrary.h"
 #include "InputCoreTypes.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Kismet/GameplayStatics.h"
 #include "MotionControllerComponent.h"
 #include "RenderTimer.h"
@@ -126,6 +129,7 @@ void AGratiaStage1Runtime::Tick(float DeltaSeconds)
     BindPlayer();
     bXRActive = UHeadMountedDisplayFunctionLibrary::IsHeadMountedDisplayEnabled();
     UpdateDesktopCamera();
+    UpdatePartnerView();
 
     // Apply recenter on the next tick, after the runtime has updated the head pose.
     if (bPendingRecenter)
@@ -491,7 +495,8 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
             const float Grab = HandInput ? FMath::Max(HandInput->GetTrigger(bLeft), HandInput->GetGrip(bLeft)) : 0.0f;
             // Cupping/wrapping places the hand itself; the soft part then follows the controller.
             const bool bPoseOwned = !Hand.CupBone.IsNone() || !Hand.GripBone.IsNone();
-            SoftBody->SubmitHand(bLeft, VisiblePalm, RawPalm, bAllowed, DeltaSeconds, Grab, Fingers, bPoseOwned);
+            SoftBody->SubmitHand(bLeft, VisiblePalm, RawPalm, bAllowed, DeltaSeconds, Grab, Fingers, bPoseOwned,
+                Hand.CupBone, Hand.CupBone.IsNone() ? 0.0f : Hand.CupSqueeze);
             // Inside a soft zone the visible hand sinks by the bounded press depth.
             if (SoftBody->HasPress(bLeft) && Hand.Gate.State == EGratiaHandState::Tracked)
                 Desired.SetLocation(SoftBody->GetPressPoint(bLeft) - (VisiblePalm - VisualWorld.GetLocation()));
@@ -733,7 +738,8 @@ void AGratiaStage1Runtime::ResetHeight()
 void AGratiaStage1Runtime::Recenter()
 {
     if (!bPawnReady) return;
-    if (bXRActive)
+    // A lying player has no meaningful HMD yaw; the partner view aligns the body axis itself.
+    if (bXRActive && !bPartnerView)
     {
         // Preserve floor-space height; the room alignment is handled explicitly below.
         UHeadMountedDisplayFunctionLibrary::ResetOrientationAndPosition(0.0f, EOrientPositionSelector::Orientation);
@@ -744,6 +750,7 @@ void AGratiaStage1Runtime::Recenter()
 void AGratiaStage1Runtime::FinishRecenter()
 {
     bPendingRecenter = false;
+    if (bPartnerView && RecenterToPartnerView()) return;
     if (!PlayerPawn.IsValid() || !Camera.IsValid() || !IsFiniteTransform(Camera->GetComponentTransform())) return;
     const double YawDelta = FMath::FindDeltaAngleDegrees(Camera->GetComponentRotation().Yaw, GetActorRotation().Yaw);
     PlayerPawn->AddActorWorldRotation(FRotator(0.0, YawDelta, 0.0), false, nullptr, ETeleportType::TeleportPhysics);
@@ -753,6 +760,77 @@ void AGratiaStage1Runtime::FinishRecenter()
         false, nullptr, ETeleportType::TeleportPhysics);
     UE_LOG(LogGratiaStage1, Display, TEXT("Recentered head XY to anchor %s; height offset=%.1f cm, XR=%s"),
         *GetActorLocation().ToString(), HeightOffsetCm, bXRActive ? TEXT("enabled") : TEXT("disabled"));
+}
+
+bool AGratiaStage1Runtime::SetPartnerView(bool bEnable)
+{
+    AGratiaPreviewCharacter* Character = TargetCharacter.Get();
+    UGratiaPerformanceStage* Stage = Character ? Character->PerformanceStage.Get() : nullptr;
+    FTransform Eye;
+    if (bEnable && (!Stage || !Stage->GetViewpoint(Eye)))
+    {
+        UE_LOG(LogGratiaStage1, Display, TEXT("PARTNER_VIEW unavailable: the current pose has no partner viewpoint"));
+        return false;
+    }
+    if (bEnable == bPartnerView) return true;
+    bPartnerView = bEnable;
+    if (Stage) Stage->SetViewpointActive(bEnable);
+    if (bEnable) FreeHeightOffsetCm = HeightOffsetCm;
+    else
+    {
+        HeightOffsetCm = FreeHeightOffsetCm; ApplyHeight();
+        if (!bXRActive && Camera.IsValid()) Camera->SetRelativeTransform(OriginalCameraRelative);
+    }
+    UE_LOG(LogGratiaStage1, Display, TEXT("PARTNER_VIEW %s"), bEnable ? TEXT("on") : TEXT("off"));
+    Recenter();
+    return true;
+}
+
+void AGratiaStage1Runtime::UpdatePartnerView()
+{
+    AGratiaPreviewCharacter* Character = TargetCharacter.Get();
+    UGratiaPerformanceStage* Stage = Character ? Character->PerformanceStage.Get() : nullptr;
+    if (!bPartnerViewRequested && FParse::Param(FCommandLine::Get(), TEXT("GratiaPartnerView")) && Stage)
+    {
+        FTransform Eye;
+        if (Stage->GetViewpoint(Eye)) { bPartnerViewRequested = true; SetPartnerView(true); }
+    }
+    if (!bPartnerView) return;
+    FTransform Eye;
+    if (!Stage || !Stage->GetViewpoint(Eye)) { SetPartnerView(false); return; }
+    // Desktop: the camera is the partner's eyes; VR keeps the tracked head (Recenter aligns it).
+    if (!bXRActive && Camera.IsValid())
+        Camera->SetWorldLocationAndRotation(Eye.GetLocation(), Eye.GetRotation());
+}
+
+bool AGratiaStage1Runtime::RecenterToPartnerView()
+{
+    AGratiaPreviewCharacter* Character = TargetCharacter.Get();
+    FTransform Eye;
+    if (!Character || !Character->PerformanceStage || !Character->PerformanceStage->GetViewpoint(Eye)
+        || !PlayerPawn.IsValid() || !Camera.IsValid() || !IsFiniteTransform(Camera->GetComponentTransform())) return false;
+    if (!bXRActive) return true;
+    // Lying: the top of the head gives the body axis (head -> partner's head). Standing: face
+    // along the partner's body toward the feet, standing at the partner's eyes.
+    const FQuat Head = Camera->GetComponentQuat();
+    const bool bLying = FMath::Abs(Head.GetUpVector().Z) < 0.6;
+    FVector Have = bLying ? Head.GetUpVector().GetSafeNormal2D() : Head.GetForwardVector().GetSafeNormal2D();
+    FVector Want = bLying ? Eye.GetRotation().GetUpVector().GetSafeNormal2D() : -Eye.GetRotation().GetUpVector().GetSafeNormal2D();
+    if (Have.IsNearlyZero() || Want.IsNearlyZero()) return false;
+    const double YawDelta = FMath::FindDeltaAngleDegrees(Have.Rotation().Yaw, Want.Rotation().Yaw);
+    PlayerPawn->AddActorWorldRotation(FRotator(0.0, YawDelta, 0.0), false, nullptr, ETeleportType::TeleportPhysics);
+    const FVector CameraPosition = Camera->GetComponentLocation();
+    PlayerPawn->AddActorWorldOffset(FVector(Eye.GetLocation().X - CameraPosition.X, Eye.GetLocation().Y - CameraPosition.Y, 0.0),
+        false, nullptr, ETeleportType::TeleportPhysics);
+    // Lying on the floor or a bed: the eyes go to the partner's eye height.
+    if (bLying)
+    {
+        HeightOffsetCm = FMath::Clamp(HeightOffsetCm + float(Eye.GetLocation().Z - Camera->GetComponentLocation().Z), -100.0f, 100.0f);
+        ApplyHeight();
+    }
+    UE_LOG(LogGratiaStage1, Display, TEXT("PARTNER_VIEW recenter lying=%d yaw_delta=%.1f height_offset=%.1fcm eye=%s"),
+        bLying ? 1 : 0, YawDelta, HeightOffsetCm, *Eye.GetLocation().ToString());
+    return true;
 }
 
 bool AGratiaStage1Runtime::IsHandInteractionAllowed(bool bLeftHand) const

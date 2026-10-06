@@ -9,6 +9,7 @@
 #include "EnhancedPlayerInput.h"
 #include "EnhancedInputComponent.h"
 #include "GratiaCharacterProfile.h"
+#include "GratiaPerformanceStage.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/Engine.h"
 #include "IXRTrackingSystem.h"
@@ -22,7 +23,7 @@
 #include "UObject/ConstructorHelpers.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogGratiaMenu, Log, All);
-constexpr int32 MenuRows = 15;
+constexpr int32 MenuRows = 16;
 UGratiaMenu::UGratiaMenu()
 {
     PrimaryComponentTick.bCanEverTick = true;
@@ -67,6 +68,14 @@ void UGratiaMenu::EndPlay(const EEndPlayReason::Type Reason)
 {
     BindInput(nullptr);
     Super::EndPlay(Reason);
+}
+const TCHAR* UGratiaMenu::ViewLabel() const
+{
+    const auto* R = Cast<AGratiaStage1Runtime>(GetOwner());
+    if (R && R->IsPartnerView()) return TEXT("partner eyes (lie down, Recenter)");
+    FTransform Eye;
+    const bool bAvailable = Character.IsValid() && Character->PerformanceStage && Character->PerformanceStage->GetViewpoint(Eye);
+    return bAvailable ? TEXT("free (apply: partner eyes)") : TEXT("free (no partner in this pose)");
 }
 FString UGratiaMenu::QualityLabel() const
 {
@@ -132,6 +141,7 @@ void UGratiaMenu::ApplySelected()
     case 12: I->bPhysicalMotion=!I->bPhysicalMotion; break;
     case 13: I->bSound=!I->bSound; break;
     case 14: I->bEarMotion=!I->bEarMotion; break;
+    case 15: if(R) R->SetPartnerView(!R->IsPartnerView()); break;
     }
     Refresh();
 }
@@ -147,7 +157,8 @@ void UGratiaMenu::Refresh()
         FString::Printf(TEXT("Hair motion: %s"),I->bHairMotion?TEXT("ON"):TEXT("OFF")),FString::Printf(TEXT("Cloth motion: %s"),I->bClothMotion?TEXT("ON"):TEXT("OFF")),
         FString::Printf(TEXT("Body motion: %s"),I->bBodyMotion?TEXT("ON"):TEXT("OFF")),FString::Printf(TEXT("Local springs: %s"),I->bLocalSpring?TEXT("ON"):TEXT("OFF")),
         FString::Printf(TEXT("Physical animation: %s"),I->bPhysicalMotion?TEXT("ON"):TEXT("OFF")), FString::Printf(TEXT("Sound: %s"),I->bSound?TEXT("ON"):TEXT("OFF")),
-        FString::Printf(TEXT("Ears / tail motion: %s"),I->bEarMotion?TEXT("ON"):TEXT("OFF"))
+        FString::Printf(TEXT("Ears / tail motion: %s"),I->bEarMotion?TEXT("ON"):TEXT("OFF")),
+        FString::Printf(TEXT("View: %s"),ViewLabel())
     };
     if (Character->CharacterProfile)
     {

@@ -13,6 +13,7 @@ class UGratiaReactionPresentation;
 class UGratiaSoftBodyInteraction;
 class UGratiaSoftBodyVerification;
 class UGratiaBodySurface;
+class UGratiaPerformanceStage;
 struct FGratiaPerformanceClip;
 
 UENUM(BlueprintType)
@@ -70,6 +71,9 @@ public:
     /** Touchable body surface for hands: palm collider, leaning onto the body, wrapping grips. */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Gratia|Physics")
     TObjectPtr<UGratiaBodySurface> BodySurface;
+    /** Music, partner body and partner viewpoint of the current performance. */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Performance")
+    TObjectPtr<UGratiaPerformanceStage> PerformanceStage;
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Gratia|Preview")
     EGratiaPreviewPose PreviewPose = EGratiaPreviewPose::Idle;

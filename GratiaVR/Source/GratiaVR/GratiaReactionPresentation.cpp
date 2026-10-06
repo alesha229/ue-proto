@@ -10,6 +10,7 @@
 #include "GameFramework/Pawn.h"
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
+#include "Sound/SoundAttenuation.h"
 #include "Sound/SoundWaveProcedural.h"
 
 namespace
@@ -28,6 +29,18 @@ UGratiaReactionPresentation::UGratiaReactionPresentation()
 
 void UGratiaReactionPresentation::BeginPlay()
 {
+    if (!ReactionAttenuation)
+    {
+        ReactionAttenuation = NewObject<USoundAttenuation>(this, TEXT("ReactionAttenuation"));
+        FSoundAttenuationSettings& Settings = ReactionAttenuation->Attenuation;
+        Settings.bAttenuate = true;
+        Settings.bSpatialize = true;
+        Settings.AttenuationShape = EAttenuationShape::Sphere;
+        Settings.AttenuationShapeExtents = FVector(30.0f, 0.0f, 0.0f);
+        Settings.FalloffDistance = 1200.0f;
+        // HRTF when a spatialization plugin is active, otherwise the engine's stereo panner.
+        Settings.SpatializationAlgorithm = ESoundSpatializationAlgorithm::SPATIALIZATION_HRTF;
+    }
     Super::BeginPlay();
     Character = Cast<AGratiaPreviewCharacter>(GetOwner());
     if (!Character.IsValid() || !Character->Interaction) return;
@@ -144,7 +157,7 @@ void UGratiaReactionPresentation::HandleContactReaction(FName ZoneName, int32 Ha
     if (ZoneIndex != INDEX_NONE) Location = Source->GetZoneWorldPosition(ZoneIndex);
     StopSound();
     ActiveAudio = UGameplayStatics::SpawnSoundAtLocation(this, Sound, Location, FRotator::ZeroRotator,
-        FMath::Clamp(NonnegativePresentation(SoundVolume), 0.0f, 1.0f));
+        FMath::Clamp(NonnegativePresentation(SoundVolume), 0.0f, 1.0f), 1.0f, 0.0f, ReactionAttenuation);
     LastChimeTime = Now;
 }
 

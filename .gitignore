@@ -35,3 +35,4 @@ Exports/Gratia/*.fbx
 *.key
 *.pem
 GratiaVR/Source/GratiaVR/Generated/
+Exports/Gratia/Audio/*.wav

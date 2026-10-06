@@ -22,6 +22,7 @@ public:
     bool bOpen = false;
     int32 Selected = 0;
     FString QualityLabel() const;
+    const TCHAR* ViewLabel() const;
 protected:
     virtual void BeginPlay() override;
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;

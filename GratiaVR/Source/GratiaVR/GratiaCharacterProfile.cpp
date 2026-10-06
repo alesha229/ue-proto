@@ -131,6 +131,22 @@ bool UGratiaCharacterProfile::ValidateProfile(TArray<FString>& Errors, TArray<FS
                 Errors.Add(FString::Printf(TEXT("Performance clip %d (%s) part %d requires a non-empty clip on this profile's skeleton."),
                     Index, *PerformanceClips[Index].Name.ToString(), Part));
         }
+        const FGratiaPerformanceScene& Scene = PerformanceClips[Index].Scene;
+        if (Scene.Music && (!FMath::IsFinite(Scene.Music->GetDuration()) || Scene.Music->GetDuration() <= 0.0f))
+            Errors.Add(FString::Printf(TEXT("Performance %s music has no finite duration."), *PerformanceClips[Index].Name.ToString()));
+        if (Scene.PartnerMesh)
+        {
+            const FReferenceSkeleton& PartnerRef = Scene.PartnerMesh->GetRefSkeleton();
+            for (const FGratiaPartnerAim& Aim : Scene.PartnerPose)
+                if (PartnerRef.FindBoneIndex(Aim.Bone) == INDEX_NONE || PartnerRef.FindBoneIndex(Aim.Child) == INDEX_NONE
+                    || Aim.From.ContainsNaN() || Aim.To.ContainsNaN() || Aim.From.Equals(Aim.To, 0.1))
+                    Errors.Add(FString::Printf(TEXT("Performance %s partner aim %s->%s is not on %s or has no direction."),
+                        *PerformanceClips[Index].Name.ToString(), *Aim.Bone.ToString(), *Aim.Child.ToString(), *Scene.PartnerMesh->GetName()));
+        }
+        else if (!Scene.PartnerPose.IsEmpty())
+            Errors.Add(FString::Printf(TEXT("Performance %s has a partner pose without a partner mesh."), *PerformanceClips[Index].Name.ToString()));
+        if (Scene.bHasViewpoint && (Scene.Viewpoint.ContainsNaN() || !Scene.Viewpoint.IsRotationNormalized()))
+            Errors.Add(FString::Printf(TEXT("Performance %s viewpoint is not a valid transform."), *PerformanceClips[Index].Name.ToString()));
     }
     auto ValidateReactionSound = [&Errors](const USoundBase* Sound, const FString& Label)
     {
