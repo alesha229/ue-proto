@@ -41,6 +41,11 @@ The profile owns model-specific references and names:
 - Semantic bone and morph maps. Gameplay asks for Head, LeftHand, BlinkLeft,
   Smile or Surprise; it does not contain exported Gratia bone names.
 - Character contact-zone geometry and hold permissions.
+- BodySurface capsules may carry `Influences` (bone + share): the capsule is skinned like the
+  skin it was fitted to (a butt sphere follows pelvis and thigh). `MeasureSphereSurface` fills
+  them from the part's own skin; `MeasureLimbSurface` counts the flesh of limb soft bones
+  (thigh jiggle bones) for their limb. Soft-body chains whose rest tip lies inside the body
+  colliders (limb chains) ignore the colliders along their own bone.
 - Separate sphere/capsule hand collision proxies. The initial profiles cover
   the head, torso/pelvis, upper arms, forearms, hands, thighs, shins and feet.
   These are conservative starting approximations, not certified surface matches.

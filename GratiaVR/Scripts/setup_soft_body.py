@@ -20,11 +20,16 @@ setup = unreal.GratiaSoftBodySetupLibrary
 
 # One chain per side: mirrored bones can have opposite forward axes.
 # Values: VRChat-PhysBone-like spring settings; butt is heavier/softer in the source.
+# 6 Oct: livelier (user VR feedback "not enough jiggle"): less damping and world damping, so body
+# motion carries into the soft parts; thighs (DEF-thigh_soft, ThighsPhys region, author_soft_regions.py)
+# are stiffer with a small swing.
 presets = {
-    'Breast': dict(bones=['DEF-breast_L', 'DEF-breast_R'], damping=0.12, stiffness=0.06, world_location=0.7,
-                   world_rotation=0.7, collision=3.0, limit=25.0, gravity=0.2, grab=0.5, stretch=6.0),
-    'Butt': dict(bones=['DEF-ass_L', 'DEF-ass_R'], damping=0.15, stiffness=0.04, world_location=0.75,
-                 world_rotation=0.75, collision=2.5, limit=20.0, gravity=0.2, grab=0.4, stretch=4.0),
+    'Breast': dict(bones=['DEF-breast_L', 'DEF-breast_R'], damping=0.08, stiffness=0.045, world_location=0.4,
+                   world_rotation=0.4, collision=3.0, limit=30.0, gravity=0.2, grab=0.5, stretch=6.0),
+    'Butt': dict(bones=['DEF-ass_L', 'DEF-ass_R'], damping=0.1, stiffness=0.03, world_location=0.45,
+                 world_rotation=0.45, collision=2.5, limit=25.0, gravity=0.2, grab=0.4, stretch=4.0),
+    'Thigh': dict(bones=['DEF-thigh_soft_L', 'DEF-thigh_soft_R', 'DEF-thigh_soft_L_001', 'DEF-thigh_soft_R_001'], damping=0.12, stiffness=0.08, world_location=0.55,
+                  world_rotation=0.55, collision=2.0, limit=8.0, gravity=0.1, grab=0.3, stretch=3.0),
 }
 chains, soft_bones, report = [], [], []
 for group, p in presets.items():
@@ -33,7 +38,8 @@ for group, p in presets.items():
         assert measured, bone
         axis, length, radius, along = measured
         chain = unreal.GratiaSoftBodyChain()
-        values = dict(name=f"{group}_{bone[-1]}", root_bones=[bone], forward_axis=axis, dummy_bone_length_cm=length,
+        side = "L" if "_L" in bone else "R"
+        values = dict(name=f"{group}_{side}" + ("2" if bone.endswith("_001") else ""), root_bones=[bone], forward_axis=axis, dummy_bone_length_cm=length,
                       damping=p['damping'], stiffness=p['stiffness'], world_damping_location=p['world_location'],
                       world_damping_rotation=p['world_rotation'], collision_radius_cm=p['collision'],
                       limit_angle_degrees=p['limit'], gravity_scale=p['gravity'], contact_radius_cm=radius,
@@ -57,8 +63,10 @@ settings.set_editor_property('palm_radius_cm', 1.5)
 settings.set_editor_property('press_palm_radius_cm', 1.5)
 # The skin yields first (squash follows the press depth), then the whole part moves away.
 settings.set_editor_property('hand_push_fraction', 0.4)
-settings.set_editor_property('squash_amount', 0.55)
-settings.set_editor_property('squash_response', 1.0)
+settings.set_editor_property('squash_amount', 0.6)
+settings.set_editor_property('squash_response', 1.3)
+settings.set_editor_property('squash_bulge', 0.7)
+settings.set_editor_property('soft_press_depth_cm', 5.5)
 settings.set_editor_property('body_colliders', colliders)
 profile.set_editor_property('soft_body', settings)
 # KawaiiPhysics owns these bones; the rigid secondary path must not simulate them too.

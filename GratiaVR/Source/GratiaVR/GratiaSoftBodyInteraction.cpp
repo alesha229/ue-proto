@@ -424,16 +424,24 @@ void UGratiaSoftBodyInteraction::PushPress()
     }
     PressSpheres = Slot;
     for (; Slot < SphereNames.Num(); ++Slot) Instance->SetVectorParameterValue(SphereNames[Slot], Empty);
-    if (Zones.Num() > ZoneNames.Num() && !bWarnedZoneSlots)
+    // The material has a few zone-mask slots: the zones nearest the hands get them (a dent only
+    // appears under a hand), so any number of soft zones can dent.
+    TArray<int32, TInlineAllocator<16>> Order;
+    for (int32 Index = 0; Index < Zones.Num(); ++Index) Order.Add(Index);
+    auto HandGap = [&](const FZone& Zone)
     {
-        bWarnedZoneSlots = true;
-        UE_LOG(LogGratiaSoftBody, Warning, TEXT("SOFT_BODY press uses the first %d of %d zones"), ZoneNames.Num(), Zones.Num());
-    }
-    for (int32 Index = 0; Index < ZoneNames.Num(); ++Index)
+        double Best = DBL_MAX;
+        for (const FHand& Hand : Hands)
+            if (Hand.bReady && Now - Hand.SubmitTime <= 0.1) Best = FMath::Min(Best, FVector::Distance(Hand.Press, Zone.Center) - Zone.Radius);
+        return Best;
+    };
+    if (Zones.Num() > ZoneNames.Num())
+        Order.Sort([&](int32 A, int32 B) { return HandGap(Zones[A]) < HandGap(Zones[B]); });
+    for (int32 ZoneSlot = 0; ZoneSlot < ZoneNames.Num(); ++ZoneSlot)
     {
-        if (!Zones.IsValidIndex(Index)) { Instance->SetVectorParameterValue(ZoneNames[Index], Empty); continue; }
-        const FZone& Zone = Zones[Index];
-        Instance->SetVectorParameterValue(ZoneNames[Index], FLinearColor(Zone.Center.X, Zone.Center.Y, Zone.Center.Z, Zone.Radius * Settings.PressZoneScale));
+        if (!Order.IsValidIndex(ZoneSlot)) { Instance->SetVectorParameterValue(ZoneNames[ZoneSlot], Empty); continue; }
+        const FZone& Zone = Zones[Order[ZoneSlot]];
+        Instance->SetVectorParameterValue(ZoneNames[ZoneSlot], FLinearColor(Zone.Center.X, Zone.Center.Y, Zone.Center.Z, Zone.Radius * Settings.PressZoneScale));
     }
     Instance->SetVectorParameterValue(TEXT("Config"), FLinearColor(Settings.PressSoftnessCm * Scale, 1.0f,
         Settings.PressZoneFalloffCm * Scale, FMath::Clamp(Settings.PressStrength, 0.0f, 1.0f)));

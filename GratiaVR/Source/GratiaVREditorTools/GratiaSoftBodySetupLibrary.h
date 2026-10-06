@@ -36,6 +36,12 @@ public:
     static bool MeasureBodySurface(USkeletalMesh* SkeletalMesh, const TArray<FName>& IncludeSlots, const TArray<FName>& ExcludeBones,
         int32 MinVertices, float RadiusPercentile, TArray<FGratiaSurfaceCapsule>& Capsules);
 
+    /** MeasureBodySurface where the weights of MergeIntoParent bones (soft bones sharing a limb's
+     *  flesh, e.g. thigh jiggle bones) count for their parent bone: the limb keeps its whole surface. */
+    UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
+    static bool MeasureLimbSurface(USkeletalMesh* SkeletalMesh, const TArray<FName>& IncludeSlots, const TArray<FName>& ExcludeBones,
+        const TArray<FName>& MergeIntoParent, int32 MinVertices, float RadiusPercentile, TArray<FGratiaSurfaceCapsule>& Capsules);
+
     /**
      * One sphere per bone fitted (least squares) to the surface it skins, e.g. a breast dome
      * or the head; radius at RadiusPercentile of the vertex distances (outer layer).

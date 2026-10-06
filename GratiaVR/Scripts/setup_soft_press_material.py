@@ -2,7 +2,7 @@
 
 Editor commandlet, run after the C++ editor build. Creates
 - /Game/Gratia/Physics/MPC_GratiaSoftPress: Sphere00..23 (hand palm/finger spheres, world cm),
-  Zone0..3 (soft zone masks), Config (softness cm, -, zone falloff cm, strength);
+  Zone0..3 (soft zone masks: the zones nearest the hands each frame), Config (softness cm, -, zone falloff cm, strength);
 - /Game/Gratia/CharacterMaterials/MF_GratiaSoftPress: vertex offset (dent with a smooth rim)
   plus a bent lighting normal and slight darkening inside the dent;
 and wires it into the skin and cloth materials (Unlit toon: emissive = diffuse * light term).
@@ -19,7 +19,8 @@ lib = unreal.EditorAssetLibrary
 mel = unreal.MaterialEditingLibrary
 tools = unreal.AssetToolsHelpers.get_asset_tools()
 SPHERES = [f"Sphere{i:02d}" for i in range(24)]
-ZONES = [f"Zone{i}" for i in range(4)]
+ZONE_SLOTS = 4  # GratiaPressZoneSlots in GratiaSoftBodyInteraction.cpp (Custom node input limit: 1+24+4+2)
+ZONES = [f"Zone{i}" for i in range(ZONE_SLOTS)]
 # Skin is pushed 0.35 cm further than the clothing above it.
 TARGETS = {
     "/Game/Gratia/CharacterMaterials/M_Gratia_Body_skin": 0.35,
@@ -131,7 +132,7 @@ for index, name in enumerate(SPHERES + ZONES + ["Config"]):
 
 def custom(code, output_type, x, y, extra):
     node = expr(unreal.MaterialExpressionCustom, x, y)
-    names = extra + [f"S{i}" for i in range(24)] + [f"Z{i}" for i in range(4)] + ["Cfg", "Layer"]
+    names = extra + [f"S{i}" for i in range(24)] + [f"Z{i}" for i in range(ZONE_SLOTS)] + ["Cfg", "Layer"]
     inputs = []
     for name in names:
         item = unreal.CustomInput()
@@ -142,7 +143,7 @@ def custom(code, output_type, x, y, extra):
     node.set_editor_property("output_type", output_type)
     for i in range(24):
         assert mel.connect_material_expressions(params[SPHERES[i]], "", node, f"S{i}")
-    for i in range(4):
+    for i in range(ZONE_SLOTS):
         assert mel.connect_material_expressions(params[ZONES[i]], "", node, f"Z{i}")
     assert mel.connect_material_expressions(params["Config"], "", node, "Cfg")
     assert mel.connect_material_expressions(layer_in, "", node, "Layer")

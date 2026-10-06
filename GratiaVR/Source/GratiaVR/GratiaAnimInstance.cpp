@@ -36,6 +36,19 @@ struct FGratiaKawaiiChain
 
 constexpr int32 GratiaKawaiiMaxHandSpheres = 24;
 
+FVector GratiaAnimAxisVector(EGratiaBoneAxis Axis)
+{
+    switch (Axis)
+    {
+    case EGratiaBoneAxis::XNegative: return -FVector::XAxisVector;
+    case EGratiaBoneAxis::YPositive: return FVector::YAxisVector;
+    case EGratiaBoneAxis::YNegative: return -FVector::YAxisVector;
+    case EGratiaBoneAxis::ZPositive: return FVector::ZAxisVector;
+    case EGratiaBoneAxis::ZNegative: return -FVector::ZAxisVector;
+    default: return FVector::XAxisVector;
+    }
+}
+
 EBoneForwardAxis ToKawaiiAxis(EGratiaBoneAxis Axis)
 {
     switch (Axis)
@@ -126,11 +139,19 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
             if (Chain.GravityParent != INDEX_NONE) Chain.GravityParentRef = GratiaKawaiiRefTransform(Ref, Chain.GravityParent).GetRotation();
             Node.TargetFramerate = 90;
             Node.bUpdatePhysicsSettingsInGame = true;
-            // Source body collision follows its skinning bones.
+            // Source body collision follows its skinning bones. A chain inside its own flesh (a
+            // limb: its rest tip is inside a collider) ignores the spheres along its bone, or they
+            // would hold it in place; a breast or butt keeps every sphere.
+            const FTransform RootRef = GratiaKawaiiRefTransform(Ref, Ref.FindBoneIndex(Roots[0]));
+            const FVector RootPoint = RootRef.GetLocation();
+            const FVector TipPoint = RootPoint + RootRef.GetRotation().RotateVector(GratiaAnimAxisVector(Definition.ForwardAxis)) * Definition.DummyBoneLengthCm;
+            const bool bInsideLimb = Profile->SoftBody.BodyColliders.ContainsByPredicate([&](const FGratiaBodyColliderSphere& Sphere)
+                { return FVector::Distance(Sphere.RefCenterCm, TipPoint) < Sphere.RadiusCm; });
             for (const FGratiaBodyColliderSphere& Sphere : Profile->SoftBody.BodyColliders)
             {
                 const int32 Bone = Ref.FindBoneIndex(Sphere.Bone);
                 if (Bone == INDEX_NONE) continue;
+                if (bInsideLimb && FMath::PointDistToSegment(Sphere.RefCenterCm, RootPoint, TipPoint) < Sphere.RadiusCm + 4.0f) continue;
                 FSphericalLimit Limit;
                 Limit.DrivingBone = FBoneReference(Sphere.Bone);
                 Limit.OffsetLocation = GratiaKawaiiRefTransform(Ref, Bone).InverseTransformPosition(Sphere.RefCenterCm);

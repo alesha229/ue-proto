@@ -1,4 +1,5 @@
 #include "GratiaBodySurface.h"
+#include "AnimationRuntime.h"
 
 #include "GratiaCharacterProfile.h"
 #include "GratiaContactSolver.h"
@@ -24,12 +25,26 @@ void UGratiaBodySurface::Resolve() const
     if (ResolvedProfile.Get() == Profile && (Profile == nullptr || !Resolved.IsEmpty() || Profile->BodySurface.IsEmpty())) return;
     ResolvedProfile = Profile;
     Resolved.Reset();
-    if (!Profile || !Character->CharacterMesh) return;
+    if (!Profile || !Character->CharacterMesh || !Character->CharacterMesh->GetSkeletalMeshAsset()) return;
+    const FReferenceSkeleton& Ref = Character->CharacterMesh->GetSkeletalMeshAsset()->GetRefSkeleton();
     for (const FGratiaSurfaceCapsule& Capsule : Profile->BodySurface)
     {
         const int32 Bone = Character->CharacterMesh->GetBoneIndex(Capsule.Bone);
         if (Bone == INDEX_NONE || Capsule.StartCm.ContainsNaN() || Capsule.EndCm.ContainsNaN() || !(Capsule.RadiusCm > 0)) continue;
-        Resolved.Add({Bone, Capsule.Bone, Capsule.StartCm, Capsule.EndCm, Capsule.WrapAxis.GetSafeNormal(), Capsule.RadiusCm, Capsule.bGrip, Capsule.bSoft});
+        FResolved& Entry = Resolved.Add_GetRef({Bone, Capsule.Bone, Capsule.StartCm, Capsule.EndCm, Capsule.WrapAxis.GetSafeNormal(), Capsule.RadiusCm, Capsule.bGrip, Capsule.bSoft});
+        // Influences: the reference endpoints expressed in each influence bone's reference space.
+        const FTransform Main = FAnimationRuntime::GetComponentSpaceTransformRefPose(Ref, Bone);
+        float Total = 0.0f;
+        for (const FGratiaSurfaceInfluence& Influence : Capsule.Influences)
+        {
+            const int32 Index = Ref.FindBoneIndex(Influence.Bone);
+            if (Index == INDEX_NONE || !(Influence.Weight > 0.0f)) continue;
+            const FTransform Other = FAnimationRuntime::GetComponentSpaceTransformRefPose(Ref, Index);
+            Entry.Influences.Add({Index, Other.InverseTransformPosition(Main.TransformPosition(Capsule.StartCm)),
+                Other.InverseTransformPosition(Main.TransformPosition(Capsule.EndCm)), Influence.Weight});
+            Total += Influence.Weight;
+        }
+        for (FInfluence& Influence : Entry.Influences) Influence.Weight /= FMath::Max(Total, 1.0e-4f);
     }
 }
 
@@ -49,9 +64,22 @@ bool UGratiaBodySurface::HasSurface() const
 void UGratiaBodySurface::WorldCapsule(const FResolved& Capsule, FVector& A, FVector& B, float& Radius) const
 {
     const USkeletalMeshComponent* Mesh = Character->CharacterMesh.Get();
-    const FTransform Bone = Mesh->GetBoneTransform(Capsule.Bone);
-    A = Bone.TransformPosition(Capsule.Start);
-    B = Bone.TransformPosition(Capsule.End);
+    if (!Capsule.Influences.IsEmpty())
+    {
+        A = B = FVector::ZeroVector;
+        for (const FInfluence& Influence : Capsule.Influences)
+        {
+            const FTransform Bone = Mesh->GetBoneTransform(Influence.Bone);
+            A += Bone.TransformPosition(Influence.Start) * Influence.Weight;
+            B += Bone.TransformPosition(Influence.End) * Influence.Weight;
+        }
+    }
+    else
+    {
+        const FTransform Bone = Mesh->GetBoneTransform(Capsule.Bone);
+        A = Bone.TransformPosition(Capsule.Start);
+        B = Bone.TransformPosition(Capsule.End);
+    }
     Radius = Capsule.Radius * float(Mesh->GetComponentTransform().GetScale3D().GetAbsMax());
 }
 

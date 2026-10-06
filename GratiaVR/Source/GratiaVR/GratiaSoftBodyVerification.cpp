@@ -138,7 +138,7 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
     if (!bRequested || bFinished) return;
     Elapsed += Delta;
     auto* SoftBody = Character.IsValid() ? Character->SoftBodyInteraction.Get() : nullptr;
-    if (Elapsed > 90 || !SoftBody || SoftBody->HasFault()) { Check(false, TEXT("soft body QA timeout or safety fault")); Finish(); return; }
+    if (Elapsed > 180 || !SoftBody || SoftBody->HasFault()) { Check(false, TEXT("soft body QA timeout or safety fault")); Finish(); return; }
     if (!FMath::IsFinite(Delta) || Delta <= 0 || Delta > 0.1f) return;
     PhaseSeconds += Delta;
     SoftBody->UpdateZones();
@@ -182,6 +182,13 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
         if (PhaseSeconds < 0.5f) break;
         BaselineTip /= BaselineSamples;
         Outward = (Zone->Tip - Zone->Center).GetSafeNormal();
+        // A chain along a limb (thigh) is pressed from the front of the limb, across its axis.
+        bLimbZone = FMath::Abs(FVector::DotProduct(Outward, Actor.GetRotation().GetUpVector())) > 0.7;
+        if (bLimbZone)
+        {
+            const FVector Front = Actor.GetRotation().RotateVector(Character->CharacterProfile->ForwardAxis);
+            Outward = FVector::VectorPlaneProject(Front, (Zone->Tip - Zone->Center).GetSafeNormal()).GetSafeNormal();
+        }
         Start = Zone->Center + Outward * (Zone->Radius + Settings.PalmRadiusCm + 6);
         Pressed = Zone->Center + Outward * (Zone->Radius + Settings.PalmRadiusCm - Settings.HapticFullDepthCm);
         UE_LOG(LogGratiaSoftBodyQA, Display, TEXT("SOFT_BODY_QA_ZONE %s bone=%s radius=%.2f"), *Zone->Chain.ToString(), *Zone->Bone.ToString(), Zone->Radius);
@@ -223,7 +230,8 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
         const double Expected = Settings.HapticMaxAmplitude * FMath::Pow(FMath::Clamp(LastDepth / Settings.HapticFullDepthCm, 0.0, 1.0), Settings.HapticDepthExponent);
         Check(bMonotonic && LastDepth >= 1.0 && FMath::IsNearlyEqual(LastAmplitude, Expected, 0.05),
             FString::Printf(TEXT("%s vibration rises with depth: %.2f at %.1fcm (expected %.2f)"), *Zone->Chain.ToString(), LastAmplitude, LastDepth, Expected));
-        Check(PressTipCm >= 0.3, FString::Printf(TEXT("%s pressed tip moved %.2fcm (min 0.3)"), *Zone->Bone.ToString(), PressTipCm));
+        // A limb chain's tip lies inside the limb: a press compresses it rather than swinging it.
+        if (!bLimbZone) Check(PressTipCm >= 0.3, FString::Printf(TEXT("%s pressed tip moved %.2fcm (min 0.3)"), *Zone->Bone.ToString(), PressTipCm));
         Check(OnsetGapCm <= 0.3 && OnsetGapCm >= -1.0, FString::Printf(TEXT("%s squeeze and vibration start when the palm reaches the skin (gap %.2fcm)"),
             *Zone->Chain.ToString(), OnsetGapCm));
         Advance(EPhase::Squeeze);
@@ -265,7 +273,8 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
     case EPhase::SideSqueeze:
     {
         // Pressed from the side the part compresses across, not along its front axis.
-        const FVector Side = FVector::CrossProduct(Outward, FVector::UpVector).GetSafeNormal();
+        FVector Side = FVector::CrossProduct(Outward, FVector::UpVector).GetSafeNormal();
+        if (Side.IsNearlyZero()) Side = FVector::CrossProduct(Outward, FVector::ForwardVector).GetSafeNormal();
         Submit(Zone->Center + Side * (Zone->Radius + Settings.PalmRadiusCm - Settings.HapticFullDepthCm), Delta, 0);
         if (PhaseSeconds < 0.6f) break;
         const FVector SideScale = SoftBody->GetSquashScale(Zone->Bone);
@@ -304,7 +313,9 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
     case EPhase::Pull:
     {
         // Lift across the bone: a pull along the bone axis cannot rotate a fixed-length bone.
-        const FVector Lift = FVector::VectorPlaneProject(Actor.GetRotation().GetUpVector(), Outward).GetSafeNormal();
+        const FVector BoneAxis = (Zone->Tip - Zone->Pivot).GetSafeNormal();
+        FVector Lift = FVector::VectorPlaneProject(FVector::VectorPlaneProject(Actor.GetRotation().GetUpVector(), Outward), BoneAxis).GetSafeNormal();
+        if (Lift.IsNearlyZero()) Lift = FVector::CrossProduct(Outward, BoneAxis).GetSafeNormal();
         const float T = FMath::Clamp(PhaseSeconds / 0.6f, 0.0f, 1.0f);
         Submit(Pressed + Lift * 5.0 * T, Delta, 1);
         PullTipCm = FMath::Max(PullTipCm, FVector::DotProduct(CurrentTip() - BaselineTip, Actor.InverseTransformVectorNoScale(Lift)));

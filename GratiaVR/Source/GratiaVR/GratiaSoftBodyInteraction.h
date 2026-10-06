@@ -125,5 +125,4 @@ private:
     TMap<FName, FVector> SquashDirection;
     void UpdateSquash(float Delta);
     bool bPressCleared = false;
-    bool bWarnedZoneSlots = false;
 };

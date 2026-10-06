@@ -59,7 +59,9 @@ def tagged(capsules, grip, soft_part):
 
 
 # 80th percentile: the hand meets the outer layer (clothing, skirt panels), not the middle of it.
-limbs = tagged(setup.measure_body_surface(mesh, include, excluded, 40, 0.8), True, False)
+# Thigh jiggle bones share the thigh's flesh: their skin counts for the thigh capsules.
+limb_soft = [b for b in soft if "thigh" in b.lower()]
+limbs = tagged(setup.measure_limb_surface(mesh, include, excluded, limb_soft, 40, 0.8), True, False)
 limbs = [c for c in limbs if c.get_editor_property("radius_cm") >= 1.0 or "hand" in str(c.get_editor_property("bone")).lower()]
 # Slices use every vertex at their height except limbs, head/neck, soft parts and dangling
 # pieces: the belly front and the clothing over it belong to many bones, and a ring made only
@@ -68,12 +70,15 @@ not_torso = ("arm", "hand", "shoulder", "thigh", "shin", "foot", "tail", "hair",
 slice_vertex_bones = [b for b in bones if b not in soft and b != head and b not in neck
                       and not any(t in b.lower() for t in not_torso)]
 slices = tagged(setup.measure_torso_slices(mesh, include, slice_vertex_bones, attach, 3.5), True, False)
-# Soft parts: median radius (through the skin, not around it); the dent shows the contact.
-softs = tagged(setup.measure_sphere_surface(mesh, include, soft, 0.5), False, True)
+# Soft parts: median radius (through the skin, not around it); the dent shows the contact. Spheres
+# follow the bones of the skin they fit (butt: soft bone, pelvis and thigh). Limb soft bones (thighs)
+# lie inside their limb: the limb capsule is their surface, no sphere.
+sphere_soft = [b for b in soft if "thigh" not in b.lower()]
+softs = tagged(setup.measure_sphere_surface(mesh, include, sphere_soft, 0.5), False, True)
 heads = tagged(setup.measure_sphere_surface(mesh, head_include, [head], 0.8), False, False)
 necks = tagged(setup.measure_body_surface(mesh, head_include, [b for b in bones if b not in neck], 20, 0.8), False, False)
 assert limbs and slices, "body surface fit failed"
-assert len(softs) == len(soft), ("soft part spheres", len(softs), soft)
+assert len(softs) == len(sphere_soft), ("soft part spheres", len(softs), sphere_soft)
 assert heads, "head sphere fit failed"
 
 capsules = limbs + slices + softs + heads + necks

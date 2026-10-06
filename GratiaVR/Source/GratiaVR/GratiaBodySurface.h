@@ -76,7 +76,9 @@ protected:
     virtual void BeginPlay() override;
 
 private:
-    struct FResolved { int32 Bone = INDEX_NONE; FName Name; FVector Start, End, Wrap; float Radius = 0; bool bGrip = true; bool bSoft = false; };
+    struct FInfluence { int32 Bone = INDEX_NONE; FVector Start, End; float Weight = 0; };
+    struct FResolved { int32 Bone = INDEX_NONE; FName Name; FVector Start, End, Wrap; float Radius = 0; bool bGrip = true; bool bSoft = false;
+        TArray<FInfluence> Influences; };
     /** Soft-part capsules replace the coarse soft-body zone spheres when present. */
     bool UseZoneSpheres() const;
     void Resolve() const;

@@ -61,6 +61,7 @@ private:
     double OnsetGapCm = 100.0;
     FVector FrontScale = FVector::OneVector;
     float CupHalf = -1.0f;
+    bool bLimbZone = false;
     int32 BaselineSamples = 0;
     double PressTipCm = 0, PullTipCm = 0, ReturnTipCm = 0;
     TArray<FVector2D> DepthAmplitude;

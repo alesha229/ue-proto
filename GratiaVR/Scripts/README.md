@@ -23,6 +23,14 @@
 `Exports/Gratia/Audio/KM466_Music.wav` (44,1 кГц, стерео, не в git), затем коммандлет
 `import_performance_scene.py` (после каждого импорта перформансов: он заново заполняет `Scene`).
 
+Мягкие области игрового рига (как общие клетки Blender TitsPhys/AssPhys/ThighsPhys):
+`author_soft_regions.py` через Blender MCP с заголовком `PHASE = '...'`: `restore` (из копии
+до правок) → `apply` (веса мягких костей одежды по коже, верх над грудью — «вторая кожа»,
+кожа под плотной тканью на ≥2,5 мм внутрь, кости `DEF-thigh_soft`) → `validate` → `save` →
+`export` (`Gratia_Game_mesh.fbx`). Затем коммандлеты `reimport_game_mesh.py` (меш, скелет
+дополняется, ожидаемые количества профиля) → `setup_soft_body.py` → `setup_body_surface.py`
+→ `setup_soft_press_material.py` (8 зон вмятины).
+
 `correct_kitty_mocap.py` и `preview_kitty_mocap.py` — **исторические** скрипты второй
 отклонённой попытки (GPT, 5 октября); остальные её скрипты лежат в
 `evidence/05/kitty_mocap/failed_scripts`. Не запускать.

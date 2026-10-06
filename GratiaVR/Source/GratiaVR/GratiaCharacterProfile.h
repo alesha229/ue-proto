@@ -358,6 +358,17 @@ struct GRATIAVR_API FGratiaPerformanceClip
     UAnimSequence* GetPart(int32 Index) const { return Index == 0 ? Clip.Get() : Segments.IsValidIndex(Index - 1) ? Segments[Index - 1].Get() : nullptr; }
 };
 
+/** One bone a surface capsule follows, with its share (like a skinned vertex). */
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaSurfaceInfluence
+{
+    GENERATED_BODY()
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Body Surface")
+    FName Bone;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Body Surface", meta = (ClampMin = "0", ClampMax = "1"))
+    float Weight = 1.0f;
+};
+
 /** Capsule fitted to the visible skin/clothing around one bone (reference pose, bone space). */
 USTRUCT(BlueprintType)
 struct GRATIAVR_API FGratiaSurfaceCapsule
@@ -381,6 +392,10 @@ struct GRATIAVR_API FGratiaSurfaceCapsule
     /** Soft part (moves with its KawaiiPhysics bone): squeezing fingers may sink into it. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Body Surface")
     bool bSoft = false;
+    /** The capsule moves like the skin it was fitted to: blended over these bones (weights
+     *  of the fitted vertices). Empty: rigid with Bone. A butt sphere follows pelvis and thigh. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Body Surface")
+    TArray<FGratiaSurfaceInfluence> Influences;
 };
 
 /** Hands on the body surface: palm collider, leaning onto the surface and wrapping grips. */
@@ -468,7 +483,7 @@ struct GRATIAVR_API FGratiaSoftBodySettings
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Haptics", meta = (ClampMin = "0", ClampMax = "0.5", Units = "s"))
     float HapticPulseSeconds = 0.06f;
     /** Surface press of skin and clothing (material vertex offset). Receives hand spheres
-     *  Sphere00..Sphere23, soft zones Zone0..Zone3 and Config (softness, -, zone falloff,
+     *  Sphere00..Sphere23, soft zones Zone0..Zone7 and Config (softness, -, zone falloff,
      *  strength). Materials reference the same collection; empty disables the press. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Soft Body|Press")
     TObjectPtr<UMaterialParameterCollection> PressCollection;

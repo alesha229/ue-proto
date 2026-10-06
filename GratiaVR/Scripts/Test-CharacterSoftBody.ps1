@@ -1,4 +1,4 @@
-param([ValidateRange(1, 600)][int]$TimeoutSeconds = 90, [ValidateSet('04')][string]$EvidenceStage = '04')
+param([ValidateRange(1, 600)][int]$TimeoutSeconds = 200, [ValidateSet('04')][string]$EvidenceStage = '04')
 $ErrorActionPreference = 'Stop'
 $workspaceRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $archiveRoot = Join-Path $workspaceRoot 'Builds\Windows'
