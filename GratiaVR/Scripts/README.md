@@ -28,8 +28,14 @@
 до правок) → `apply` (веса мягких костей одежды по коже, верх над грудью — «вторая кожа»,
 кожа под плотной тканью на ≥2,5 мм внутрь, кости `DEF-thigh_soft`) → `validate` → `save` →
 `export` (`Gratia_Game_mesh.fbx`). Затем коммандлеты `reimport_game_mesh.py` (меш, скелет
-дополняется, ожидаемые количества профиля) → `setup_soft_body.py` → `setup_body_surface.py`
-→ `setup_soft_press_material.py` (вмятина: 4 слота, ближайшие к рукам зоны).
+дополняется, ожидаемые количества профиля) → `setup_soft_body.py` (без коллайдеров рук самой
+героини) → `setup_body_surface.py` (ягодица — сфера по всей части, грудь и голова — по ядру)
+→ `setup_soft_press_material.py` (вмятина: 4 слота, ближайшие к рукам зоны)
+→ `setup_spring_bones.py`.
+
+Волосы, галстук, бантики сапог, бахрома эполет, уши и хвост — пружинные цепочки KawaiiPhysics
+(`setup_spring_bones.py`: цепочки из `physics_group_manifest.json` и эполет, ось костей
+измеряется, Chaos для этих костей выключается, отчёт `evidence/05/spring_chain_setup.json`).
 
 `correct_kitty_mocap.py` и `preview_kitty_mocap.py` — **исторические** скрипты второй
 отклонённой попытки (GPT, 5 октября); остальные её скрипты лежат в

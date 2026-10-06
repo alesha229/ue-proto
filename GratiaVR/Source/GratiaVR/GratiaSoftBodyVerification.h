@@ -29,7 +29,8 @@ protected:
     virtual void TickComponent(float Delta, ELevelTick Type, FActorComponentTickFunction* Tick) override;
 
 private:
-    enum class EPhase : uint8 { Settle, Baseline, Approach, Press, Squeeze, SideSqueeze, Cup, Arm, Grab, Pull, Release, Lost, NextZone, Conform, BodyGrip, Disabled, Resumed, Tilt, Upright };
+    enum class EPhase : uint8 { Settle, Baseline, Approach, Press, Squeeze, SideSqueeze, Cup, Arm, Grab, Pull, Release, Lost, NextZone, Conform, BodyGrip, Disabled, Resumed, Tilt, Upright,
+        SpringRest, SpringPush, SpringArm, SpringGrab, SpringPull, SpringRelease, SpringToggle };
     bool Check(bool bPass, const FString& Description);
     void Advance(EPhase Next) { Phase = Next; PhaseSeconds = 0; }
     void Finish();
@@ -69,4 +70,13 @@ private:
     FRotator SavedRotation = FRotator::ZeroRotator;
     bool bSawGrab = false;
     int32 ConformedFingers = 0;
+    /** Spring chain test: a free bone in the middle of the longest hair chain, measured in the
+     *  frame of the chain root's parent (independent of idle motion). */
+    bool PickSpringBone();
+    FVector SpringLocal(FName Bone) const;
+    FVector SpringWorld(const FVector& Local) const;
+    FName SpringBone, SpringFrame, SpringHeld;
+    uint8 SpringGroup = 1;
+    FVector SpringRest = FVector::ZeroVector, SpringHeldRest = FVector::ZeroVector, SpringDir = FVector::ZeroVector;
+    double SpringPulledCm = 0, SpringAlongCm = 0;
 };

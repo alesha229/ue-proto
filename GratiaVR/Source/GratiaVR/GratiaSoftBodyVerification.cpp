@@ -99,6 +99,57 @@ TArray<FVector> UGratiaSoftBodyVerification::TipsInParentFrame() const
     return Result;
 }
 
+bool UGratiaSoftBodyVerification::PickSpringBone()
+{
+    const auto* Mesh = Character->CharacterMesh.Get();
+    const USkeletalMesh* Asset = Mesh->GetSkeletalMeshAsset();
+    if (!Asset) return false;
+    const FReferenceSkeleton& Ref = Asset->GetRefSkeleton();
+    // Longest chain of the lowest group (hair first), its bones in skeleton order (parents first);
+    // strands branching off it are chains of their own.
+    TArray<int32> AllRoots, Best;
+    for (const FGratiaSpringChain& Chain : Character->CharacterProfile->SpringChains)
+        for (const FName Root : Chain.RootBones) AllRoots.Add(Ref.FindBoneIndex(Root));
+    for (const FGratiaSpringChain& Chain : Character->CharacterProfile->SpringChains)
+    {
+        TArray<int32> Bones;
+        for (const FName Root : Chain.RootBones)
+            if (const int32 Index = Ref.FindBoneIndex(Root); Index != INDEX_NONE) Bones.Add(Index);
+        if (Bones.IsEmpty()) continue;
+        const int32 Roots = Bones.Num();
+        for (int32 Index = 0; Index < Ref.GetNum(); ++Index)
+            if (!Bones.Contains(Index) && !AllRoots.Contains(Index) && Bones.Contains(Ref.GetParentIndex(Index))) Bones.Add(Index);
+        const bool bBetter = Best.IsEmpty() || Chain.Group < SpringGroup || (Chain.Group == SpringGroup && Bones.Num() - Roots > Best.Num());
+        if (!bBetter || Bones.Num() - Roots < 2) continue;
+        SpringGroup = Chain.Group;
+        Best = TArray<int32>(Bones.GetData() + Roots, Bones.Num() - Roots);
+        SpringFrame = Ref.GetBoneName(Ref.GetParentIndex(Bones[0]));
+    }
+    if (Best.IsEmpty() || SpringFrame.IsNone()) return false;
+    SpringBone = Ref.GetBoneName(Best[Best.Num() / 2]);
+    // Along the strand in the current pose (bone lengths hold; imported bone offsets are scaled).
+    SpringAlongCm = 0;
+    for (int32 Index = Best[Best.Num() / 2]; Index != INDEX_NONE && Ref.GetBoneName(Index) != SpringFrame; Index = Ref.GetParentIndex(Index))
+        SpringAlongCm += FVector::Distance(Mesh->GetBoneLocation(Ref.GetBoneName(Index)), Mesh->GetBoneLocation(Ref.GetBoneName(Ref.GetParentIndex(Index))))
+            / Mesh->GetComponentTransform().GetScale3D().GetAbsMax();
+    return true;
+}
+
+FVector UGratiaSoftBodyVerification::SpringLocal(FName Bone) const
+{
+    const auto* Mesh = Character->CharacterMesh.Get();
+    const FTransform Frame = Mesh->GetBoneTransform(Mesh->GetBoneIndex(SpringFrame));
+    return FTransform(Frame.GetRotation(), Frame.GetLocation()).InverseTransformPosition(Mesh->GetBoneLocation(Bone))
+        / Mesh->GetComponentTransform().GetScale3D().GetAbsMax();
+}
+
+FVector UGratiaSoftBodyVerification::SpringWorld(const FVector& Local) const
+{
+    const auto* Mesh = Character->CharacterMesh.Get();
+    const FTransform Frame = Mesh->GetBoneTransform(Mesh->GetBoneIndex(SpringFrame));
+    return FTransform(Frame.GetRotation(), Frame.GetLocation()).TransformPosition(Local * Mesh->GetComponentTransform().GetScale3D().GetAbsMax());
+}
+
 void UGratiaSoftBodyVerification::AimCamera(const FVector& Center, const FVector& OutwardDir, bool bFrontal)
 {
     APlayerController* Controller = UGameplayStatics::GetPlayerController(this, 0);
@@ -298,6 +349,11 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
         Check(FMath::IsNearlyEqual(CupHalf, 0.5f * Settings.SquashAmount, 0.06f) && FMath::IsNearlyEqual(Full, Settings.SquashAmount, 0.06f),
             FString::Printf(TEXT("%s cup squeeze follows the trigger: %.2f at half, %.2f at full (expected %.2f / %.2f)"),
                 *Zone->Chain.ToString(), CupHalf, Full, 0.5f * Settings.SquashAmount, Settings.SquashAmount));
+        // Ball in the hand: two directions close in (palm, finger curl), one goes out.
+        const FVector Ball = SoftBody->GetSquashScale(Zone->Bone);
+        int32 Closed = 0, Opened = 0;
+        for (int32 Axis = 0; Axis < 3; ++Axis) { Closed += Ball[Axis] < 0.9; Opened += Ball[Axis] > 1.1; }
+        Check(Closed == 2 && Opened == 1, FString::Printf(TEXT("%s full cup squeezes like a ball in the hand (scale %s)"), *Zone->Chain.ToString(), *Ball.ToString()));
         Advance(EPhase::Arm);
         break;
     }
@@ -638,6 +694,95 @@ void UGratiaSoftBodyVerification::TickComponent(float Delta, ELevelTick Type, FA
         for (int32 I = 0; I < Back.Num() && I < RestTipsLocal.Num(); ++I)
             Offset = FMath::Max(Offset, FVector::Distance(Back[I], RestTipsLocal[I]));
         Check(Offset <= 0.3, FString::Printf(TEXT("upright again, soft parts return to the pose (%.2fcm, limit 0.30)"), Offset));
+        if (Character->CharacterProfile->SpringChains.IsEmpty()) { Finish(); break; }
+        Advance(EPhase::SpringRest);
+        break;
+    }
+    case EPhase::SpringRest:
+    {
+        Submit(FVector(0, 0, -1.0e5), Delta, 0, false);
+        if (PhaseSeconds < 1.0f) break;
+        if (!Check(PickSpringBone(), TEXT("a spring chain with free bones exists"))) { Finish(); break; }
+        const auto* Anim = Cast<UGratiaAnimInstance>(Character->CharacterMesh->GetAnimInstance());
+        int32 Expected[5] = {};
+        for (const FGratiaSpringChain& Chain : Character->CharacterProfile->SpringChains)
+            if (Chain.Group < 5 && Chain.RootBones.ContainsByPredicate([this](FName Bone) { return Character->CharacterMesh->GetBoneIndex(Bone) != INDEX_NONE; }))
+                ++Expected[Chain.Group];
+        for (int32 Group = 1; Group < 5; ++Group)
+            if (Expected[Group] > 0)
+                Check(Anim && Anim->GetActiveSpringChainCount(Group) == Expected[Group], FString::Printf(TEXT("spring chains of group %d simulate (%d of %d)"),
+                    Group, Anim ? Anim->GetActiveSpringChainCount(Group) : 0, Expected[Group]));
+        SpringRest = SpringLocal(SpringBone);
+        // Push across the strand (along it the bone length holds the bone in place).
+        const auto* Mesh = Character->CharacterMesh.Get();
+        const FVector Along = (Mesh->GetBoneLocation(SpringBone) - Mesh->GetBoneLocation(Mesh->GetParentBone(SpringBone))).GetSafeNormal();
+        SpringDir = FVector::VectorPlaneProject(Character->GetActorRightVector(), Along).GetSafeNormal();
+        UE_LOG(LogGratiaSoftBodyQA, Display, TEXT("SPRING_QA bone=%s frame=%s group=%d"), *SpringBone.ToString(), *SpringFrame.ToString(), SpringGroup);
+        Advance(EPhase::SpringPush);
+        break;
+    }
+    case EPhase::SpringPush:
+    {
+        // The palm overlaps the strand from one side: the strand must yield to the hand.
+        Submit(SpringWorld(SpringRest) + SpringDir * 0.5, Delta, 0);
+        if (PhaseSeconds < 0.4f) break;
+        const double Moved = FVector::Distance(SpringLocal(SpringBone), SpringRest);
+        Check(Moved >= 0.8, FString::Printf(TEXT("hand pushes spring bone %s by %.2fcm (min 0.8)"), *SpringBone.ToString(), Moved));
+        Advance(EPhase::SpringArm);
+        break;
+    }
+    case EPhase::SpringArm:
+        Submit(SpringWorld(SpringRest) + SpringDir * 3.0, Delta, 0);
+        if (PhaseSeconds >= 0.6f) Advance(EPhase::SpringGrab);
+        break;
+    case EPhase::SpringGrab:
+    {
+        Submit(SpringWorld(SpringRest) + SpringDir * 3.0, Delta, 1);
+        if (PhaseSeconds < 0.1f) break;
+        SpringHeld = SoftBody->GetGrabbedBone(true);
+        if (!Check(!SpringHeld.IsNone(), FString::Printf(TEXT("trigger next to %s grabs a spring bone"), *SpringBone.ToString())))
+        { Advance(EPhase::SpringToggle); break; }
+        SpringHeldRest = SpringLocal(SpringHeld);
+        Start = SpringWorld(SpringRest) + SpringDir * 3.0;
+        Advance(EPhase::SpringPull);
+        break;
+    }
+    case EPhase::SpringPull:
+    {
+        // Pull 8 cm sideways; the held bone follows within its strand's reach.
+        Submit(Start + SpringDir * 8.0 * FMath::Min(1.0f, PhaseSeconds / 0.3f), Delta, 1);
+        if (PhaseSeconds < 0.6f) break;
+        SpringPulledCm = FVector::Distance(SpringLocal(SpringHeld), SpringHeldRest);
+        Check(SoftBody->GetGrabbedBone(true) == SpringHeld && SpringPulledCm >= 2.0,
+            FString::Printf(TEXT("held spring bone %s follows an 8cm pull by %.2fcm (min 2.0)"), *SpringHeld.ToString(), SpringPulledCm));
+        Advance(EPhase::SpringRelease);
+        break;
+    }
+    case EPhase::SpringRelease:
+    {
+        Submit(Start + SpringDir * 8.0, Delta, 0);
+        if (PhaseSeconds < 2.0f) break;
+        const double Back = FVector::Distance(SpringLocal(SpringHeld), SpringHeldRest);
+        Check(SoftBody->GetGrabbedBone(true).IsNone(), TEXT("trigger release frees the spring bone"));
+        Check(Back <= FMath::Max(1.0, SpringPulledCm * 0.4), FString::Printf(TEXT("released spring bone settles back to %.2fcm of rest"), Back));
+        bool* Group = SpringGroup == 1 ? &Character->Interaction->bHairMotion : SpringGroup == 2 ? &Character->Interaction->bClothMotion : &Character->Interaction->bEarMotion;
+        *Group = false;
+        Advance(EPhase::SpringToggle);
+        break;
+    }
+    case EPhase::SpringToggle:
+    {
+        Submit(FVector(0, 0, -1.0e5), Delta, 0, false);
+        if (PhaseSeconds < 0.5f) break;
+        const auto* Anim = Cast<UGratiaAnimInstance>(Character->CharacterMesh->GetAnimInstance());
+        Check(Anim && Anim->GetActiveSpringChainCount(SpringGroup) == 0, FString::Printf(TEXT("menu switch stops spring group %d"), SpringGroup));
+        // Off = animation pose. The settled simulation stays near it: gravity relative to the pose
+        // lets long hair hang a little differently, a collider push would throw it far off.
+        const double Offset = FVector::Distance(SpringLocal(SpringBone), SpringRest);
+        const double Limit = FMath::Max(1.0, 0.15 * SpringAlongCm);
+        Check(Offset <= Limit, FString::Printf(TEXT("settled spring bone %s stays near the animation pose (%.2fcm, limit %.2f = 15%% of %.1fcm along the strand)"),
+            *SpringBone.ToString(), Offset, Limit, SpringAlongCm));
+        Character->Interaction->bHairMotion = Character->Interaction->bClothMotion = Character->Interaction->bEarMotion = true;
         Finish();
         break;
     }

@@ -77,8 +77,12 @@ slices = tagged(setup.measure_torso_slices(mesh, include, slice_vertex_bones, at
 # follow the bones of the skin they fit (butt: soft bone, pelvis and thigh). Limb soft bones (thighs)
 # lie inside their limb: the limb capsule is their surface, no sphere.
 sphere_soft = [b for b in soft if "thigh" not in b.lower()]
-softs = tagged(setup.measure_sphere_surface(mesh, include, sphere_soft, 0.5), False, True)
-heads = tagged(setup.measure_sphere_surface(mesh, head_include, [head], 0.8), False, False)
+# Butt: the whole cheek (its bone carries >= 0.25; the dominated core was a small ball). Breasts
+# and head: the core their bone dominates (the whole-part fit took in the chest; user: worse).
+whole = [b for b in sphere_soft if "ass" in b.lower()]
+softs = tagged(setup.measure_sphere_surface(mesh, include, [b for b in sphere_soft if b not in whole], 0.5, False), False, True) \
+    + tagged(setup.measure_sphere_surface(mesh, include, whole, 0.5, True), False, True)
+heads = tagged(setup.measure_sphere_surface(mesh, head_include, [head], 0.8, False), False, False)
 necks = tagged(setup.measure_body_surface(mesh, head_include, [b for b in bones if b not in neck], 20, 0.8), False, False)
 assert limbs and slices, "body surface fit failed"
 assert len(softs) == len(sphere_soft), ("soft part spheres", len(softs), sphere_soft)

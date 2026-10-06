@@ -280,6 +280,57 @@ struct GRATIAVR_API FGratiaSoftBodyChain
     float MaxJiggleCm = 2.0f;
 };
 
+/**
+ * Spring chain for hair, clothing decor, ears and tails (VRChat PhysBones style): KawaiiPhysics
+ * bones from each root to its tips with a TipLengthCm dummy past every end bone, a spring back to
+ * the animated pose, collision with the BodySurface capsules and the hand spheres, and a trigger
+ * grab. Bones of a spring chain must not also be Chaos secondary bodies (bSafeSimulation off).
+ */
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaSpringChain
+{
+    GENERATED_BODY()
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spring Chain")
+    FName Name;
+    /** Each root stays on the animated pose; everything below it swings. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spring Chain")
+    TArray<FName> RootBones;
+    /** Menu group: 1 hair, 2 clothing/decor, 4 ears/tail (as SecondaryBones). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spring Chain", meta = (ClampMin = "1", ClampMax = "4"))
+    uint8 Group = 1;
+    /** Bone axis pointing along the bone (direction of the tip dummy). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spring Chain")
+    EGratiaBoneAxis ForwardAxis = EGratiaBoneAxis::YPositive;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spring Chain", meta = (ClampMin = "0.5", Units = "cm"))
+    float TipLengthCm = 5.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spring Chain|Kawaii", meta = (ClampMin = "0", ClampMax = "1"))
+    float Damping = 0.1f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spring Chain|Kawaii", meta = (ClampMin = "0", ClampMax = "1"))
+    float Stiffness = 0.05f;
+    /** 1: the chain moves rigidly with the body; lower values let it lag behind body motion. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spring Chain|Kawaii", meta = (ClampMin = "0", ClampMax = "1"))
+    float WorldDampingLocation = 0.6f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spring Chain|Kawaii", meta = (ClampMin = "0", ClampMax = "1"))
+    float WorldDampingRotation = 0.6f;
+    /** Bone thickness against body capsules and hand spheres. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spring Chain|Kawaii", meta = (ClampMin = "0", Units = "cm"))
+    float CollisionRadiusCm = 1.0f;
+    /** Maximum swing from the pose per bone; 0 = no limit. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spring Chain|Kawaii", meta = (ClampMin = "0", ClampMax = "180"))
+    float LimitAngleDegrees = 0.0f;
+    /** Fraction of world gravity, relative to the authored pose (the rest shape already hangs). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spring Chain|Kawaii", meta = (ClampMin = "0", ClampMax = "2"))
+    float GravityScale = 1.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spring Chain|Grab")
+    bool bAllowGrab = true;
+    /** 0: spring pull toward the hand, 1: the grabbed bone follows the hand immediately. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spring Chain|Grab", meta = (ClampMin = "0", ClampMax = "1"))
+    float GrabMovement = 0.8f;
+    /** Farthest the grabbed bone is pulled from its pose (the chain's bone lengths still hold). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spring Chain|Grab", meta = (ClampMin = "0", Units = "cm"))
+    float MaxGrabStretchCm = 30.0f;
+};
+
 /** Source body collision approximated by spheres that follow a skinning bone. */
 USTRUCT(BlueprintType)
 struct GRATIAVR_API FGratiaBodyColliderSphere
@@ -640,6 +691,12 @@ public:
     /** Soft body parts (KawaiiPhysics), hand contact, grab, finger conform and haptics. */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Soft Body")
     FGratiaSoftBodySettings SoftBody;
+    /** Hair, clothing decor, ears and tails as KawaiiPhysics spring chains (menu groups 1/2/4). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion|Spring Chains", meta = (TitleProperty = "Name"))
+    TArray<FGratiaSpringChain> SpringChains;
+    /** A trigger grabs the nearest spring bone within this gap of the palm or a finger. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion|Spring Chains", meta = (ClampMin = "0", ClampMax = "20", Units = "cm"))
+    float SpringGrabRadiusCm = 4.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion")
     TArray<FGratiaSecondaryBoneDefinition> SecondaryBones;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion")

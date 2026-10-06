@@ -10,6 +10,7 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
 #include "AnimNode_KawaiiPhysics.h"
+#include "Misc/ScopeExit.h"
 
 namespace
 {
@@ -32,6 +33,10 @@ struct FGratiaKawaiiChain
     float GravityCmPerSecond2 = 0.0f;
     bool bInitialized = false;
     uint16 BoneSerial = 0;
+    /** Spring chain (hair, decor, ears): runs with its menu group instead of the soft body. */
+    bool bSpring = false;
+    uint8 Group = 0;
+    bool bRunning = false;
 };
 
 constexpr int32 GratiaKawaiiMaxHandSpheres = 24;
@@ -81,6 +86,57 @@ FTransform GratiaKawaiiRefTransform(const FReferenceSkeleton& Ref, int32 Index)
         Result *= Ref.GetRefBonePose()[Parent];
     return Result;
 }
+
+/** Roots of other spring chains below this chain's roots (strands branching off a ponytail): their
+ *  subtrees are simulated by their own chains, after the chain they hang from. */
+TArray<int32> GratiaSpringBranches(const FReferenceSkeleton& Ref, const UGratiaCharacterProfile& Profile, const FGratiaSpringChain& Definition)
+{
+    TArray<int32> Roots, Branches;
+    for (const FName Bone : Definition.RootBones) if (Ref.FindBoneIndex(Bone) != INDEX_NONE) Roots.Add(Ref.FindBoneIndex(Bone));
+    for (const FGratiaSpringChain& Other : Profile.SpringChains)
+    {
+        if (&Other == &Definition) continue;
+        for (const FName Bone : Other.RootBones)
+        {
+            const int32 Index = Ref.FindBoneIndex(Bone);
+            for (int32 Parent = Index == INDEX_NONE ? INDEX_NONE : Ref.GetParentIndex(Index); Parent != INDEX_NONE; Parent = Ref.GetParentIndex(Parent))
+                if (Roots.Contains(Parent)) { Branches.AddUnique(Index); break; }
+        }
+    }
+    return Branches;
+}
+
+/** Reference points a spring chain simulates (bones below the roots and the tip dummies), and how
+ *  far its free end reaches from the first root along the bones. */
+void GratiaSpringRestPoints(const FReferenceSkeleton& Ref, const FGratiaSpringChain& Definition, const TArray<int32>& Branches, TArray<FVector>& Points, float& Reach)
+{
+    Reach = 0.0f;
+    // Path length from the chain root; the skeleton lists parents before children.
+    TMap<int32, float> Along;
+    for (const FName Bone : Definition.RootBones)
+        if (Ref.FindBoneIndex(Bone) != INDEX_NONE) Along.Add(Ref.FindBoneIndex(Bone), 0.0f);
+    for (int32 Index = 0; Index < Ref.GetNum(); ++Index)
+    {
+        const int32 Parent = Ref.GetParentIndex(Index);
+        const float* ParentAlong = Parent != INDEX_NONE && !Along.Contains(Index) && !Branches.Contains(Index) ? Along.Find(Parent) : nullptr;
+        if (!ParentAlong) continue;
+        // Component-space distance: imported bones carry a scale, local offsets are not in cm.
+        const FVector Location = GratiaKawaiiRefTransform(Ref, Index).GetLocation();
+        const float Length = *ParentAlong + float(FVector::Distance(Location, GratiaKawaiiRefTransform(Ref, Parent).GetLocation()));
+        Along.Add(Index, Length);
+        Points.Add(Location);
+        Reach = FMath::Max(Reach, Length);
+    }
+    for (const TPair<int32, float>& Bone : Along)
+    {
+        bool bEnd = true;
+        for (int32 Index = Bone.Key + 1; Index < Ref.GetNum() && bEnd; ++Index) bEnd = Ref.GetParentIndex(Index) != Bone.Key || Branches.Contains(Index);
+        if (!bEnd) continue;
+        const FTransform Transform = GratiaKawaiiRefTransform(Ref, Bone.Key);
+        Points.Add(Transform.GetLocation() + Transform.GetRotation().RotateVector(GratiaAnimAxisVector(Definition.ForwardAxis)) * Definition.TipLengthCm);
+        Reach = FMath::Max(Reach, Bone.Value + Definition.TipLengthCm);
+    }
+}
 }
 
 struct FGratiaSpringBone
@@ -112,14 +168,132 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
     bool bSoftBodyReset = false;
     TArray<FGratiaSoftBodyGrab> Grabs;
     TArray<TPair<FName, FVector>> Scales;
+    float SoftPushFraction = 1.0f;
+    uint8 SpringGroups = 0;
     int32* ActiveChainsOut = nullptr;
+    int32* ActiveSpringsOut = nullptr;
+
+    FGratiaKawaiiChain& AddKawaiiChain(const FReferenceSkeleton& Ref, const TArray<FName>& Roots, EGratiaBoneAxis Axis, float DummyCm,
+        float Damping, float Stiffness, float WorldLocation, float WorldRotation, float Radius, float LimitAngle, float GravityScale)
+    {
+        FGratiaKawaiiChain& Chain = Kawaii.AddDefaulted_GetRef();
+        Chain.Roots = Roots;
+        Chain.Node = MakeUnique<FGratiaKawaiiNode>();
+        FGratiaKawaiiNode& Node = *Chain.Node;
+        Node.RootBone = FBoneReference(Roots[0]);
+        for (int32 I = 1; I < Roots.Num(); ++I)
+        {
+            FKawaiiPhysicsRootBoneSetting Extra;
+            Extra.RootBone = FBoneReference(Roots[I]);
+            Node.AdditionalRootBones.Add(Extra);
+        }
+        Node.DummyBoneLength = DummyCm;
+        Node.BoneForwardAxis = ToKawaiiAxis(Axis);
+        Node.PhysicsSettings.Damping = Damping;
+        Node.PhysicsSettings.Stiffness = Stiffness;
+        Node.PhysicsSettings.WorldDampingLocation = WorldLocation;
+        Node.PhysicsSettings.WorldDampingRotation = WorldRotation;
+        Node.PhysicsSettings.Radius = Radius;
+        Node.PhysicsSettings.LimitAngle = LimitAngle;
+        // The authored rest shape already includes gravity. The node gets only the change
+        // of gravity in the chain parent's frame (set every update), so standing in the
+        // reference orientation adds no sag that would push skin through clothing.
+        Node.Gravity = FVector::ZeroVector;
+        Node.bUseWorldSpaceGravity = false;
+        Chain.GravityCmPerSecond2 = 980.0f * GravityScale;
+        Chain.GravityParent = Ref.GetParentIndex(Ref.FindBoneIndex(Roots[0]));
+        if (Chain.GravityParent != INDEX_NONE) Chain.GravityParentRef = GratiaKawaiiRefTransform(Ref, Chain.GravityParent).GetRotation();
+        Node.TargetFramerate = 90;
+        Node.bUpdatePhysicsSettingsInGame = true;
+        return Chain;
+    }
+
+    void AddHandLimits(FGratiaKawaiiChain& Chain, const FReferenceSkeleton& Ref, UAnimInstance* InInstance)
+    {
+        // Hand/finger slots are driven from the root bone and moved every update.
+        FGratiaKawaiiNode& Node = *Chain.Node;
+        Chain.FirstHandLimit = Node.SphericalLimits.Num();
+        for (int32 I = 0; I < GratiaKawaiiMaxHandSpheres; ++I)
+        {
+            FSphericalLimit Limit;
+            Limit.DrivingBone = FBoneReference(Ref.GetBoneName(0));
+            Limit.OffsetLocation = FVector(0, 0, -1.0e6);
+            Limit.Radius = 0.0f;
+            Limit.LimitType = ESphericalLimitType::Outer;
+            Node.SphericalLimits.Add(Limit);
+        }
+        Node.OnInitializeAnimInstance(this, InInstance);
+    }
+
+    /** Hair/decor collide with the body surface capsules within their reach. A capsule the rest
+     *  pose already lies in (hair on the scalp, a tie on the chest) shrinks to the rest pose, or is
+     *  left out if it would lose more than half its radius: the pose itself is never pushed. */
+    void AddSpringChain(const UGratiaCharacterProfile* Profile, const FReferenceSkeleton& Ref, const FGratiaSpringChain& Definition, UAnimInstance* InInstance)
+    {
+        TArray<FName> Roots;
+        for (const FName Bone : Definition.RootBones) if (Ref.FindBoneIndex(Bone) != INDEX_NONE) Roots.Add(Bone);
+        if (Roots.IsEmpty()) return;
+        FGratiaKawaiiChain& Chain = AddKawaiiChain(Ref, Roots, Definition.ForwardAxis, Definition.TipLengthCm, Definition.Damping, Definition.Stiffness,
+            Definition.WorldDampingLocation, Definition.WorldDampingRotation, Definition.CollisionRadiusCm, Definition.LimitAngleDegrees, Definition.GravityScale);
+        Chain.bSpring = true;
+        Chain.Group = Definition.Group;
+        const TArray<int32> Branches = GratiaSpringBranches(Ref, *Profile, Definition);
+        for (const int32 Branch : Branches) Chain.Node->ExcludeBones.Add(FBoneReference(Ref.GetBoneName(Branch)));
+        TArray<FVector> Points;
+        float Reach = 0.0f;
+        GratiaSpringRestPoints(Ref, Definition, Branches, Points, Reach);
+        const FVector RootPoint = GratiaKawaiiRefTransform(Ref, Ref.FindBoneIndex(Roots[0])).GetLocation();
+        for (const FGratiaSurfaceCapsule& Capsule : Profile->BodySurface)
+        {
+            const int32 Bone = Ref.FindBoneIndex(Capsule.Bone);
+            if (Bone == INDEX_NONE || Points.IsEmpty()) continue;
+            const FTransform BoneRef = GratiaKawaiiRefTransform(Ref, Bone);
+            const FVector A = BoneRef.TransformPosition(Capsule.StartCm), B = BoneRef.TransformPosition(Capsule.EndCm);
+            float Radius = Capsule.RadiusCm;
+            if (FMath::PointDistToSegment(RootPoint, A, B) - Radius > Reach + Definition.CollisionRadiusCm) continue;
+            float Gap = FLT_MAX;
+            for (const FVector& Point : Points) Gap = FMath::Min(Gap, float(FMath::PointDistToSegment(Point, A, B)) - Definition.CollisionRadiusCm);
+            if (Gap < Radius)
+            {
+                if (Gap < 0.5f * Radius) continue;
+                Radius = Gap;
+            }
+            const FVector Start = Capsule.StartCm, End = Capsule.EndCm;
+            const double Length = FVector::Distance(A, B);
+            if (Length < 0.1)
+            {
+                FSphericalLimit Limit;
+                Limit.DrivingBone = FBoneReference(Capsule.Bone);
+                Limit.OffsetLocation = Start;
+                Limit.Radius = Radius;
+                Limit.LimitType = ESphericalLimitType::Outer;
+                Chain.Node->SphericalLimits.Add(Limit);
+                continue;
+            }
+            FCapsuleLimit Limit;
+            Limit.DrivingBone = FBoneReference(Capsule.Bone);
+            Limit.OffsetLocation = (Start + End) * 0.5;
+            Limit.OffsetRotation = FQuat::FindBetweenNormals(FVector::ZAxisVector, (End - Start).GetSafeNormal()).Rotator();
+            Limit.Radius = Radius;
+            Limit.Length = float(Length);
+            Chain.Node->CapsuleLimits.Add(Limit);
+        }
+        AddHandLimits(Chain, Ref, InInstance);
+    }
 
     void BuildSoftBody(const UGratiaCharacterProfile* Profile, const USkeletalMesh* Mesh, UAnimInstance* InInstance)
     {
         Kawaii.Reset();
         Jiggles.Reset();
-        if (!Profile || !Mesh || !Profile->SoftBody.bEnabled) return;
+        if (!Profile || !Mesh) return;
         const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
+        // Parents before branches: a strand hanging off a ponytail starts from the simulated ponytail.
+        TArray<const FGratiaSpringChain*> Ordered;
+        for (const FGratiaSpringChain& Definition : Profile->SpringChains) Ordered.Add(&Definition);
+        auto FirstRoot = [&Ref](const FGratiaSpringChain& Definition) { return Definition.RootBones.IsEmpty() ? INDEX_NONE : Ref.FindBoneIndex(Definition.RootBones[0]); };
+        Ordered.StableSort([&FirstRoot](const FGratiaSpringChain& A, const FGratiaSpringChain& B) { return FirstRoot(A) < FirstRoot(B); });
+        for (const FGratiaSpringChain* Definition : Ordered) AddSpringChain(Profile, Ref, *Definition, InInstance);
+        if (!Profile->SoftBody.bEnabled) return;
         for (const FGratiaSoftBodyChain& Definition : Profile->SoftBody.Chains)
         {
             TArray<FName> Roots;
@@ -139,35 +313,10 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
                 }
                 continue;
             }
-            FGratiaKawaiiChain& Chain = Kawaii.AddDefaulted_GetRef();
-            Chain.Roots = Roots;
-            Chain.Node = MakeUnique<FGratiaKawaiiNode>();
+            FGratiaKawaiiChain& Chain = AddKawaiiChain(Ref, Roots, Definition.ForwardAxis, Definition.DummyBoneLengthCm, Definition.Damping,
+                Definition.Stiffness, Definition.WorldDampingLocation, Definition.WorldDampingRotation, Definition.CollisionRadiusCm,
+                Definition.LimitAngleDegrees, Definition.GravityScale);
             FGratiaKawaiiNode& Node = *Chain.Node;
-            Node.RootBone = FBoneReference(Roots[0]);
-            for (int32 I = 1; I < Roots.Num(); ++I)
-            {
-                FKawaiiPhysicsRootBoneSetting Extra;
-                Extra.RootBone = FBoneReference(Roots[I]);
-                Node.AdditionalRootBones.Add(Extra);
-            }
-            Node.DummyBoneLength = Definition.DummyBoneLengthCm;
-            Node.BoneForwardAxis = ToKawaiiAxis(Definition.ForwardAxis);
-            Node.PhysicsSettings.Damping = Definition.Damping;
-            Node.PhysicsSettings.Stiffness = Definition.Stiffness;
-            Node.PhysicsSettings.WorldDampingLocation = Definition.WorldDampingLocation;
-            Node.PhysicsSettings.WorldDampingRotation = Definition.WorldDampingRotation;
-            Node.PhysicsSettings.Radius = Definition.CollisionRadiusCm;
-            Node.PhysicsSettings.LimitAngle = Definition.LimitAngleDegrees;
-            // The authored rest shape already includes gravity. The node gets only the change
-            // of gravity in the chain parent's frame (set every update), so standing in the
-            // reference orientation adds no sag that would push skin through clothing.
-            Node.Gravity = FVector::ZeroVector;
-            Node.bUseWorldSpaceGravity = false;
-            Chain.GravityCmPerSecond2 = 980.0f * Definition.GravityScale;
-            Chain.GravityParent = Ref.GetParentIndex(Ref.FindBoneIndex(Roots[0]));
-            if (Chain.GravityParent != INDEX_NONE) Chain.GravityParentRef = GratiaKawaiiRefTransform(Ref, Chain.GravityParent).GetRotation();
-            Node.TargetFramerate = 90;
-            Node.bUpdatePhysicsSettingsInGame = true;
             // Source body collision follows its skinning bones. A chain inside its own flesh (a
             // limb: its rest tip is inside a collider) ignores the spheres along its bone, or they
             // would hold it in place; a breast or butt keeps every sphere.
@@ -188,28 +337,20 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
                 Limit.LimitType = ESphericalLimitType::Outer;
                 Node.SphericalLimits.Add(Limit);
             }
-            // Hand/finger slots are driven from the root bone and moved every update.
-            Chain.FirstHandLimit = Node.SphericalLimits.Num();
-            for (int32 I = 0; I < GratiaKawaiiMaxHandSpheres; ++I)
-            {
-                FSphericalLimit Limit;
-                Limit.DrivingBone = FBoneReference(Ref.GetBoneName(0));
-                Limit.OffsetLocation = FVector(0, 0, -1.0e6);
-                Limit.Radius = 0.0f;
-                Limit.LimitType = ESphericalLimitType::Outer;
-                Node.SphericalLimits.Add(Limit);
-            }
-            Node.OnInitializeAnimInstance(this, InInstance);
+            AddHandLimits(Chain, Ref, InInstance);
         }
     }
 
     virtual void UpdateAnimationNode(const FAnimationUpdateContext& InContext) override
     {
         FAnimSingleNodeInstanceProxy::UpdateAnimationNode(InContext);
-        if (!bSoftBody) return;
         const uint16 Serial = GetRequiredBones().GetSerialNumber();
         for (FGratiaKawaiiChain& Chain : Kawaii)
         {
+            const bool bRun = Chain.bSpring ? (SpringGroups >> Chain.Group & 1) != 0 : bSoftBody;
+            const bool bStart = bRun && !Chain.bRunning;
+            Chain.bRunning = bRun;
+            if (!bRun) continue;
             if (!Chain.bInitialized || Chain.BoneSerial != Serial)
             {
                 FAnimationInitializeContext Init(this);
@@ -218,10 +359,11 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
                 Chain.Node->CacheBones_AnyThread(Cache);
                 Chain.bInitialized = true; Chain.BoneSerial = Serial;
             }
-            if (bSoftBodyReset) Chain.Node->ResetDynamics(ETeleportType::ResetPhysics);
+            // A group switched on starts from the pose (no swing from where it was left).
+            if (bStart || (bSoftBodyReset && !Chain.bSpring)) Chain.Node->ResetDynamics(ETeleportType::ResetPhysics);
             Chain.Node->Update_AnyThread(InContext);
         }
-        if (bSoftBodyReset) for (FGratiaJiggle& Jiggle : Jiggles) Jiggle.bInitialized = false;
+        if (bSoftBodyReset || !bSoftBody) for (FGratiaJiggle& Jiggle : Jiggles) Jiggle.bInitialized = false;
         bSoftBodyReset = false;
     }
 
@@ -270,14 +412,36 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
 
     void EvaluateSoftBody(FPoseContext& Output)
     {
-        if (!bSoftBody || (Kawaii.IsEmpty() && Jiggles.IsEmpty())) { if (ActiveChainsOut) *ActiveChainsOut = 0; return; }
+        int32 Active = 0, SpringCounts[5] = {};
+        ON_SCOPE_EXIT
+        {
+            if (ActiveChainsOut) *ActiveChainsOut = Active;
+            if (ActiveSpringsOut) for (int32 Group = 0; Group < 5; ++Group) ActiveSpringsOut[Group] = SpringCounts[Group];
+        };
+        const bool bAnyChain = Kawaii.ContainsByPredicate([](const FGratiaKawaiiChain& Chain) { return Chain.bRunning && Chain.bInitialized; });
+        if (!bAnyChain && (!bSoftBody || Jiggles.IsEmpty())) return;
         FComponentSpacePoseContext ComponentPose(this);
         ComponentPose.Pose.InitPose(Output.Pose);
         ComponentPose.Curve = Output.Curve;
-        int32 Active = 0;
         for (FGratiaKawaiiChain& Chain : Kawaii)
         {
-            if (!Chain.bInitialized) continue;
+            if (!Chain.bRunning || !Chain.bInitialized) continue;
+            if (Chain.bSpring)
+            {
+                // A grabbed spring bone moves toward the hand; its chain keeps the bone lengths.
+                for (const FGratiaSoftBodyGrab& Grab : Grabs)
+                    for (FKawaiiPhysicsModifyBone& Bone : Chain.Node->ModifyBones)
+                    {
+                        if (Bone.bDummy || Bone.ParentIndex < 0 || Bone.BoneRef.BoneName != Grab.RootBone) continue;
+                        const FVector Desired = Bone.PoseLocation + (Grab.TargetCS - Bone.PoseLocation).GetClampedToMaxSize(Grab.MaxStretchCm);
+                        const FVector Shift = (Desired - Bone.Location) * FMath::Clamp(Grab.Movement, 0.0f, 1.0f);
+                        if (Shift.ContainsNaN()) continue;
+                        Bone.Location += Shift; Bone.PrevLocation += Shift;
+                    }
+                Chain.Node->EvaluateComponentSpace_AnyThread(ComponentPose);
+                ++SpringCounts[FMath::Min<int32>(Chain.Group, 4)];
+                continue;
+            }
             // VRChat-style grab: move the simulated tip toward the hand target. Location and
             // previous location move together, so the grab adds no velocity; the chain's own
             // stiffness pulls back toward the pose and the bone length stays constrained.
@@ -297,8 +461,9 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
             Chain.Node->EvaluateComponentSpace_AnyThread(ComponentPose);
             ++Active;
         }
-        EvaluateJiggles(ComponentPose, Active);
+        if (bSoftBody) EvaluateJiggles(ComponentPose, Active);
         FCSPose<FCompactPose>::ConvertComponentPosesToLocalPoses(ComponentPose.Pose, Output.Pose);
+        if (!bSoftBody) return;
         // Squeeze: scale the simulated root bone in its own space (skin compresses toward the body).
         const FBoneContainer& Bones = Output.Pose.GetBoneContainer();
         for (const TPair<FName, FVector>& Scale : Scales)
@@ -309,7 +474,6 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
             if (Index.GetInt() == INDEX_NONE) continue;
             Output.Pose[Index].SetScale3D(Output.Pose[Index].GetScale3D() * Scale.Value);
         }
-        if (ActiveChainsOut) *ActiveChainsOut = Active;
     }
 
     virtual void PreUpdate(UAnimInstance* InInstance, float DeltaSeconds) override
@@ -317,6 +481,7 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
         FAnimSingleNodeInstanceProxy::PreUpdate(InInstance, DeltaSeconds);
         UGratiaAnimInstance* Instance = CastChecked<UGratiaAnimInstance>(InInstance);
         ActiveChainsOut = &Instance->ActiveSoftBodyChains;
+        ActiveSpringsOut = Instance->ActiveSpringChains;
         const AGratiaPreviewCharacter* Character = Cast<AGratiaPreviewCharacter>(Instance->GetOwningActor());
         UGratiaCharacterProfile* Profile = Character ? Character->CharacterProfile.Get() : nullptr;
         USkeletalMesh* Mesh = GetSkelMeshComponent() ? GetSkelMeshComponent()->GetSkeletalMeshAsset() : nullptr;
@@ -357,13 +522,15 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
             }
         }
         // Soft body input: hand spheres move the reserved root-driven limits.
-        bSoftBody = Instance->bSoftBody && !Kawaii.IsEmpty() && Profile && Mesh;
+        bSoftBody = Instance->bSoftBody && Profile && Mesh && Profile->SoftBody.bEnabled;
+        SpringGroups = Profile && Mesh ? Instance->SpringGroups : 0;
         bSoftBodyReset |= Instance->SoftBodyInput.bReset;
         JiggleDelta = DeltaSeconds;
         Instance->SoftBodyInput.bReset = false;
         Grabs = Instance->SoftBodyInput.Grabs;
         Scales = Instance->SoftBodyInput.Scales;
-        if (bSoftBody && GetSkelMeshComponent() && !GetSkelMeshComponent()->GetComponentSpaceTransforms().IsEmpty())
+        SoftPushFraction = FMath::Clamp(Instance->SoftBodyInput.SoftPushFraction, 0.0f, 1.0f);
+        if ((bSoftBody || SpringGroups) && GetSkelMeshComponent() && !GetSkelMeshComponent()->GetComponentSpaceTransforms().IsEmpty())
         {
             const TArray<FTransform>& Pose = GetSkelMeshComponent()->GetComponentSpaceTransforms();
             const FTransform Root = Pose[0];
@@ -387,7 +554,7 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
                     const bool bActive = Instance->SoftBodyInput.HandSpheres.IsValidIndex(I);
                     const FVector4 Sphere = bActive ? Instance->SoftBodyInput.HandSpheres[I] : FVector4(0, 0, -1.0e6, 0);
                     Limit.OffsetLocation = Root.InverseTransformPosition(FVector(Sphere.X, Sphere.Y, Sphere.Z));
-                    Limit.Radius = bActive ? float(Sphere.W) : 0.0f;
+                    Limit.Radius = bActive ? float(Sphere.W) * (Chain.bSpring ? 1.0f : SoftPushFraction) : 0.0f;
                 }
         }
         if (!bEnabled) return;
@@ -495,7 +662,7 @@ void UGratiaAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
     if (!Character || !Character->CharacterProfile || !Character->Interaction || !FMath::IsFinite(DeltaSeconds))
     {
         bProcedural = false; HeadYaw = HeadPitch = HeadVelocity = Reaction = Impulse = 0.0f;
-        ReactionClip = nullptr; LastReactionSerial = 0; return;
+        ReactionClip = nullptr; LastReactionSerial = 0; SpringGroups = 0; return;
     }
     const UGratiaCharacterProfile* Profile = Character->CharacterProfile;
     const FGratiaAnimationSnapshot Snapshot = UGratiaAnimationProfileLibrary::GetCharacterAnimationSnapshot(Character);
@@ -519,6 +686,9 @@ void UGratiaAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
     Reaction = Interaction->Reaction; Impulse = Interaction->Impulse;
     bBody = Snapshot.bBodyMotion; bHair = Snapshot.bHairMotion; bCloth = Snapshot.bClothMotion; bSpring = Snapshot.bLocalSpring;
     bEars = Snapshot.bEarMotion;
+    // Spring chains follow the menu groups and the physics switch, also during performances.
+    const bool bSpringPhysics = Profile->Capabilities.bSecondaryPhysics && Interaction->bPhysicalMotion && !Profile->SpringChains.IsEmpty();
+    SpringGroups = bSpringPhysics ? uint8((bHair ? 1 << 1 : 0) | (bCloth ? 1 << 2 : 0) | (bEars ? 1 << 4 : 0)) : 0;
     const float PreviousYaw = HeadYaw;
     HeadYaw = FMath::FInterpTo(HeadYaw, bProcedural ? Snapshot.TargetHeadYaw : 0.0f, FMath::Min(DeltaSeconds, 0.05f), Profile->GazeInterpSpeed);
     HeadVelocity = DeltaSeconds > 0.001f ? FMath::Clamp((HeadYaw - PreviousYaw) / DeltaSeconds, -120.0f, 120.0f) : 0.0f;

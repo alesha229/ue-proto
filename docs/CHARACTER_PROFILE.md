@@ -46,6 +46,13 @@ The profile owns model-specific references and names:
   them from the part's own skin; `MeasureLimbSurface` counts the flesh of limb soft bones
   (thigh jiggle bones) for their limb. Soft-body chains whose rest tip lies inside the body
   colliders (limb chains) ignore the colliders along their own bone.
+- SpringChains (hair, clothing decor, ears/tail; menu groups 1/2/4): KawaiiPhysics chains
+  from root bones to tip dummies (`TipLengthCm` along `ForwardAxis`), spring/damping/world
+  damping, gravity relative to the authored pose, collision with BodySurface capsules within
+  the chain's reach (shrunk to the rest pose) and the hand spheres, trigger grab within
+  `SpringGrabRadiusCm`. Validation rejects a spring-chain bone that is still a Chaos
+  secondary body (`bSafeSimulation`). A chain rooted below another chain's root is excluded
+  from it and simulated after it (strands branching off a ponytail).
 - Separate sphere/capsule hand collision proxies. The initial profiles cover
   the head, torso/pelvis, upper arms, forearms, hands, thighs, shins and feet.
   These are conservative starting approximations, not certified surface matches.

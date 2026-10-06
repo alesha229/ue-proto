@@ -183,6 +183,54 @@ FTransform RefComponentTransform(const FReferenceSkeleton& Skeleton, int32 BoneI
 }
 }
 
+bool UGratiaSoftBodySetupLibrary::MeasureSpringChain(USkeletalMesh* SkeletalMesh, const TArray<FName>& RootBones, EGratiaBoneAxis& ForwardAxis, int32& BoneCount)
+{
+    if (!SkeletalMesh || RootBones.IsEmpty()) return false;
+    const FReferenceSkeleton& Ref = SkeletalMesh->GetRefSkeleton();
+    TArray<int32> Chain;
+    for (const FName Root : RootBones)
+    {
+        const int32 Index = Ref.FindBoneIndex(Root);
+        if (Index == INDEX_NONE) return false;
+        Chain.Add(Index);
+    }
+    for (int32 Index = 0; Index < Ref.GetNum(); ++Index)
+        if (!Chain.Contains(Index) && Chain.Contains(Ref.GetParentIndex(Index))) Chain.Add(Index);
+    BoneCount = Chain.Num();
+    // Bones of one rig point along the same local axis: vote with the offset of each only child.
+    int32 Votes[6] = {};
+    auto Vote = [&Ref, &Votes](const TArray<int32>& Bones)
+    {
+        for (const int32 Bone : Bones)
+        {
+            int32 Child = INDEX_NONE, Children = 0;
+            for (int32 Index = Bone + 1; Index < Ref.GetNum(); ++Index)
+                if (Ref.GetParentIndex(Index) == Bone) { Child = Index; ++Children; }
+            if (Children != 1) continue;
+            // Direction only: imported bones carry a scale, so offsets are not in cm.
+            const FVector Offset = Ref.GetRefBonePose()[Child].GetTranslation();
+            if (Offset.Size() < 1.0e-4) continue;
+            const FVector Abs = Offset.GetAbs();
+            const int32 Axis = Abs.X >= Abs.Y && Abs.X >= Abs.Z ? 0 : Abs.Y >= Abs.Z ? 1 : 2;
+            ++Votes[Axis * 2 + (Offset[Axis] < 0 ? 1 : 0)];
+        }
+    };
+    Vote(Chain);
+    int32 Total = 0;
+    for (const int32 Count : Votes) Total += Count;
+    if (Total == 0)
+    {
+        TArray<int32> All;
+        for (int32 Index = 0; Index < Ref.GetNum(); ++Index) All.Add(Index);
+        Vote(All);
+    }
+    int32 Best = 0;
+    for (int32 Index = 1; Index < 6; ++Index) if (Votes[Index] > Votes[Best]) Best = Index;
+    if (Votes[Best] == 0) return false;
+    ForwardAxis = static_cast<EGratiaBoneAxis>(Best);
+    return true;
+}
+
 bool UGratiaSoftBodySetupLibrary::MeasureSoftBone(USkeletalMesh* SkeletalMesh, FName RootBone, EGratiaBoneAxis& ForwardAxis,
     float& LengthCm, float& ContactRadiusCm, float& ContactCenterAlongBone)
 {
@@ -442,7 +490,7 @@ TMap<int32, TArray<FVector>> OwnedVertices(USkeletalMesh* SkeletalMesh, const TA
 
 /** Bones (and shares) of the skin inside a sphere: a fitted surface follows them like that skin. */
 TArray<FGratiaSurfaceInfluence> RegionInfluences(USkeletalMesh* SkeletalMesh, const TArray<FName>& IncludeSlots, const FVector& Center, double Radius,
-    int32 OwnerBone)
+    int32 OwnerBone, bool bWholePart = true)
 {
     TMap<int32, double> Sum;
     double Total = 0.0;
@@ -454,8 +502,17 @@ TArray<FGratiaSurfaceInfluence> RegionInfluences(USkeletalMesh* SkeletalMesh, co
         for (const FSoftSkinVertex& Vertex : Section.SoftVertices)
         {
             if (FVector::Distance(FVector(Vertex.Position), Center) > Radius || !KeepVertex(SkeletalMesh, Slot, FVector(Vertex.Position))) continue;
-            // Only the part's own skin (its bone carries >= 0.25), weighted by how much it owns it.
-            const double OwnShare = OwnWeight(Section, Vertex, OwnerBone) / 65535.0;
+            // Only the part's own skin: whole part (its bone carries >= 0.25, weighted by how much
+            // it owns it) or the core it dominates.
+            double OwnShare = OwnWeight(Section, Vertex, OwnerBone) / 65535.0;
+            if (!bWholePart)
+            {
+                int32 Dominant = INDEX_NONE; uint16 Best = 0;
+                for (int32 I = 0; I < MAX_TOTAL_INFLUENCES; ++I)
+                    if (Vertex.InfluenceWeights[I] > Best && Section.BoneMap.IsValidIndex(Vertex.InfluenceBones[I]))
+                    { Best = Vertex.InfluenceWeights[I]; Dominant = Section.BoneMap[Vertex.InfluenceBones[I]]; }
+                OwnShare = Dominant == OwnerBone ? 1.0 : 0.0;
+            }
             if (OwnShare < 0.25) continue;
             for (int32 I = 0; I < MAX_TOTAL_INFLUENCES; ++I)
                 if (Vertex.InfluenceWeights[I] > 0 && Section.BoneMap.IsValidIndex(Vertex.InfluenceBones[I]))
@@ -488,21 +545,24 @@ double PercentileOf(TArray<double> Values, double Fraction)
 }
 
 bool UGratiaSoftBodySetupLibrary::MeasureSphereSurface(USkeletalMesh* SkeletalMesh, const TArray<FName>& IncludeSlots, const TArray<FName>& Bones,
-    float RadiusPercentile, TArray<FGratiaSurfaceCapsule>& Capsules)
+    float RadiusPercentile, bool bWholePart, TArray<FGratiaSurfaceCapsule>& Capsules)
 {
     using namespace GratiaSoftBodySetup;
     Capsules.Reset();
     if (!SkeletalMesh || !SkeletalMesh->GetImportedModel() || SkeletalMesh->GetImportedModel()->LODModels.IsEmpty()) return false;
     const FReferenceSkeleton& Ref = SkeletalMesh->GetRefSkeleton();
+    const TMap<int32, TArray<FVector>> Dominated = bWholePart ? TMap<int32, TArray<FVector>>() : OwnedVertices(SkeletalMesh, IncludeSlots);
     for (const FName Name : Bones)
     {
         const int32 Bone = Ref.FindBoneIndex(Name);
         if (Bone == INDEX_NONE) continue;
-        // The whole part (its bone carries >= 0.25), not only the core it dominates: a butt
-        // fitted to its dominated centre was a ball far smaller than the cheek.
+        // Whole part: a butt fitted to its dominated centre was a ball far smaller than the cheek.
+        // Core: a breast fitted to the whole part took in the chest around it (user: worse).
         TArray<FVector> Owned;
+        if (const TArray<FVector>* Core = Dominated.Find(Bone)) Owned = *Core;
         for (const FSkelMeshSection& Section : SkeletalMesh->GetImportedModel()->LODModels[0].Sections)
         {
+            if (!bWholePart) break;
             const FName Slot = SlotOf(SkeletalMesh, Section);
             if (!IncludeSlots.IsEmpty() && !IncludeSlots.Contains(Slot)) continue;
             for (const FSoftSkinVertex& Vertex : Section.SoftVertices)
@@ -557,7 +617,7 @@ bool UGratiaSoftBodySetupLibrary::MeasureSphereSurface(USkeletalMesh* SkeletalMe
         Capsule.Bone = Name;
         Capsule.StartCm = Capsule.EndCm = BoneCS.InverseTransformPosition(Center);
         Capsule.RadiusCm = float(Radius);
-        Capsule.Influences = RegionInfluences(SkeletalMesh, IncludeSlots, Center, Radius * 1.15, Bone);
+        Capsule.Influences = RegionInfluences(SkeletalMesh, IncludeSlots, Center, Radius * 1.15, Bone, bWholePart);
         Capsules.Add(Capsule);
         FString Shares;
         for (const FGratiaSurfaceInfluence& Influence : Capsule.Influences) Shares += FString::Printf(TEXT(" %s=%.2f"), *Influence.Bone.ToString(), Influence.Weight);

@@ -7,7 +7,8 @@
 class AGratiaPreviewCharacter;
 class UGratiaCharacterProfile;
 
-/** Spring grab of one soft-body root bone (VRChat PhysBone style), component space. */
+/** Spring grab (VRChat PhysBone style), component space: the tip of a soft-body root bone,
+ *  or a spring-chain bone itself. */
 struct FGratiaSoftBodyGrab
 {
     FName RootBone;
@@ -21,6 +22,9 @@ struct FGratiaSoftBodyAnimInput
 {
     /** Hand and finger collision spheres: component-space centre (XYZ) and radius (W). */
     TArray<FVector4> HandSpheres;
+    /** Soft parts collide with a fraction of the hand radius (the surface yields first);
+     *  spring chains (hair, decor) with the full hand. */
+    float SoftPushFraction = 1.0f;
     TArray<FGratiaSoftBodyGrab> Grabs;
     /** Root bone -> local scale applied after the simulation (squeeze along the forward axis). */
     TArray<TPair<FName, FVector>> Scales;
@@ -102,6 +106,11 @@ public:
     /** Number of KawaiiPhysics chains evaluated last frame (diagnostics/QA). */
     int32 GetActiveSoftBodyChainCount() const { return ActiveSoftBodyChains; }
     int32 ActiveSoftBodyChains = 0;
+    /** Spring-chain groups that simulate (bit 1 hair, 2 clothing, 4 ears/tail). */
+    uint8 SpringGroups = 0;
+    /** Spring chains evaluated last frame per group (diagnostics/QA). */
+    int32 GetActiveSpringChainCount(uint8 Group) const { return Group < 5 ? ActiveSpringChains[Group] : 0; }
+    int32 ActiveSpringChains[5] = {};
 protected:
     virtual FAnimInstanceProxy* CreateAnimInstanceProxy() override;
 };

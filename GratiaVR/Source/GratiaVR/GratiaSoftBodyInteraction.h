@@ -95,6 +95,8 @@ private:
         float PulseRemaining = 0.0f;
         double SubmitTime = -1.0;
         FName GrabBone;
+        /** Spring chain of a grabbed hair/decor bone; INDEX_NONE for a soft zone. */
+        int32 GrabSpringChain = INDEX_NONE;
         FVector GrabOffset = FVector::ZeroVector;
         /** Point the grab follows: the pressed hand, or the controller when the pose is owned. */
         FVector Grabber = FVector::ZeroVector;
@@ -103,7 +105,9 @@ private:
     };
 
     void SetFault(const FString& Reason);
-    void ReleaseGrab(FHand& Hand) { Hand.GrabBone = NAME_None; }
+    void ReleaseGrab(FHand& Hand) { Hand.GrabBone = NAME_None; Hand.GrabSpringChain = INDEX_NONE; }
+    /** Nearest simulated spring bone (hair, decor) within SpringGrabRadiusCm of the palm or a finger. */
+    void GrabSpringBone(FHand& Hand, const FHand& Other, const FVector& Press, const FVector& Visible, const TArray<FVector>& Fingers);
     void PushToAnimation(bool bReset);
     void PushPress();
 
@@ -123,6 +127,10 @@ private:
     TMap<FName, FVector2D> Squash;
     /** Press direction per soft bone, in bone space (unit; the last one is kept for the spring-back). */
     TMap<FName, FVector> SquashDirection;
+    /** Knuckle line (index to pinky) of the hand cupping a soft bone, bone space, across the press. */
+    TMap<FName, FVector> SquashSide;
+    /** 0: a press flattens the part; 1: a cupping hand squeezes it like a ball (blended). */
+    TMap<FName, float> SquashGrip;
     void UpdateSquash(float Delta);
     bool bPressCleared = false;
 };

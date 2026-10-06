@@ -23,6 +23,14 @@ public:
         float& LengthCm, float& ContactRadiusCm, float& ContactCenterAlongBone);
 
     /**
+     * Spring chain below RootBones: the local axis bones point along (the axis toward the only
+     * child, voted over the chain, or over the whole rig for single-bone chains) and the number
+     * of bones including the roots.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
+    static bool MeasureSpringChain(USkeletalMesh* SkeletalMesh, const TArray<FName>& RootBones, EGratiaBoneAxis& ForwardAxis, int32& BoneCount);
+
+    /**
      * Converts exported source collision objects (schema 2 "colliders") into spheres
      * inscribed in per-bone convex hulls, keeping only those within RangeCm of a soft bone.
      */
@@ -50,10 +58,12 @@ public:
     /**
      * One sphere per bone fitted (least squares) to the surface it skins, e.g. a breast dome
      * or the head; radius at RadiusPercentile of the vertex distances (outer layer).
+     * bWholePart: every vertex the bone carries >= 0.25 (a butt cheek blends into hip and thigh);
+     * otherwise the core the bone dominates (a breast dome without the chest around it).
      */
     UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
     static bool MeasureSphereSurface(USkeletalMesh* SkeletalMesh, const TArray<FName>& IncludeSlots, const TArray<FName>& Bones,
-        float RadiusPercentile, TArray<FGratiaSurfaceCapsule>& Capsules);
+        float RadiusPercentile, bool bWholePart, TArray<FGratiaSurfaceCapsule>& Capsules);
 
     /**
      * Torso as horizontal stadium slices (every StepCm of height) from all vertices owned by

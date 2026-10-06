@@ -293,6 +293,34 @@ bool UGratiaCharacterProfile::ValidateProfile(TArray<FString>& Errors, TArray<FS
         if (Capsule.StartCm.ContainsNaN() || Capsule.EndCm.ContainsNaN() || !FMath::IsFinite(Capsule.RadiusCm) || Capsule.RadiusCm <= 0)
             Errors.Add(FString::Printf(TEXT("Body surface capsule %s needs finite ends and a positive radius."), *Capsule.Bone.ToString()));
     }
+    TSet<int32> SpringRoots;
+    for (const FGratiaSpringChain& Chain : SpringChains)
+    {
+        if (Chain.Name.IsNone() || Chain.RootBones.IsEmpty()) Errors.Add(TEXT("Spring chain needs a name and root bones."));
+        if (Chain.Group != 1 && Chain.Group != 2 && Chain.Group != 4)
+            Errors.Add(FString::Printf(TEXT("Spring chain %s group must be 1 (hair), 2 (clothing) or 4 (ears/tail)."), *Chain.Name.ToString()));
+        for (const FName Bone : Chain.RootBones)
+        {
+            const int32 Index = Ref.FindBoneIndex(Bone);
+            if (Index == INDEX_NONE) Errors.Add(FString::Printf(TEXT("Spring chain root bone %s is missing."), *Bone.ToString()));
+            else SpringRoots.Add(Index);
+            if (SoftBody.Chains.ContainsByPredicate([Bone](const FGratiaSoftBodyChain& Soft) { return Soft.RootBones.Contains(Bone); }))
+                Errors.Add(FString::Printf(TEXT("Bone %s is both a soft body and a spring chain root."), *Bone.ToString()));
+        }
+        const float Values[] = {Chain.TipLengthCm, Chain.Damping, Chain.Stiffness, Chain.WorldDampingLocation, Chain.WorldDampingRotation,
+            Chain.CollisionRadiusCm, Chain.LimitAngleDegrees, Chain.GravityScale, Chain.GrabMovement, Chain.MaxGrabStretchCm};
+        for (float Value : Values)
+            if (!FMath::IsFinite(Value) || Value < 0) Errors.Add(FString::Printf(TEXT("Spring chain %s values must be finite and nonnegative."), *Chain.Name.ToString()));
+    }
+    // A bone below a spring root is simulated by KawaiiPhysics; a Chaos body on it would fight it.
+    for (const FGratiaSecondaryBoneDefinition& Bone : SecondaryBones)
+    {
+        if (!Bone.bSafeSimulation) continue;
+        for (int32 Index = Ref.FindBoneIndex(Bone.Bone); Index != INDEX_NONE; Index = Ref.GetParentIndex(Index))
+            if (SpringRoots.Contains(Index))
+            { Errors.Add(FString::Printf(TEXT("Secondary bone %s is in a spring chain; turn off its Chaos simulation."), *Bone.Bone.ToString())); break; }
+    }
+    if (!FMath::IsFinite(SpringGrabRadiusCm) || SpringGrabRadiusCm < 0) Errors.Add(TEXT("Spring grab radius must be finite and nonnegative."));
     const float HandSurfaceValues[] = {HandSurface.PalmContactRadiusCm, HandSurface.PalmThicknessCm, HandSurface.AdaptDistanceCm,
         HandSurface.GripReachCm, HandSurface.GripBreakDistanceCm, HandSurface.GripBlendSeconds};
     for (const float Value : HandSurfaceValues)

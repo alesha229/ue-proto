@@ -55,6 +55,9 @@ for group, p in presets.items():
         soft_bones.append(bone)
         report.append(dict(chain=values['name'], bone=bone, axis=str(axis), length_cm=length, contact_radius_cm=radius, center_along=along))
 colliders = setup.build_body_colliders(mesh, str(source), soft_bones, 25.0)
+# Her own arms do not knock the soft parts: an arm bending past the chest threw a breast out
+# every frame and shook it against a holding hand (user VR feedback, 6 Oct). Shoulder/torso stay.
+colliders = [c for c in colliders if 'arm' not in str(c.get_editor_property('bone')).lower()]
 assert colliders, 'no body colliders near soft bones'
 colliders = list(colliders)
 settings = profile.get_editor_property('soft_body')

@@ -1037,7 +1037,20 @@ void UGratiaRuntimeVerification::RunPhysicsResponseProbe(float Delta)
             if (Definition && Definition->Group == PhysicsProbeGroup && Definition->RestLengthCm > Longest)
             { Longest = Definition->RestLengthCm; PhysicsProbeBone = Name; }
         }
-        if (PhysicsProbeBone.IsNone()) { TestSkip(TEXT("Physics group disabled by current quality")); ++PhysicsProbeGroup; return; }
+        if (PhysicsProbeBone.IsNone())
+        {
+            // The group may be simulated by KawaiiPhysics spring chains instead of Chaos bodies.
+            int32 Springs = 0;
+            for (const FGratiaSpringChain& Chain : Character->CharacterProfile->SpringChains)
+                if (Chain.Group == PhysicsProbeGroup && Chain.RootBones.ContainsByPredicate([Mesh](FName Bone) { return Mesh->GetBoneIndex(Bone) != INDEX_NONE; }))
+                    ++Springs;
+            const auto* Anim = Cast<UGratiaAnimInstance>(Mesh->GetAnimInstance());
+            if (Springs > 0 && Anim && (Anim->SpringGroups >> PhysicsProbeGroup & 1))
+                TestCheck(Anim->GetActiveSpringChainCount(PhysicsProbeGroup) == Springs,
+                    *FString::Printf(TEXT("Physical group %d simulates as %d spring chains"), PhysicsProbeGroup, Springs));
+            else TestSkip(TEXT("Physics group disabled by current quality"));
+            ++PhysicsProbeGroup; return;
+        }
         FBodyInstance* Body = Mesh->GetBodyInstance(PhysicsProbeBone);
         PhysicsProbeBodyStart = Body->GetUnrealWorldTransform().GetRotation();
         PhysicsProbeVisualStart = Mesh->GetSocketQuaternion(PhysicsProbeBone);
@@ -1072,6 +1085,11 @@ void UGratiaRuntimeVerification::RunHandPhysicsIntegration()
     { TestSkip(TEXT("Hand pressure unavailable in this profile")); HandPhysicsQAPhase = 7; return; }
     if (HandPhysicsQAPhase == 0)
     {
+        if (Physics->GetActiveBones().IsEmpty() && !Character->CharacterProfile->SpringChains.IsEmpty())
+        {
+            TestSkip(TEXT("No Chaos secondary bodies: hair/decor are spring chains (soft body QA pushes and grabs them)"));
+            HandPhysicsQAPhase = 7; return;
+        }
         TestCheck(!Physics->GetActiveBones().IsEmpty(), TEXT("Hand pressure has active driven Chaos bodies"));
         if (Physics->GetActiveBones().IsEmpty()) { HandPhysicsQAPhase = 7; return; }
         HandPhysicsQABone = Physics->GetActiveBones().Last();
