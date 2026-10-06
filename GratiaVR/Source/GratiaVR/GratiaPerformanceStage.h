@@ -39,6 +39,10 @@ public:
     float MusicResyncSeconds = 0.25f;
     /** Updates partner and music now (also called every tick; QA calls it directly). */
     void UpdateStage();
+    /** Paused music holds; a speed other than 1 plays the music faster/slower (pitched). */
+    void SetPlayback(bool bInPaused, float Rate) { bPaused = bInPaused; PlaybackRate = FMath::Clamp(Rate, 0.25f, 2.0f); }
+    /** Player music volume (0..2) on top of the scene's MusicVolume. */
+    void SetMusicVolumeScale(float Scale) { MusicVolumeScale = FMath::Clamp(Scale, 0.0f, 2.0f); }
     FString GetDiagnostics() const;
 
 protected:
@@ -59,8 +63,11 @@ private:
     TObjectPtr<UAudioComponent> Music;
     /** Performance entry the partner is posed for (pointer identity within the profile). */
     const FGratiaPerformanceClip* PosedFor = nullptr;
-    double MusicStartTime = 0.0;
-    float MusicStartOffset = 0.0f;
+    /** Track position of the playing music, advanced by the playback rate while not paused. */
+    float MusicClock = -1.0f;
+    float PlaybackRate = 1.0f;
+    float MusicVolumeScale = 1.0f;
+    bool bPaused = false;
     bool bViewpointActive = false;
     float PartnerPoseError = 0.0f;
 };

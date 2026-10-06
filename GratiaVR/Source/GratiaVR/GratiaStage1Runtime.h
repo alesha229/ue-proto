@@ -14,6 +14,8 @@ class USphereComponent;
 class UTextRenderComponent;
 class UGratiaLocomotion;
 class UGratiaMenu;
+class UGratiaSceneDirector;
+class UGratiaSceneFlowVerification;
 class UGratiaRuntimeVerification;
 class UGratiaHandInput;
 
@@ -155,6 +157,14 @@ public:
     TObjectPtr<UGratiaLocomotion> Locomotion;
     UPROPERTY(VisibleAnywhere, Category = "Menu")
     TObjectPtr<UGratiaMenu> Menu;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Scenes")
+    TObjectPtr<UGratiaSceneDirector> SceneDirector;
+    UCameraComponent* GetPlayerCamera() const;
+    APawn* GetPlayerPawn() const;
+    APlayerController* GetPlayerController() const;
+    /** Place the calibration anchor and align the tracked head to it, preserving floor height. */
+    void PlaceAnchor(const FTransform& Transform);
+    bool IsSceneInteractionAllowed() const;
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Input")
     TObjectPtr<UGratiaHandInput> HandInput;
 
@@ -245,6 +255,7 @@ private:
 
     UPROPERTY()
     TObjectPtr<UGratiaRuntimeVerification> Verification;
+    UPROPERTY() TObjectPtr<UGratiaSceneFlowVerification> SceneFlowVerification;
 
     struct FCollisionSnapshot
     {

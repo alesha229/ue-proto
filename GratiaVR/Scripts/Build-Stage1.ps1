@@ -19,6 +19,15 @@ if (-not $SkipEditorBuild) {
     & (Join-Path $EngineRoot 'Engine\Build\BatchFiles\Build.bat') GratiaVREditor Win64 Development "-Project=$projectFile" -WaitMutex -NoHotReloadFromIDE 2>&1 | Tee-Object -FilePath (Join-Path $evidenceRoot 'editor_build.log')
     if ($LASTEXITCODE -ne 0) { throw "Editor build failed ($LASTEXITCODE)" }
 }
+# Author or verify the player scene assets using the compiled editor module.
+# The script keeps existing assets byte-for-byte when its authoring signature matches.
+$editorExe = Join-Path $EngineRoot 'Engine\Binaries\Win64\UnrealEditor-Cmd.exe'
+$experienceScript = (Join-Path $PSScriptRoot 'setup_scene_experience.py').Replace('\','/')
+& $editorExe $projectFile '-run=pythonscript' "-script=$experienceScript" '-unattended' '-nop4' '-nosplash' '-NullRHI' '-nohmd' '-ddc=InstalledNoZenLocalFallback' '-SkipZenStore' 2>&1 | Tee-Object -FilePath (Join-Path $evidenceRoot 'experience_assets.log')
+if ($LASTEXITCODE -ne 0) { throw "Scene asset preparation failed ($LASTEXITCODE)" }
+# The final stamp includes any assets authored above, before the game target compiles.
+& $pythonPath (Join-Path $PSScriptRoot 'create_build_manifest.py') --engine $EngineRoot --output $manifestPath
+if ($LASTEXITCODE -ne 0) { throw 'Final build stamp failed' }
 $uatArguments = @(
     'BuildCookRun', "-project=$projectFile", '-platform=Win64',
     '-clientconfig=Development', '-build', '-cook',
@@ -54,6 +63,9 @@ $manifest | Add-Member -NotePropertyName package_files -NotePropertyValue $packa
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $packageRoot 'build_manifest.json') -Encoding utf8
 Copy-Item -LiteralPath (Join-Path $packageRoot 'build_manifest.json') -Destination (Join-Path $evidenceRoot 'build_manifest.json')
 # The staged copy is an intermediate duplicate of the package; keep only Builds\Windows.
-Remove-Item -LiteralPath $stagedRoot -Recurse -Force
+$resolvedStage = [IO.Path]::GetFullPath($stagedRoot)
+$allowedStage = [IO.Path]::GetFullPath((Join-Path $projectRoot 'Saved\StagedBuilds')) + [IO.Path]::DirectorySeparatorChar
+if (-not $resolvedStage.StartsWith($allowedStage, [StringComparison]::OrdinalIgnoreCase)) { throw 'Refusing cleanup outside Saved/StagedBuilds' }
+Remove-Item -LiteralPath $resolvedStage -Recurse -Force
 Write-Output "Package: $packageRoot (build $($manifest.build_id))"
 

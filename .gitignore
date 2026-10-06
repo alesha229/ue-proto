@@ -21,6 +21,8 @@ Archive/
 *.tmp
 *.dmp
 .codex/
+.claude/agents/
+.claude/scheduled_tasks.lock
 
 # Authoring backups / generated exchange files
 *.blend1
@@ -36,3 +38,28 @@ Exports/Gratia/*.fbx
 *.pem
 GratiaVR/Source/GratiaVR/Generated/
 Exports/Gratia/Audio/*.wav
+
+# >>> studioigor:base
+.DS_Store
+.claude/worktrees/
+.studioigor/captures/
+.studioigor/refs/**/*.jpg
+.studioigor/refs/**/*.jpeg
+.studioigor/refs/**/*.png
+.studioigor/refs/**/*.webp
+.studioigor/refs/**/*.gif
+.studioigor/refs/**/*.mp4
+.studioigor/refs/**/*.webm
+.studioigor/boards/**/*.png
+.studioigor/boards/**/*.jpg
+.studioigor/boards/**/*.mp4
+.studioigor/gauntlet/**/*.png
+.studioigor/gauntlet/**/*.jpg
+.studioigor/gauntlet/**/*.webp
+.studioigor/autopilot/state.json
+.studioigor/autopilot/lock
+.studioigor/autopilot/lock.json
+.studioigor/autopilot/logs/
+.studioigor/autopilot/runner.log
+.studioigor/autopilot/LOG.md
+# <<< studioigor:base

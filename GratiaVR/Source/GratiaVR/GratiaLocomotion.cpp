@@ -1,4 +1,6 @@
 #include "GratiaLocomotion.h"
+#include "GratiaStage1Runtime.h"
+#include "GratiaSceneDirector.h"
 #include "Camera/CameraComponent.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
@@ -164,6 +166,7 @@ void UGratiaLocomotion::TickComponent(float DeltaTime, ELevelTick TickType, FAct
     else if (!WalkAction || !TurnAction || !Mapping || !ActionInput) MovementReason = TEXT("missing action/binding");
     else if (!bMappingReady) MovementReason = TEXT("missing mapping context");
     else if (!Cast<UEnhancedPlayerInput>(Controller->PlayerInput)) MovementReason = TEXT("wrong PlayerInput class");
+    else if (const auto* Runtime = Cast<AGratiaStage1Runtime>(GetOwner()); Runtime && Runtime->SceneDirector && Runtime->SceneDirector->IsSceneInputBlocked()) MovementReason = TEXT("scene transition / lobby blocked");
     else if (!bEnabled) MovementReason = TEXT("menu blocked");
     else if (FilterStick(MappedStick, StickDeadZone).IsNearlyZero())
         MovementReason = bRawKeyChannelAvailable && RawStick.Size() > StickDeadZone ? TEXT("raw keys present, mapped zero") : TEXT("zero action input / dead zone");
@@ -174,7 +177,8 @@ void UGratiaLocomotion::TickComponent(float DeltaTime, ELevelTick TickType, FAct
         LastPawnDelta = Pawn->GetActorLocation() - Before;
         MovementReason = LastPawnDelta.IsNearlyZero(0.001) ? TEXT("collision blocked") : TEXT("moving");
     }
-    if (IsReady() && bEnabled)
+    const auto* Runtime = Cast<AGratiaStage1Runtime>(GetOwner());
+    if (IsReady() && bEnabled && (!Runtime || !Runtime->SceneDirector || !Runtime->SceneDirector->IsSceneInputBlocked()))
     {
         if (FMath::Abs(Turn) < 0.25f) bTurnArmed = true;
         else if (bTurnArmed && FMath::Abs(Turn) >= 0.7f)

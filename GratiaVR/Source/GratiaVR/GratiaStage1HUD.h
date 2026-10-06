@@ -12,6 +12,7 @@ class GRATIAVR_API AGratiaStage1HUD : public AHUD
     GENERATED_BODY()
 public:
     virtual void DrawHUD() override;
+    void SetRuntime(AGratiaStage1Runtime* Value) { Runtime = Value; }
 private:
     TWeakObjectPtr<AGratiaStage1Runtime> Runtime;
 };

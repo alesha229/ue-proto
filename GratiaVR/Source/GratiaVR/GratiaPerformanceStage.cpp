@@ -60,8 +60,7 @@ void UGratiaPerformanceStage::SetViewpointActive(bool bActive)
 
 float UGratiaPerformanceStage::GetMusicTime() const
 {
-    if (!IsMusicPlaying() || !GetWorld()) return -1.0f;
-    return MusicStartOffset + float(GetWorld()->GetTimeSeconds() - MusicStartTime);
+    return IsMusicPlaying() ? MusicClock : -1.0f;
 }
 
 bool UGratiaPerformanceStage::IsMusicPlaying() const
@@ -72,6 +71,7 @@ bool UGratiaPerformanceStage::IsMusicPlaying() const
 void UGratiaPerformanceStage::TickComponent(float Delta, ELevelTick Type, FActorComponentTickFunction* Tick)
 {
     Super::TickComponent(Delta, Type, Tick);
+    if (IsMusicPlaying() && !bPaused && FMath::IsFinite(Delta)) MusicClock += Delta * PlaybackRate;
     UpdateStage();
 }
 
@@ -92,6 +92,12 @@ void UGratiaPerformanceStage::UpdateStage()
 
     // Music follows the performance clock; a jump (loop, segment seek, hitch) re-syncs it.
     const float Time = GetPerformanceTime();
+    const auto* Playback = Character->CharacterMesh ? Character->CharacterMesh->GetSingleNodeInstance() : nullptr;
+    const auto* FinalClip = Performance->GetPart(Performance->NumParts() - 1);
+    if (!bPaused && !Performance->bLoop && Playback && FinalClip
+        && Character->PerformancePart == Performance->NumParts() - 1 && !Playback->IsPlaying()
+        && Playback->GetCurrentTime() >= FinalClip->GetPlayLength() - 1.e-3f)
+    { StopMusic(); return; }
     const bool bSound = Character->Interaction && Character->Interaction->bSound && Character->CharacterProfile
         && Character->CharacterProfile->Capabilities.bSound;
     if (!Scene.Music || !bSound || Time < 0.0f || Time >= Scene.Music->GetDuration()) { StopMusic(); return; }
@@ -105,15 +111,16 @@ void UGratiaPerformanceStage::UpdateStage()
         Music->RegisterComponent();
     }
     const float Expected = GetMusicTime();
-    if (Music->Sound != Scene.Music || Expected < 0.0f || FMath::Abs(Expected - Time) > MusicResyncSeconds)
+    if (Music->Sound != Scene.Music || Expected < 0.0f || FMath::Abs(Expected - Time) > MusicResyncSeconds * FMath::Max(1.0f, PlaybackRate))
     {
         Music->SetSound(Scene.Music);
-        Music->SetVolumeMultiplier(Scene.MusicVolume);
         Music->Play(Time);
-        MusicStartOffset = Time;
-        MusicStartTime = GetWorld()->GetTimeSeconds();
+        MusicClock = Time;
         UE_LOG(LogGratiaStage, Display, TEXT("PERFORMANCE_MUSIC %s at %.2fs (was %.2fs)"), *Scene.Music->GetName(), Time, Expected);
     }
+    Music->SetVolumeMultiplier(Scene.MusicVolume * MusicVolumeScale);
+    Music->SetPitchMultiplier(PlaybackRate);
+    Music->SetPaused(bPaused);
 }
 
 void UGratiaPerformanceStage::PosePartner(const FGratiaPerformanceClip& Performance)

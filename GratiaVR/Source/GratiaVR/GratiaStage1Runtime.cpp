@@ -5,6 +5,10 @@
 #include "GratiaLocomotion.h"
 #include "GratiaInteraction.h"
 #include "GratiaMenu.h"
+#include "GratiaMenuWidget.h"
+#include "GratiaSceneDirector.h"
+#include "GratiaSceneFlowVerification.h"
+#include "GratiaSceneLibrary.h"
 #include "GratiaSecondaryMotion.h"
 #include "GratiaSoftBodyInteraction.h"
 #include "GratiaBodySurface.h"
@@ -66,6 +70,11 @@ AGratiaStage1Runtime::AGratiaStage1Runtime()
     RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("CalibrationAnchor"));
     Locomotion = CreateDefaultSubobject<UGratiaLocomotion>(TEXT("SmoothLocomotion"));
     Menu = CreateDefaultSubobject<UGratiaMenu>(TEXT("WorldMenu"));
+    SceneDirector = CreateDefaultSubobject<UGratiaSceneDirector>(TEXT("SceneDirector"));
+    SceneFlowVerification = CreateDefaultSubobject<UGratiaSceneFlowVerification>(TEXT("SceneFlowVerification"));
+    SceneDirector->AddTickPrerequisiteActor(this);
+    Menu->AddTickPrerequisiteComponent(SceneDirector);
+    SceneFlowVerification->AddTickPrerequisiteComponent(SceneDirector);
     HandInput = CreateDefaultSubobject<UGratiaHandInput>(TEXT("HandInput"));
     Verification = CreateDefaultSubobject<UGratiaRuntimeVerification>(TEXT("RuntimeVerification"));
     DebugPanel = CreateDefaultSubobject<UTextRenderComponent>(TEXT("DebugPanel"));
@@ -140,6 +149,11 @@ void AGratiaStage1Runtime::Tick(float DeltaSeconds)
     if (PlayerController.IsValid())
     {
         APlayerController* PC = PlayerController.Get();
+        if (IsSceneInteractionAllowed() && Menu)
+        {
+            if (PC->WasInputKeyJustPressed(EKeys::F2)) Menu->Execute(EGratiaMenuAction::Pose);
+            if (PC->WasInputKeyJustPressed(EKeys::F3)) Menu->Execute(EGratiaMenuAction::Reset);
+        }
         if (PC->WasInputKeyJustPressed(EKeys::R)) Recenter();
         if (PC->WasInputKeyJustPressed(EKeys::PageUp)) AdjustHeight(HeightStepCm);
         if (PC->WasInputKeyJustPressed(EKeys::PageDown)) AdjustHeight(-HeightStepCm);
@@ -245,6 +259,7 @@ void AGratiaStage1Runtime::BindPlayer()
         }
     }
 
+    if (PC) if (auto* HUD = Cast<AGratiaStage1HUD>(PC->GetHUD())) HUD->SetRuntime(this);
     APawn* Pawn = PC ? PC->GetPawn() : nullptr;
     if (Pawn == PlayerPawn.Get())
     {
@@ -421,8 +436,11 @@ FTransform AGratiaStage1Runtime::GetParkedTransform(bool bLeft, const FVector& S
 
 void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaSeconds)
 {
-    if (!Hand.Visual.IsValid() || !Hand.Controller.IsValid()) return;
-    if (!Hand.OriginalParent.IsValid()) return;
+    if (!Hand.Visual.IsValid() || !Hand.Controller.IsValid() || !Hand.OriginalParent.IsValid())
+    {
+        UpdateHaptics(Hand, bLeft, 0.0f, 0.0f);
+        return;
+    }
     const FTransform Target = Hand.OriginalRelative * Hand.OriginalParent->GetSocketTransform(Hand.OriginalSocket, RTS_World);
     const bool bReliable = bXRActive && !Hand.bForceLoss && Hand.Controller->IsTracked()
         && Hand.Controller->CurrentTrackingStatus == ETrackingStatus::Tracked && IsFiniteTransform(Target);
@@ -439,17 +457,17 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
     }
 
     FTransform VisualWorld = Hand.LastWorld;
-    if (Hand.Gate.State != EGratiaHandState::Tracked && !Hand.GripBone.IsNone()) ReleaseBodyGrip(Hand, bLeft, TEXT("tracking"));
+    if ((Hand.Gate.State != EGratiaHandState::Tracked || !IsSceneInteractionAllowed()) && !Hand.GripBone.IsNone()) ReleaseBodyGrip(Hand, bLeft, TEXT("tracking / scene gate"));
     if (Hand.Gate.State == EGratiaHandState::Tracked)
     {
         // The palm collides with the body surface (not a wide sphere around the wrist).
         FGratiaPalmFrame Palm;
         const FVector PalmLocal = Hand.HandAnim.IsValid() && Hand.HandAnim->GetPalmFrame(Palm) ? Palm.Point * Target.GetScale3D() : FVector::ZeroVector;
-        const FTransform Constrained = TargetCharacter.IsValid() && TargetCharacter->Interaction
+        const FTransform Constrained = IsSceneInteractionAllowed() && TargetCharacter.IsValid() && TargetCharacter->Interaction
             ? TargetCharacter->Interaction->ConstrainHand(Hand.LastWorld, Target, bLeft, PalmLocal) : Target;
         const FTransform ContactTarget = ApplyBodySurface(Hand, bLeft, Target, Constrained, DeltaSeconds);
         VisualWorld = ContactTarget;
-        SetHandCollision(Hand, true);
+        SetHandCollision(Hand, IsSceneInteractionAllowed());
     }
     else if (Hand.Gate.State == EGratiaHandState::Recovering)
     {
@@ -471,14 +489,15 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
         }
     }
     FTransform Desired = VisualWorld;
+    float ContactHapticAmplitude = 0.0f, ContactHapticFrequency = 0.0f;
     // The opt-in soak supplies its own samples after this update. Parked desktop
     // hands must not keep resetting that scenario's correction-recovery timer.
     if (TargetCharacter.IsValid() && TargetCharacter->Interaction && !Verification->OwnsSyntheticContactSamples())
     {
-        TargetCharacter->Interaction->SetHandSample(bLeft, Target, VisualWorld, Hand.Gate.CanInteract());
+        TargetCharacter->Interaction->SetHandSample(bLeft, Target, VisualWorld, Hand.Gate.CanInteract() && IsSceneInteractionAllowed());
         if (TargetCharacter->SecondaryMotion && !Verification->IsHandPhysicsQAActive())
             TargetCharacter->SecondaryMotion->SubmitHand(bLeft, VisualWorld.GetLocation(),
-                TargetCharacter->Interaction->IsHandSampleReady(bLeft) && (!Menu || !Menu->bOpen), DeltaSeconds,
+                TargetCharacter->Interaction->IsHandSampleReady(bLeft) && IsSceneInteractionAllowed(), DeltaSeconds,
                 HandInput ? HandInput->GetTrigger(bLeft) : 0.0f);
         if (TargetCharacter->SoftBodyInteraction)
         {
@@ -493,7 +512,7 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
             }
             const FVector VisiblePalm = VisualWorld.TransformPositionNoScale(PalmLocal);
             const FVector RawPalm = Target.TransformPositionNoScale(PalmLocal);
-            const bool bAllowed = TargetCharacter->Interaction->IsHandSampleReady(bLeft) && (!Menu || !Menu->bOpen);
+            const bool bAllowed = TargetCharacter->Interaction->IsHandSampleReady(bLeft) && IsSceneInteractionAllowed();
             const float Grab = HandInput ? FMath::Max(HandInput->GetTrigger(bLeft), HandInput->GetGrip(bLeft)) : 0.0f;
             // Cupping/wrapping places the hand itself; the soft part then follows the controller.
             const bool bPoseOwned = !Hand.CupBone.IsNone() || !Hand.GripBone.IsNone();
@@ -504,10 +523,13 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
                 Desired.SetLocation(SoftBody->GetPressPoint(bLeft) - (VisiblePalm - VisualWorld.GetLocation()));
             // Grip onto a body part gives a short tap; soft-zone vibration follows depth.
             Hand.GripPulse = FMath::Max(0.0f, Hand.GripPulse - DeltaSeconds);
-            const float Amplitude = FMath::Max(SoftBody->GetHapticAmplitude(bLeft), Hand.GripPulse > 0 ? 0.45f : 0.0f);
-            UpdateHaptics(Hand, bLeft, bAllowed && bXRActive ? Amplitude : 0.0f, Hand.GripPulse > 0 ? 0.3f : SoftBody->GetHapticFrequency(bLeft));
+            ContactHapticAmplitude = bAllowed ? FMath::Max(SoftBody->GetHapticAmplitude(bLeft), Hand.GripPulse > 0 ? 0.45f : 0.0f) : 0.0f;
+            ContactHapticFrequency = Hand.GripPulse > 0 ? 0.3f : SoftBody->GetHapticFrequency(bLeft);
         }
     }
+    const float SceneAmplitude = SceneDirector ? SceneDirector->GetSceneHapticAmplitude() : 0.0f;
+    UpdateHaptics(Hand, bLeft, FMath::Max(ContactHapticAmplitude, SceneAmplitude),
+        ContactHapticAmplitude > SceneAmplitude ? ContactHapticFrequency : 0.5f);
     if (Hand.Gate.State == EGratiaHandState::Tracked) ApplyVisualHand(Hand, Target, Desired, DeltaSeconds);
     if (Hand.bSmoothedValid && IsFiniteTransform(Hand.Smoothed)) VisualWorld = Hand.Smoothed;
     if (IsFiniteTransform(VisualWorld)) Hand.LastWorld = VisualWorld;
@@ -591,7 +613,7 @@ FTransform AGratiaStage1Runtime::ApplyBodySurface(FHandProxy& Hand, bool bLeft, 
     UGratiaBodySurface* Surface = Character ? Character->BodySurface.Get() : nullptr;
     FGratiaPalmFrame Palm;
     if (!Profile || !Profile->HandSurface.bEnabled || !Surface || !Hand.HandAnim.IsValid() || !Hand.HandAnim->GetPalmFrame(Palm)
-        || (Menu && Menu->bOpen) || !Character->CharacterMesh)
+        || !IsSceneInteractionAllowed() || !Character->CharacterMesh)
     {
         ReleaseBodyGrip(Hand, bLeft, TEXT("unavailable"));
         return Constrained;
@@ -686,13 +708,17 @@ void AGratiaStage1Runtime::UpdateHaptics(FHandProxy& Hand, bool bLeft, float Amp
 {
     APlayerController* PC = PlayerController.Get();
     if (!PC) return;
+    if (!bXRActive || !Hand.Gate.CanInteract() || !IsSceneInteractionAllowed()) Amplitude = 0.0f;
+    const auto* Settings = SceneDirector ? SceneDirector->GetUserSettings() : nullptr;
+    Amplitude *= Settings ? Settings->HapticsScale : 1.0f;
     const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
     Amplitude = FMath::IsFinite(Amplitude) ? FMath::Clamp(Amplitude, 0.0f, 1.0f) : 0.0f;
     Frequency = FMath::IsFinite(Frequency) ? FMath::Clamp(Frequency, 0.0f, 1.0f) : 0.0f;
     // OpenXR haptics expire on their own; refresh while active, change only on a real difference.
     const bool bChanged = FMath::Abs(Amplitude - Hand.SentHapticAmplitude) > 0.02f || FMath::Abs(Frequency - Hand.SentHapticFrequency) > 0.05f;
+    const bool bMustStop = Amplitude <= 0.0f && Hand.SentHapticAmplitude > 0.0f;
     const bool bKeepAlive = Amplitude > 0.0f && Now - Hand.SentHapticTime > 0.25;
-    if (!bChanged && !bKeepAlive) return;
+    if (!bChanged && !bKeepAlive && !bMustStop) return;
     PC->SetHapticsByValue(Frequency, Amplitude, bLeft ? EControllerHand::Left : EControllerHand::Right);
     Hand.SentHapticAmplitude = Amplitude; Hand.SentHapticFrequency = Frequency; Hand.SentHapticTime = Now;
 }
@@ -720,6 +746,34 @@ void AGratiaStage1Runtime::ApplyHeight()
     FVector Location = TrackingOrigin->GetRelativeLocation();
     Location.Z = OriginalOriginZ + HeightOffsetCm;
     TrackingOrigin->SetRelativeLocation(Location, false, nullptr, ETeleportType::TeleportPhysics);
+}
+
+bool AGratiaStage1Runtime::IsSceneInteractionAllowed() const
+{
+    return (!SceneDirector || !SceneDirector->IsSceneInputBlocked()) && (!Menu || !Menu->bOpen);
+}
+
+UCameraComponent* AGratiaStage1Runtime::GetPlayerCamera() const { return Camera.Get(); }
+APawn* AGratiaStage1Runtime::GetPlayerPawn() const { return PlayerPawn.Get(); }
+APlayerController* AGratiaStage1Runtime::GetPlayerController() const { return PlayerController.Get(); }
+
+void AGratiaStage1Runtime::PlaceAnchor(const FTransform& Transform)
+{
+    if (!IsFiniteTransform(Transform)) return;
+    SetActorTransform(Transform, false, nullptr, ETeleportType::TeleportPhysics);
+    if (PlayerPawn.IsValid())
+    {
+        FVector Position = PlayerPawn->GetActorLocation();
+        Position.Z = Transform.GetLocation().Z;
+        PlayerPawn->SetActorLocation(Position, false, nullptr, ETeleportType::TeleportPhysics);
+    }
+    bPendingRecenter = false;
+    FinishRecenter();
+    if (TargetCharacter.IsValid())
+    {
+        if (TargetCharacter->Interaction) TargetCharacter->Interaction->ResetState();
+        if (TargetCharacter->SoftBodyInteraction) TargetCharacter->SoftBodyInteraction->ClearHands();
+    }
 }
 
 void AGratiaStage1Runtime::AdjustHeight(float DeltaCm)

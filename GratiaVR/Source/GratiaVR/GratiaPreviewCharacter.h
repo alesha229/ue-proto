@@ -82,9 +82,25 @@ public:
     /** Current part (0 = Clip, then Segments) of a segmented performance. */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Gratia|Preview")
     int32 PerformancePart = 0;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Gratia|Preview")
+    bool bPerformancePaused = false;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Gratia|Preview")
+    float PerformanceRate = 1.0f;
 
     /** Continues a segmented performance with its next part when the current one ends. */
     void UpdatePerformance();
+
+    /** Profile performance index by name; INDEX_NONE when the profile has none of that name. */
+    int32 FindPerformance(FName Name) const;
+    /** Pauses/resumes the performance and sets its speed (music follows, pitched by the speed). */
+    UFUNCTION(BlueprintCallable, Category = "Gratia|Preview")
+    void SetPerformancePlayback(bool bPaused, float Rate);
+    bool IsPerformancePaused() const { return bPerformancePaused; }
+    float GetPerformanceRate() const { return PerformanceRate; }
+    /** Jumps to the start of a part of the current performance (clamped). */
+    UFUNCTION(BlueprintCallable, Category = "Gratia|Preview")
+    bool SeekPerformancePart(int32 Part);
+    int32 GetPerformancePartCount() const;
 
     UFUNCTION(BlueprintCallable, Category = "Gratia|Preview")
     void SetPreviewPose(EGratiaPreviewPose Pose);

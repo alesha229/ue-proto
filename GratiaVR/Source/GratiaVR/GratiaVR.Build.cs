@@ -7,8 +7,8 @@ public class GratiaVR : ModuleRules
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
         // Profile types are also authored by the editor-only setup module.
         PublicIncludePaths.Add(ModuleDirectory);
-        PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine", "InputCore", "HeadMountedDisplay" });
+        PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine", "InputCore", "HeadMountedDisplay", "UMG" });
         PrivateDependencyModuleNames.AddRange(new[] { "XRBase", "RenderCore", "RHI", "PhysicsCore", "EnhancedInput",
-            "KawaiiPhysics", "AnimGraphRuntime" });
+            "KawaiiPhysics", "AnimGraphRuntime", "Slate", "SlateCore" });
     }
 }

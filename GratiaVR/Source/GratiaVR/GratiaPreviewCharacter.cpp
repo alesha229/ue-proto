@@ -238,6 +238,49 @@ bool AGratiaPreviewCharacter::SetPerformance(int32 Index)
     PerformanceIndex = Index;
     PerformancePart = 0;
     SetPreviewPose(EGratiaPreviewPose::Performance);
+    SetPerformancePlayback(false, PerformanceRate);
+    return true;
+}
+
+int32 AGratiaPreviewCharacter::FindPerformance(FName Name) const
+{
+    if (!CharacterProfile || Name.IsNone()) return INDEX_NONE;
+    return CharacterProfile->PerformanceClips.IndexOfByPredicate([Name](const FGratiaPerformanceClip& Clip) { return Clip.Name == Name; });
+}
+
+int32 AGratiaPreviewCharacter::GetPerformancePartCount() const
+{
+    const FGratiaPerformanceClip* Performance = PreviewPose == EGratiaPreviewPose::Performance ? GetPerformance() : nullptr;
+    return Performance ? Performance->NumParts() : 0;
+}
+
+void AGratiaPreviewCharacter::SetPerformancePlayback(bool bPaused, float Rate)
+{
+    bPerformancePaused = bPaused;
+    PerformanceRate = FMath::Clamp(FMath::IsFinite(Rate) ? Rate : 1.0f, 0.25f, 2.0f);
+    UAnimSingleNodeInstance* Instance = CharacterMesh ? CharacterMesh->GetSingleNodeInstance() : nullptr;
+    if (Instance && PreviewPose == EGratiaPreviewPose::Performance)
+    {
+        Instance->SetPlayRate(PerformanceRate);
+        Instance->SetPlaying(!bPerformancePaused);
+    }
+    if (PerformanceStage) PerformanceStage->SetPlayback(bPerformancePaused, PerformanceRate);
+}
+
+bool AGratiaPreviewCharacter::SeekPerformancePart(int32 Part)
+{
+    const FGratiaPerformanceClip* Performance = PreviewPose == EGratiaPreviewPose::Performance ? GetPerformance() : nullptr;
+    UAnimSingleNodeInstance* Instance = CharacterMesh ? CharacterMesh->GetSingleNodeInstance() : nullptr;
+    if (!Performance || !Instance) return false;
+    Part = FMath::Clamp(Part, 0, Performance->NumParts() - 1);
+    UAnimSequence* Clip = Performance->GetPart(Part);
+    if (!Clip) return false;
+    PerformancePart = Part;
+    Instance->SetAnimationAsset(Clip, Performance->bLoop && Performance->Segments.IsEmpty(), PerformanceRate);
+    Instance->SetPosition(0.0f, false);
+    Instance->SetPlaying(!bPerformancePaused);
+    if (SoftBodyInteraction) SoftBodyInteraction->ResetSoftBody();
+    UE_LOG(LogGratiaPreview, Display, TEXT("Performance %s seek part %d/%d"), *GetPreviewPoseLabel(), Part + 1, Performance->NumParts());
     return true;
 }
 
@@ -245,7 +288,7 @@ void AGratiaPreviewCharacter::UpdatePerformance()
 {
     const FGratiaPerformanceClip* Performance = PreviewPose == EGratiaPreviewPose::Performance ? GetPerformance() : nullptr;
     UAnimSingleNodeInstance* Instance = CharacterMesh ? CharacterMesh->GetSingleNodeInstance() : nullptr;
-    if (!Performance || Performance->Segments.IsEmpty() || !Instance || !Instance->GetAnimationAsset()) return;
+    if (!Performance || Performance->Segments.IsEmpty() || !Instance || !Instance->GetAnimationAsset() || bPerformancePaused) return;
     const UAnimSequence* Current = Performance->GetPart(PerformancePart);
     if (Instance->GetAnimationAsset() != Current) return;
     if (Instance->IsPlaying() && Instance->GetCurrentTime() < Current->GetPlayLength() - 1.0e-3f) return;
@@ -259,7 +302,7 @@ void AGratiaPreviewCharacter::UpdatePerformance()
     UAnimSequence* Part = Performance->GetPart(Next);
     if (!Part) return;
     PerformancePart = Next;
-    Instance->SetAnimationAsset(Part, false, 1.0f);
+    Instance->SetAnimationAsset(Part, false, PerformanceRate);
     Instance->SetPlaying(true);
     Instance->SetPosition(0.0f, false);
     UE_LOG(LogGratiaPreview, Display, TEXT("Performance %s part %d/%d %s"), *GetPreviewPoseLabel(), PerformancePart + 1,
@@ -343,11 +386,6 @@ void AGratiaPreviewCharacter::CyclePreviewPose()
 void AGratiaPreviewCharacter::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
-    if (APlayerController* Controller = UGameplayStatics::GetPlayerController(this, 0))
-    {
-        if (Controller->WasInputKeyJustPressed(EKeys::F2)) CyclePreviewPose();
-        if (Controller->WasInputKeyJustPressed(EKeys::F3)) ResetToIdle();
-    }
     if (IsIdlePreview()) UpdateBlink(DeltaSeconds);
     UpdatePerformance();
 }

@@ -4,6 +4,7 @@ if (-not $SkipBuild) { & (Join-Path $PSScriptRoot 'Build-Stage1.ps1') -EngineRoo
 & (Join-Path $PSScriptRoot 'Test-Stage1.ps1') -EvidenceStage '04'
 & (Join-Path $PSScriptRoot 'Test-CharacterProfiles.ps1')
 & (Join-Path $PSScriptRoot 'Test-CharacterSoftBody.ps1')
+& (Join-Path $PSScriptRoot 'Test-SceneFlow.ps1') -EngineRoot $EngineRoot
 if ($VisualChecks) {
     & (Join-Path $PSScriptRoot 'Test-CharacterPoses.ps1') -EvidenceStage '04'
     & (Join-Path $PSScriptRoot 'Test-CharacterViews.ps1') -EvidenceStage '04'

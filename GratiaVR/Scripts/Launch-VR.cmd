@@ -8,7 +8,7 @@ if not exist "%GRATIA_EXE%" (
     if not defined GRATIA_NO_PAUSE pause
     exit /b 1
 )
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "try { $manifestInfo = Get-Content -LiteralPath $env:GRATIA_MANIFEST -Raw | ConvertFrom-Json; if ([string]::IsNullOrWhiteSpace($manifestInfo.build_id)) { throw 'Build manifest has no build id' }; $runtimeHash = (Get-FileHash -LiteralPath $env:GRATIA_EXE -Algorithm SHA256).Hash; if ($runtimeHash -ne $manifestInfo.executable_sha256) { throw 'Executable differs from build manifest. Run Build.cmd again' }; Write-Host ('Build id: ' + $manifestInfo.build_id); Write-Host ('Package: ' + $env:GRATIA_PACKAGE); exit 0 } catch { Write-Host ('Cannot launch: ' + $_.Exception.Message); exit 1 }"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "try { if (Get-Process -Name GratiaVR -ErrorAction SilentlyContinue) { throw 'GratiaVR is already running. Close that instance before launching another' }; $manifestInfo = Get-Content -LiteralPath $env:GRATIA_MANIFEST -Raw | ConvertFrom-Json; if ([string]::IsNullOrWhiteSpace($manifestInfo.build_id)) { throw 'Build manifest has no build id' }; $runtimeHash = (Get-FileHash -LiteralPath $env:GRATIA_EXE -Algorithm SHA256).Hash; if ($runtimeHash -ne $manifestInfo.executable_sha256) { throw 'Executable differs from build manifest. Run Build.cmd again' }; Write-Host ('Build id: ' + $manifestInfo.build_id); Write-Host ('Package: ' + $env:GRATIA_PACKAGE); exit 0 } catch { Write-Host ('Cannot launch: ' + $_.Exception.Message); exit 1 }"
 if errorlevel 1 (
     if not defined GRATIA_NO_PAUSE pause
     exit /b 1
