@@ -96,6 +96,7 @@ ue proto/
 | `GratiaAnimInstance`, `GratiaHandAnimInstance` | Анимация тела (клипы, взгляд, пружины KawaiiPhysics) и пальцев рук |
 | `GratiaInteraction`, `GratiaContactSolver`, `GratiaBodySurface` | Касания: зоны, коллизии руки с телом, выбор реакции |
 | `GratiaSoftBodyInteraction`, `GratiaSecondaryMotion` | Мягкое тело: нажим, сжатие, захват, пряди волос |
+| `GratiaPenetrator`, `GratiaPenetration`, `GratiaPenetrationMath` | Суставной примитив (размеры S–XXL) и каналы тела: захват у входа, суставы по каналу, кости стенок, реакции, вибрация |
 | `GratiaReactionPresentation` | Звук и подписи реакций |
 | `GratiaPerformanceStage` | Перформансы (KM466): музыка, партнёр, вид его глазами |
 | `GratiaMenu`, `GratiaMenuWidget` | Меню в пространстве (логика и вид) |

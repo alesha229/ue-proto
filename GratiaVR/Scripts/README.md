@@ -35,7 +35,10 @@
 дополняется, ожидаемые количества профиля) → `setup_soft_body.py` (без коллайдеров рук самой
 героини) → `setup_body_surface.py` (ягодица — сфера по всей части, грудь и голова — по ядру)
 → `setup_soft_press_material.py` (вмятина: 4 слота, ближайшие к рукам зоны)
-→ `setup_spring_bones.py`.
+→ `setup_spring_bones.py` → `setup_penetration.py` (каналы примитива в `DA_Gratia.Penetration`:
+кости входа и стенок `DEF-ero_vag_*`, `DEF-ero_ass_*`, внешнее кольцо `DEF-pelvis_*`/`DEF-ass_*`;
+отчёт `evidence/06/penetration_setup.json`). Путь к скрипту в `-script=` передавать с прямыми
+слешами: обратный слеш перед `ue` в `E:\coding\ue proto` портится при разборе командной строки.
 
 Волосы, галстук, бантики сапог, бахрома эполет, уши и хвост — пружинные цепочки KawaiiPhysics
 (`setup_spring_bones.py`: цепочки из `physics_group_manifest.json` и эполет, ось костей

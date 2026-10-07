@@ -347,7 +347,31 @@ void UGratiaInteraction::ResetState()
 {
     RebuildProfileZones();
     LastReactionZoneName = NAME_None; LastReactionSpeed = 0.0f; LastResponseTime = -100.0;
+    ExternalHold = 0.0f; ExternalHoldTime = -100.0;
     bDemo = false;
+}
+
+void UGratiaInteraction::ExternalReaction(FName ZoneName, int32 HandIndex, float Speed)
+{
+    const UGratiaCharacterProfile* Profile = ActiveProfile.Get();
+    if (!Character.IsValid() || !Profile || !Profile->Capabilities.bContacts || ZoneName.IsNone()) return;
+    const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+    if (Now - LastResponseTime < Nonnegative(ContactSettings.ReactionMinimumIntervalSeconds)) return;
+    LastResponseTime = Now;
+    ReactionSerial = ReactionSerial == MAX_int32 ? 1 : ReactionSerial + 1;
+    ReactionSeconds = Nonnegative(ContactSettings.ReactionSeconds);
+    LastReactionZoneName = ZoneName;
+    LastReactionSpeed = FMath::IsFinite(Speed) ? FMath::Max(0.0f, Speed) : 0.0f;
+    Impulse = FMath::Clamp(LastReactionSpeed / FMath::Max(UE_SMALL_NUMBER, ContactSettings.ImpulseSpeedCmPerSecond), 0.15f, 1.0f);
+    OnContactReaction.Broadcast(ZoneName, HandIndex, LastReactionSpeed, Mood);
+    UE_LOG(LogGratiaContact, Display, TEXT("CONTACT REACTION: zone=%s hand=%d source=channel speed=%.2f mood=%d impulse=%.2f"),
+        *ZoneName.ToString(), HandIndex, LastReactionSpeed, Mood, Impulse);
+}
+
+void UGratiaInteraction::SetExternalHold(float Weight)
+{
+    ExternalHold = FMath::IsFinite(Weight) ? FMath::Clamp(Weight, 0.0f, 1.0f) : 0.0f;
+    ExternalHoldTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
 }
 
 void UGratiaInteraction::TickComponent(float Delta, ELevelTick Type, FActorComponentTickFunction* Tick)
@@ -413,8 +437,10 @@ void UGratiaInteraction::TickComponent(float Delta, ELevelTick Type, FActorCompo
         if (Held && Zone.Hand != INDEX_NONE) LookTarget = Hands[Zone.Hand].Visual.GetLocation();
     }
     ReactionSeconds = FMath::Max(0.0f, ReactionSeconds - StepTime);
-    const float Desired = Held ? FMath::Clamp(ContactSettings.HoldReactionWeight, 0.0f, 1.0f)
-        : ReactionSeconds > 0.0f ? FMath::Clamp(ReactionSeconds / FMath::Max(UE_SMALL_NUMBER, ContactSettings.ReactionSeconds), 0.0f, 1.0f) : 0.0f;
+    // A penetration channel refreshes its hold every frame; a stale one lapses.
+    const float External = GetWorld()->GetTimeSeconds() - ExternalHoldTime < 0.15 ? ExternalHold : 0.0f;
+    const float Desired = FMath::Max(External, Held ? FMath::Clamp(ContactSettings.HoldReactionWeight, 0.0f, 1.0f)
+        : ReactionSeconds > 0.0f ? FMath::Clamp(ReactionSeconds / FMath::Max(UE_SMALL_NUMBER, ContactSettings.ReactionSeconds), 0.0f, 1.0f) : 0.0f);
     Reaction = FMath::FInterpTo(Reaction, Desired, StepTime, Nonnegative(ContactSettings.ReactionInterpSpeed));
     Impulse = FMath::FInterpTo(Impulse, 0.0f, StepTime, Nonnegative(ContactSettings.ImpulseDecaySpeed));
     if (!Held && ReactionSeconds == 0.0f && Reaction < 0.001f) ActiveZone = INDEX_NONE;

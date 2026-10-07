@@ -582,6 +582,113 @@ struct GRATIAVR_API FGratiaSoftBodySettings
     float HandPushFraction = 0.4f;
 };
 
+/** A bone a penetration channel moves: pushed away from the channel axis as the shaft opens the
+ *  channel at the bone's depth, and dragged along with the shaft's motion. */
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaChannelBone
+{
+    GENERATED_BODY()
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration")
+    FName Bone;
+    /** Offset per cm of opening (1: the wall stays on the shaft surface). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0", ClampMax = "3"))
+    float Response = 1.0f;
+    /** Opening before this bone moves at all: outer rings (buttocks, hips) yield only to large sizes. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0", ClampMax = "20", Units = "cm"))
+    float StartOpeningCm = 0.0f;
+    /** The stretch saturates smoothly toward this offset (no hard stop for large sizes). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0", ClampMax = "20", Units = "cm"))
+    float MaxOffsetCm = 3.0f;
+    /** Pull along the shaft: cm of offset per cm/s of insertion speed (in and out), at most MaxDragCm. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0", ClampMax = "0.2", Units = "s"))
+    float DragSeconds = 0.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0", ClampMax = "5", Units = "cm"))
+    float MaxDragCm = 0.8f;
+};
+
+/**
+ * A body channel a jointed shaft (AGratiaPenetrator) can enter. It follows AnchorBoneSemantic:
+ * entrance at the reference-pose centroid of EntranceBones (+ EntranceOffsetCm), straight inward
+ * toward InwardTargetBone (+ InwardOffsetCm) for DepthCm. Name is the reaction zone: ReactionClips
+ * and ReactionSounds use it as a key. Missing bones disable the channel with a warning.
+ */
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaPenetrationChannel
+{
+    GENERATED_BODY()
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration")
+    FName Name;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration")
+    bool bEnabled = true;
+    /** Key in SemanticBones; the channel moves with this bone. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration")
+    FName AnchorBoneSemantic = TEXT("Pelvis");
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration")
+    TArray<FName> EntranceBones;
+    /** Component space at the reference pose, cm. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (Units = "cm"))
+    FVector EntranceOffsetCm = FVector::ZeroVector;
+    /** The channel points from the entrance toward this bone (reference pose); None: the anchor bone. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration")
+    FName InwardTargetBone;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (Units = "cm"))
+    FVector InwardOffsetCm = FVector::ZeroVector;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "1", ClampMax = "60", Units = "cm"))
+    float DepthCm = 14.0f;
+    /** The tip enters within this distance of the entrance (plus half the shaft radius). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0.5", ClampMax = "10", Units = "cm"))
+    float CaptureRadiusCm = 3.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "5", ClampMax = "89", Units = "deg"))
+    float CaptureAngleDegrees = 50.0f;
+    /** An engaged shaft bent further than this from the channel lets go. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "30", ClampMax = "170", Units = "deg"))
+    float ReleaseAngleDegrees = 115.0f;
+    /** Closed channel radius: the walls move once the shaft is thicker than this. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0", ClampMax = "5", Units = "cm"))
+    float RestRadiusCm = 0.4f;
+    /** The wall stretches over this length around the shaft (ahead of the tip and behind it). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0", ClampMax = "10", Units = "cm"))
+    float WallFalloffCm = 2.5f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (TitleProperty = "Bone"))
+    TArray<FGratiaChannelBone> Bones;
+    /** Optional morph target driven by the entrance opening (1 at MorphFullOpeningCm). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration")
+    FName OpeningMorph;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0.1", ClampMax = "20", Units = "cm"))
+    float MorphFullOpeningCm = 4.0f;
+};
+
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaPenetrationSettings
+{
+    GENERATED_BODY()
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration")
+    bool bEnabled = false;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (TitleProperty = "Name"))
+    TArray<FGratiaPenetrationChannel> Channels;
+    /** Wall bones approach their offsets at this rate (1/s): soft, without popping. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "1", ClampMax = "100"))
+    float WallFollowSpeed = 22.0f;
+    /** A free shaft slides over the body surface instead of passing through it. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration")
+    bool bShaftBodyCollision = true;
+    /** A reaction cue for every this much travel inside (rate limited by ContactSettings). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Reaction", meta = (ClampMin = "1", ClampMax = "50", Units = "cm"))
+    float ReactionTravelCm = 8.0f;
+    /** Reaction weight held while engaged, scaled up with the stretch. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Reaction", meta = (ClampMin = "0", ClampMax = "1"))
+    float HoldReactionWeight = 0.7f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Haptics", meta = (ClampMin = "0", ClampMax = "1"))
+    float HapticCapturePulse = 0.5f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Haptics", meta = (ClampMin = "0", ClampMax = "1"))
+    float HapticBase = 0.12f;
+    /** Insertion speed at which vibration reaches HapticMax. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Haptics", meta = (ClampMin = "1", Units = "cm/s"))
+    float HapticFullSpeed = 40.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Haptics", meta = (ClampMin = "0", ClampMax = "1"))
+    float HapticMax = 0.85f;
+};
+
 USTRUCT(BlueprintType)
 struct GRATIAVR_API FGratiaCharacterCapabilities
 {
@@ -691,6 +798,9 @@ public:
     /** Soft body parts (KawaiiPhysics), hand contact, grab, finger conform and haptics. */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Physics|Soft Body")
     FGratiaSoftBodySettings SoftBody;
+    /** Body channels a jointed shaft (AGratiaPenetrator) enters: wall bones, stretch, reactions. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics|Penetration")
+    FGratiaPenetrationSettings Penetration;
     /** Hair, clothing decor, ears and tails as KawaiiPhysics spring chains (menu groups 1/2/4). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Secondary Motion|Spring Chains", meta = (TitleProperty = "Name"))
     TArray<FGratiaSpringChain> SpringChains;

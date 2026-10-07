@@ -7,6 +7,7 @@
 #include "Animation/AnimationPoseData.h"
 #include "AnimationRuntime.h"
 #include "BoneContainer.h"
+#include "BonePose.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
 #include "AnimNode_KawaiiPhysics.h"
@@ -174,6 +175,8 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
     uint8 SpringGroups = 0;
     int32* ActiveChainsOut = nullptr;
     int32* ActiveSpringsOut = nullptr;
+    TArray<TPair<FName, FVector>> PenetrationOffsets;
+    int32* AppliedPenetrationOut = nullptr;
 
     FGratiaKawaiiChain& AddKawaiiChain(const FReferenceSkeleton& Ref, const TArray<FName>& Roots, EGratiaBoneAxis Axis, float DummyCm,
         float Damping, float Stiffness, float WorldLocation, float WorldRotation, float Radius, float LimitAngle, float GravityScale)
@@ -480,12 +483,42 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
         }
     }
 
+    /** Channel walls: each listed bone moves by its component-space offset from the evaluated pose;
+     *  children that are not listed follow their parent. */
+    void EvaluatePenetration(FPoseContext& Output)
+    {
+        int32 Applied = 0;
+        ON_SCOPE_EXIT { if (AppliedPenetrationOut) *AppliedPenetrationOut = Applied; };
+        if (PenetrationOffsets.IsEmpty()) return;
+        const FBoneContainer& Bones = Output.Pose.GetBoneContainer();
+        FCSPose<FCompactPose> Pose;
+        Pose.InitPose(Output.Pose);
+        TArray<FBoneTransform> Moved;
+        for (const TPair<FName, FVector>& Offset : PenetrationOffsets)
+        {
+            const int32 MeshIndex = Bones.GetPoseBoneIndexForBoneName(Offset.Key);
+            if (MeshIndex == INDEX_NONE || Offset.Value.ContainsNaN()) continue;
+            const FCompactPoseBoneIndex Index = Bones.MakeCompactPoseIndex(FMeshPoseBoneIndex(MeshIndex));
+            if (Index.GetInt() == INDEX_NONE) continue;
+            FTransform Transform = Pose.GetComponentSpaceTransform(Index);
+            Transform.AddToTranslation(Offset.Value);
+            Moved.Emplace(Index, Transform);
+        }
+        if (Moved.IsEmpty()) return;
+        Moved.Sort(FCompareBoneTransformIndex());
+        Pose.SafeSetCSBoneTransforms(Moved);
+        FCSPose<FCompactPose>::ConvertComponentPosesToLocalPoses(Pose, Output.Pose);
+        Applied = Moved.Num();
+    }
+
     virtual void PreUpdate(UAnimInstance* InInstance, float DeltaSeconds) override
     {
         FAnimSingleNodeInstanceProxy::PreUpdate(InInstance, DeltaSeconds);
         UGratiaAnimInstance* Instance = CastChecked<UGratiaAnimInstance>(InInstance);
         ActiveChainsOut = &Instance->ActiveSoftBodyChains;
         ActiveSpringsOut = Instance->ActiveSpringChains;
+        AppliedPenetrationOut = &Instance->AppliedPenetrationBones;
+        PenetrationOffsets = Instance->PenetrationOffsets;
         const AGratiaPreviewCharacter* Character = Cast<AGratiaPreviewCharacter>(Instance->GetOwningActor());
         UGratiaCharacterProfile* Profile = Character ? Character->CharacterProfile.Get() : nullptr;
         USkeletalMesh* Mesh = GetSkelMeshComponent() ? GetSkelMeshComponent()->GetSkeletalMeshAsset() : nullptr;
@@ -590,6 +623,7 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
     {
         const bool Result = EvaluateProcedural(Output);
         if (Result) EvaluateSoftBody(Output);
+        if (Result) EvaluatePenetration(Output);
         return Result;
     }
 

@@ -11,6 +11,7 @@
 #include "GratiaMenu.h"
 #include "GratiaSecondaryMotion.h"
 #include "GratiaSoftBodyInteraction.h"
+#include "GratiaPenetration.h"
 #include "GratiaCharacterProfile.h"
 #include "GratiaContactSolver.h"
 #include "GratiaAnimInstance.h"
@@ -543,6 +544,12 @@ void UGratiaRuntimeVerification::RunSelfChecks()
     }
     else TestSkip(TEXT("No profile/secondary-motion component is present; physical asset checks are not run"));
     if (!PhysicsFailure.IsEmpty()) UE_LOG(LogGratiaVerification, Error, TEXT("%s"), *PhysicsFailure);
+    FString PenetrationFailure;
+    if (Profile && Profile->Penetration.bEnabled)
+        TestCheck(Runtime.TargetCharacter->Penetration && Runtime.TargetCharacter->Penetration->RunChecks(PenetrationFailure),
+            TEXT("Penetration channels resolve on the pose; capture, straight insertion, pull-out release and bounded wall stretch for the smallest and largest primitive"));
+    else TestSkip(TEXT("Profile has no penetration channels; primitive checks are not run"));
+    if (!PenetrationFailure.IsEmpty()) UE_LOG(LogGratiaVerification, Error, TEXT("%s"), *PenetrationFailure);
     FGratiaTrackingGate Gate;
     TestCheck(!Gate.CanInteract(), TEXT("Fresh tracking gate forbids interaction"));
     Gate.Update(true, 0.05f, 0.15f, 0.25f);

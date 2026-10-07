@@ -17,6 +17,8 @@
 #include "GratiaBuildInfo.h"
 #include "GratiaHandInput.h"
 #include "GratiaAnimInstance.h"
+#include "GratiaPenetration.h"
+#include "GratiaPenetrator.h"
 
 #include "Camera/CameraComponent.h"
 #include "Components/PrimitiveComponent.h"
@@ -96,11 +98,13 @@ void AGratiaStage1Runtime::BeginPlay()
     BindPlayer();
     SetTargetCharacter(TargetCharacter.Get());
     UE_LOG(LogGratiaStage1, Display, TEXT("BUILD id=%s commit=%s"), TEXT(GRATIA_BUILD_ID), TEXT(GRATIA_BUILD_COMMIT));
-    UE_LOG(LogGratiaStage1, Display, TEXT("Stage 1 runtime started. R=recenter, PgUp/PgDn=height, Home=reset height, F1=debug, F8/F9=toggle forced left/right tracking loss."));
+    UE_LOG(LogGratiaStage1, Display, TEXT("Stage 1 runtime started. R=recenter, PgUp/PgDn=height, Home=reset height, F1=debug, F6=primitive on/off, F7=primitive size, F8/F9=toggle forced left/right tracking loss."));
 }
 
 void AGratiaStage1Runtime::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+    ReleasePrimitive(LeftHand, true, TEXT("end play"));
+    ReleasePrimitive(RightHand, false, TEXT("end play"));
     UpdateHaptics(LeftHand, true, 0.0f, 0.0f);
     UpdateHaptics(RightHand, false, 0.0f, 0.0f);
     RestoreHand(LeftHand);
@@ -116,6 +120,11 @@ void AGratiaStage1Runtime::SetTargetCharacter(AGratiaPreviewCharacter* Character
 {
     if (TargetCharacter.IsValid() && TargetCharacter.Get() != Character)
     {
+        if (TargetCharacter->Penetration)
+        {
+            TargetCharacter->Penetration->RemoveTickPrerequisiteActor(this);
+            TargetCharacter->Penetration->SetPenetrator(nullptr);
+        }
         TargetCharacter->Interaction->RemoveTickPrerequisiteActor(this);
         TargetCharacter->Interaction->SetSceneContactActor(nullptr);
         TargetCharacter->Interaction->ResetState();
@@ -130,6 +139,85 @@ void AGratiaStage1Runtime::SetTargetCharacter(AGratiaPreviewCharacter* Character
         Character->Interaction->SetSceneContactActor(SceneContactActor);
         Verification->ConfigureCaptureView();
     }
+    if (Character && Character->Penetration)
+    {
+        Character->Penetration->AddTickPrerequisiteActor(this);
+        Character->Penetration->SetPenetrator(Primitive);
+    }
+}
+
+bool AGratiaStage1Runtime::SetPrimitiveShown(bool bShown)
+{
+    if (!bShown)
+    {
+        ReleasePrimitive(LeftHand, true, TEXT("removed"));
+        ReleasePrimitive(RightHand, false, TEXT("removed"));
+        if (TargetCharacter.IsValid() && TargetCharacter->Penetration) TargetCharacter->Penetration->SetPenetrator(nullptr);
+        if (Primitive) Primitive->Destroy();
+        Primitive = nullptr;
+        return true;
+    }
+    if (Primitive) return true;
+    const UCameraComponent* View = Camera.Get();
+    if (!View || !GetWorld()) return false;
+    // In front of the chest, pointing ahead and slightly down, within reach of either hand.
+    const FRotator Yaw(0.0, View->GetComponentRotation().Yaw, 0.0);
+    const FVector Location = View->GetComponentLocation() + Yaw.Vector() * 32.0 - FVector(0, 0, 32.0);
+    FActorSpawnParameters Parameters;
+    Parameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+    Primitive = GetWorld()->SpawnActor<AGratiaPenetrator>(PrimitiveClass ? PrimitiveClass.Get() : AGratiaPenetrator::StaticClass(),
+        Location, Yaw + FRotator(-20.0, 0.0, 0.0), Parameters);
+    if (!Primitive) return false;
+    if (TargetCharacter.IsValid() && TargetCharacter->Penetration) TargetCharacter->Penetration->SetPenetrator(Primitive);
+    UE_LOG(LogGratiaStage1, Display, TEXT("PRIMITIVE shown size=%s; grip near the handle picks it up"), *Primitive->GetSizeLabel());
+    return true;
+}
+
+void AGratiaStage1Runtime::CyclePrimitiveSize()
+{
+    if (!Primitive) return;
+    Primitive->CycleSize();
+    UE_LOG(LogGratiaStage1, Display, TEXT("PRIMITIVE size=%s"), *Primitive->GetSizeLabel());
+}
+
+FString AGratiaStage1Runtime::GetPrimitiveLabel() const
+{
+    return Primitive ? Primitive->GetSizeLabel() : FString(TEXT("—"));
+}
+
+void AGratiaStage1Runtime::ReleasePrimitive(FHandProxy& Hand, bool bLeft, const TCHAR* Reason)
+{
+    if (!Hand.bHoldsPrimitive) return;
+    Hand.bHoldsPrimitive = false;
+    if (Primitive && Primitive->GetHeldHand() == (bLeft ? 0 : 1)) Primitive->SetHeld(INDEX_NONE);
+    UE_LOG(LogGratiaStage1, Display, TEXT("PRIMITIVE_RELEASE hand=%s reason=%s"), bLeft ? TEXT("L") : TEXT("R"), Reason);
+}
+
+void AGratiaStage1Runtime::UpdatePrimitiveGrab(FHandProxy& Hand, bool bLeft, const FTransform& Target)
+{
+    const float Grip = HandInput ? HandInput->GetGrip(bLeft) : 0.0f;
+    const FTransform Controller(Target.GetRotation(), Target.GetLocation());
+    if (Hand.bHoldsPrimitive)
+    {
+        if (!Primitive) { Hand.bHoldsPrimitive = false; return; }
+        if (Grip <= 0.3f) { ReleasePrimitive(Hand, bLeft, TEXT("grip released")); Hand.bPrimitiveArmed = true; return; }
+        Primitive->SetBase(Hand.PrimitiveRelative * Controller);
+        return;
+    }
+    if (Grip <= 0.3f) Hand.bPrimitiveArmed = true;
+    if (!Primitive || !Hand.bPrimitiveArmed || Grip < 0.6f || !Hand.GripBone.IsNone()) return;
+    FGratiaPalmFrame Palm;
+    const FVector PalmLocal = Hand.HandAnim.IsValid() && Hand.HandAnim->GetPalmFrame(Palm) ? Palm.Point * Target.GetScale3D() : FVector::ZeroVector;
+    if (Primitive->GrabGap(Target.TransformPositionNoScale(PalmLocal)) > Primitive->GrabReachCm) return;
+    // Taking it from the other hand passes it over.
+    FHandProxy& Other = bLeft ? RightHand : LeftHand;
+    ReleasePrimitive(Other, !bLeft, TEXT("passed to the other hand"));
+    Hand.bHoldsPrimitive = true;
+    Hand.bPrimitiveArmed = false;
+    Hand.PrimitiveRelative = Primitive->GetBase().GetRelativeTransform(Controller);
+    Primitive->SetHeld(bLeft ? 0 : 1);
+    Hand.GripPulse = 0.06f;
+    UE_LOG(LogGratiaStage1, Display, TEXT("PRIMITIVE_GRAB hand=%s size=%s"), bLeft ? TEXT("L") : TEXT("R"), *Primitive->GetSizeLabel());
 }
 
 void AGratiaStage1Runtime::Tick(float DeltaSeconds)
@@ -159,6 +247,8 @@ void AGratiaStage1Runtime::Tick(float DeltaSeconds)
         if (PC->WasInputKeyJustPressed(EKeys::PageDown)) AdjustHeight(-HeightStepCm);
         if (PC->WasInputKeyJustPressed(EKeys::Home)) ResetHeight();
         if (PC->WasInputKeyJustPressed(EKeys::F1)) bShowDebug = !bShowDebug;
+        if (IsSceneInteractionAllowed() && PC->WasInputKeyJustPressed(EKeys::F6)) SetPrimitiveShown(!IsPrimitiveShown());
+        if (IsSceneInteractionAllowed() && PC->WasInputKeyJustPressed(EKeys::F7)) CyclePrimitiveSize();
         if (PC->WasInputKeyJustPressed(EKeys::F8)) SetForcedTrackingLoss(true, !LeftHand.bForceLoss);
         if (PC->WasInputKeyJustPressed(EKeys::F9)) SetForcedTrackingLoss(false, !RightHand.bForceLoss);
     }
@@ -169,6 +259,10 @@ void AGratiaStage1Runtime::Tick(float DeltaSeconds)
     UpdateHand(RightHand, false, DeltaSeconds);
     LeftHandState = LeftHand.Gate.State;
     RightHandState = RightHand.Gate.State;
+    // The primitive leaves with the character scene (lobby, loading).
+    if (Primitive && SceneDirector && SceneDirector->IsSceneInputBlocked()) SetPrimitiveShown(false);
+    // The held primitive is laid into the body right after the hands moved (same frame).
+    if (TargetCharacter.IsValid() && TargetCharacter->Penetration) TargetCharacter->Penetration->Solve(DeltaSeconds);
 
     if (FMath::IsFinite(DeltaSeconds) && DeltaSeconds > UE_SMALL_NUMBER)
     {
@@ -377,13 +471,13 @@ void AGratiaStage1Runtime::BindHand(FHandProxy& Hand, FName ControllerName, FNam
     Descendants.Insert(Hand.Visual.Get(), 0);
     for (USceneComponent* Component : Descendants)
     {
-        if (UPrimitiveComponent* Primitive = Cast<UPrimitiveComponent>(Component))
+        if (UPrimitiveComponent* Shape = Cast<UPrimitiveComponent>(Component))
         {
             FCollisionSnapshot Snapshot;
-            Snapshot.Component = Primitive;
-            Snapshot.Collision = Primitive->GetCollisionEnabled();
-            Snapshot.bGenerateOverlapEvents = Primitive->GetGenerateOverlapEvents();
-            if (Primitive == Contact)
+            Snapshot.Component = Shape;
+            Snapshot.Collision = Shape->GetCollisionEnabled();
+            Snapshot.bGenerateOverlapEvents = Shape->GetGenerateOverlapEvents();
+            if (Shape == Contact)
             {
                 Snapshot.Collision = ECollisionEnabled::QueryOnly;
                 Snapshot.bGenerateOverlapEvents = true;
@@ -458,6 +552,7 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
 
     FTransform VisualWorld = Hand.LastWorld;
     if ((Hand.Gate.State != EGratiaHandState::Tracked || !IsSceneInteractionAllowed()) && !Hand.GripBone.IsNone()) ReleaseBodyGrip(Hand, bLeft, TEXT("tracking / scene gate"));
+    if (Hand.Gate.State != EGratiaHandState::Tracked || !IsSceneInteractionAllowed()) ReleasePrimitive(Hand, bLeft, TEXT("tracking / scene gate"));
     if (Hand.Gate.State == EGratiaHandState::Tracked)
     {
         // The palm collides with the body surface (not a wide sphere around the wrist).
@@ -465,7 +560,14 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
         const FVector PalmLocal = Hand.HandAnim.IsValid() && Hand.HandAnim->GetPalmFrame(Palm) ? Palm.Point * Target.GetScale3D() : FVector::ZeroVector;
         const FTransform Constrained = IsSceneInteractionAllowed() && TargetCharacter.IsValid() && TargetCharacter->Interaction
             ? TargetCharacter->Interaction->ConstrainHand(Hand.LastWorld, Target, bLeft, PalmLocal) : Target;
-        const FTransform ContactTarget = ApplyBodySurface(Hand, bLeft, Target, Constrained, DeltaSeconds);
+        if (IsSceneInteractionAllowed()) UpdatePrimitiveGrab(Hand, bLeft, Target);
+        // A hand holding the primitive neither wraps, cups nor leans onto the body.
+        if (Hand.bHoldsPrimitive)
+        {
+            ReleaseBodyGrip(Hand, bLeft, TEXT("holding the primitive"));
+            Hand.CupBone = NAME_None; Hand.CupBlend = 0.0f; Hand.SurfaceWeight = 0.0f; Hand.LeanWeight = 0.0f;
+        }
+        const FTransform ContactTarget = Hand.bHoldsPrimitive ? Constrained : ApplyBodySurface(Hand, bLeft, Target, Constrained, DeltaSeconds);
         VisualWorld = ContactTarget;
         SetHandCollision(Hand, IsSceneInteractionAllowed());
     }
@@ -513,7 +615,7 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
             const FVector VisiblePalm = VisualWorld.TransformPositionNoScale(PalmLocal);
             const FVector RawPalm = Target.TransformPositionNoScale(PalmLocal);
             const bool bAllowed = TargetCharacter->Interaction->IsHandSampleReady(bLeft) && IsSceneInteractionAllowed();
-            const float Grab = HandInput ? FMath::Max(HandInput->GetTrigger(bLeft), HandInput->GetGrip(bLeft)) : 0.0f;
+            const float Grab = HandInput && !Hand.bHoldsPrimitive ? FMath::Max(HandInput->GetTrigger(bLeft), HandInput->GetGrip(bLeft)) : 0.0f;
             // Cupping/wrapping places the hand itself; the soft part then follows the controller.
             const bool bPoseOwned = !Hand.CupBone.IsNone() || !Hand.GripBone.IsNone();
             SoftBody->SubmitHand(bLeft, VisiblePalm, RawPalm, bAllowed, DeltaSeconds, Grab, Fingers, bPoseOwned,
@@ -526,6 +628,12 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
             ContactHapticAmplitude = bAllowed ? FMath::Max(SoftBody->GetHapticAmplitude(bLeft), Hand.GripPulse > 0 ? 0.45f : 0.0f) : 0.0f;
             ContactHapticFrequency = Hand.GripPulse > 0 ? 0.3f : SoftBody->GetHapticFrequency(bLeft);
         }
+    }
+    // The held primitive vibrates with its own insertion (computed by the previous solve).
+    if (Hand.bHoldsPrimitive && Primitive && Primitive->HapticAmplitude > ContactHapticAmplitude)
+    {
+        ContactHapticAmplitude = Primitive->HapticAmplitude;
+        ContactHapticFrequency = Primitive->HapticFrequency;
     }
     UpdateHaptics(Hand, bLeft, ContactHapticAmplitude, ContactHapticFrequency);
     if (Hand.Gate.State == EGratiaHandState::Tracked) ApplyVisualHand(Hand, Target, Desired, DeltaSeconds);
@@ -546,7 +654,7 @@ void AGratiaStage1Runtime::UpdateHandPose(FHandProxy& Hand, bool bLeft, const FV
     const float Grasp = HandInput ? HandInput->GetGrasp(bLeft) : 0.0f;
     const float Index = HandInput ? HandInput->GetIndexCurl(bLeft) : 0.0f;
     // Wrapping grip and cupping close every finger onto the part; near a surface the fingers rest on it.
-    const float Rest = !Hand.GripBone.IsNone() || !Hand.CupBone.IsNone() ? 1.0f : 0.85f * Hand.SurfaceWeight;
+    const float Rest = !Hand.GripBone.IsNone() || !Hand.CupBone.IsNone() || Hand.bHoldsPrimitive ? 1.0f : 0.85f * Hand.SurfaceWeight;
     // Squeeze depth into soft parts follows the trigger/grip while cupping.
     const float Squeeze = Hand.CupBone.IsNone() ? Grasp : Hand.CupSqueeze;
     // Thumb: 1 is its relaxed pose; contact caps extend it out of the body.

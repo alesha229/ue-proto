@@ -57,6 +57,11 @@ public:
     UPROPERTY(BlueprintAssignable, Category = "Interaction")
     FGratiaContactResetEvent OnContactReset;
     void ResetState();
+    /** Reaction from another contact source (a penetration channel): same rate limit and routing
+     *  by zone name as a hand contact (ReactionClips/ReactionSounds keys). */
+    void ExternalReaction(FName ZoneName, int32 HandIndex, float Speed);
+    /** Held reaction weight from another source; it lapses unless refreshed every frame. */
+    void SetExternalHold(float Weight);
     bool RunChecks(FString& Failure);
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Interaction|Response")
     FVector LookTarget = FVector::ZeroVector;
@@ -116,6 +121,8 @@ private:
     float DemoSeconds = 0.0f;
     float ReactionSeconds = 0.0f;
     double LastResponseTime = -100.0;
+    float ExternalHold = 0.0f;
+    double ExternalHoldTime = -100.0;
     double NextDiagnosticTime = 0.0;
     FString LastDiagnostic;
     FVector ZonePosition(const FGratiaContactZone& Zone) const;

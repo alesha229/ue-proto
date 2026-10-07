@@ -329,5 +329,32 @@ bool UGratiaCharacterProfile::ValidateProfile(TArray<FString>& Errors, TArray<FS
         if (!FMath::IsFinite(Value) || Value < 0) Errors.Add(TEXT("Hand surface distances and times must be finite and non-negative."));
     if (HandSurface.GripReleaseInput >= HandSurface.GripStartInput)
         Errors.Add(TEXT("Hand surface grip release input must be below the start input."));
+    // Penetration channels: bad numbers are errors; missing bones only disable that channel.
+    for (const FGratiaPenetrationChannel& Channel : Penetration.bEnabled ? Penetration.Channels : TArray<FGratiaPenetrationChannel>())
+    {
+        if (Channel.Name.IsNone() || Channel.EntranceBones.IsEmpty()) Errors.Add(TEXT("Penetration channel needs a name and entrance bones."));
+        const float Values[] = {Channel.DepthCm, Channel.CaptureRadiusCm, Channel.CaptureAngleDegrees, Channel.ReleaseAngleDegrees,
+            Channel.RestRadiusCm, Channel.WallFalloffCm, Channel.MorphFullOpeningCm};
+        for (const float Value : Values)
+            if (!FMath::IsFinite(Value) || Value < 0) Errors.Add(FString::Printf(TEXT("Penetration channel %s values must be finite and nonnegative."), *Channel.Name.ToString()));
+        if (Channel.EntranceOffsetCm.ContainsNaN() || Channel.InwardOffsetCm.ContainsNaN())
+            Errors.Add(FString::Printf(TEXT("Penetration channel %s offsets must be finite."), *Channel.Name.ToString()));
+        TArray<FName> Missing;
+        if (Ref.FindBoneIndex(ResolveBone(Channel.AnchorBoneSemantic)) == INDEX_NONE) Missing.Add(Channel.AnchorBoneSemantic);
+        for (const FName Bone : Channel.EntranceBones) if (Ref.FindBoneIndex(Bone) == INDEX_NONE) Missing.Add(Bone);
+        if (!Channel.InwardTargetBone.IsNone() && Ref.FindBoneIndex(Channel.InwardTargetBone) == INDEX_NONE) Missing.Add(Channel.InwardTargetBone);
+        for (const FGratiaChannelBone& Bone : Channel.Bones)
+        {
+            if (Ref.FindBoneIndex(Bone.Bone) == INDEX_NONE) Missing.Add(Bone.Bone);
+            const float BoneValues[] = {Bone.Response, Bone.StartOpeningCm, Bone.MaxOffsetCm, Bone.DragSeconds, Bone.MaxDragCm};
+            for (const float Value : BoneValues)
+                if (!FMath::IsFinite(Value) || Value < 0) Errors.Add(FString::Printf(TEXT("Penetration bone %s values must be finite and nonnegative."), *Bone.Bone.ToString()));
+        }
+        if (!Channel.OpeningMorph.IsNone() && !Mesh->FindMorphTarget(Channel.OpeningMorph))
+            Warnings.Add(FString::Printf(TEXT("Penetration channel %s opening morph %s is missing; only bones deform."), *Channel.Name.ToString(), *Channel.OpeningMorph.ToString()));
+        if (!Missing.IsEmpty())
+            Warnings.Add(FString::Printf(TEXT("Penetration channel %s is disabled: missing %s."), *Channel.Name.ToString(),
+                *FString::JoinBy(Missing, TEXT(", "), [](FName Name) { return Name.ToString(); })));
+    }
     return Errors.IsEmpty();
 }

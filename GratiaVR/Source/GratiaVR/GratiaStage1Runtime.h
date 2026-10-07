@@ -7,6 +7,7 @@
 class APlayerController;
 class APawn;
 class AGratiaPreviewCharacter;
+class AGratiaPenetrator;
 class UCameraComponent;
 class UMotionControllerComponent;
 class UPrimitiveComponent;
@@ -149,6 +150,19 @@ public:
     TObjectPtr<AActor> SceneContactActor;
     UFUNCTION(BlueprintCallable, Category = "Character")
     void SetTargetCharacter(AGratiaPreviewCharacter* Character);
+
+    /** Jointed primitive the hands can pick up (grip) and the character's channels respond to. */
+    UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Primitive")
+    TObjectPtr<AGratiaPenetrator> Primitive;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Primitive")
+    TSubclassOf<AGratiaPenetrator> PrimitiveClass;
+    /** Shows the primitive in front of the player (spawned on demand) or removes it. */
+    UFUNCTION(BlueprintCallable, Category = "Primitive")
+    bool SetPrimitiveShown(bool bShown);
+    bool IsPrimitiveShown() const { return Primitive != nullptr; }
+    UFUNCTION(BlueprintCallable, Category = "Primitive")
+    void CyclePrimitiveSize();
+    FString GetPrimitiveLabel() const;
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Stage 1")
     TObjectPtr<UTextRenderComponent> DebugPanel;
@@ -300,7 +314,14 @@ private:
         bool bSmoothedValid = false;
         FGratiaHandOffsetSmoother OffsetSmoother;
         float LeanWeight = 0.0f;
+        /** Holding the primitive: it rides the controller (not the constrained hand) at this offset. */
+        bool bHoldsPrimitive = false;
+        bool bPrimitiveArmed = true;
+        FTransform PrimitiveRelative = FTransform::Identity;
     };
+    /** Grip near the primitive's handle picks it up, release lets go; the held primitive follows the controller. */
+    void UpdatePrimitiveGrab(FHandProxy& Hand, bool bLeft, const FTransform& Target);
+    void ReleasePrimitive(FHandProxy& Hand, bool bLeft, const TCHAR* Reason);
     /** Body-surface hand pose for a tracked hand: wrap grip, hold, release, or lean onto the body. */
     FTransform ApplyBodySurface(FHandProxy& Hand, bool bLeft, const FTransform& Target, const FTransform& Constrained, float DeltaSeconds);
     void ReleaseBodyGrip(FHandProxy& Hand, bool bLeft, const TCHAR* Reason);

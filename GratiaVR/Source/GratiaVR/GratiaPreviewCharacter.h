@@ -13,6 +13,7 @@ class UGratiaReactionPresentation;
 class UGratiaSoftBodyInteraction;
 class UGratiaSoftBodyVerification;
 class UGratiaBodySurface;
+class UGratiaPenetration;
 class UGratiaPerformanceStage;
 struct FGratiaPerformanceClip;
 
@@ -71,6 +72,9 @@ public:
     /** Touchable body surface for hands: palm collider, leaning onto the body, wrapping grips. */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Gratia|Physics")
     TObjectPtr<UGratiaBodySurface> BodySurface;
+    /** Body channels for the jointed primitive (AGratiaPenetrator): capture, wall bones, reactions. */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Gratia|Physics")
+    TObjectPtr<UGratiaPenetration> Penetration;
     /** Music, partner body and partner viewpoint of the current performance. */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Performance")
     TObjectPtr<UGratiaPerformanceStage> PerformanceStage;

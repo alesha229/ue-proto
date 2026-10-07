@@ -390,6 +390,8 @@ UPanelWidget* UGratiaMenuWidget::BuildCharacterPage()
     AddButton(Page, TEXT("Радостная"), EGratiaMenuAction::Mood, 1, Character, false, 460.0f);
     AddButton(Page, TEXT("Сдержанная"), EGratiaMenuAction::Mood, 2, Character, false, 460.0f);
     AddButton(Page, TEXT("Сбросить позу, контакты и высоту"), EGratiaMenuAction::Reset, 0, Character, false, 700.0f);
+    AddButton(Page, TEXT("Примитив"), EGratiaMenuAction::Primitive, 0, Character, true, 700.0f);
+    AddButton(Page, TEXT("Размер"), EGratiaMenuAction::PrimitiveSize, 0, Character, true, 700.0f);
     return Page;
 }
 

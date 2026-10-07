@@ -359,6 +359,16 @@ bool UGratiaMenu::IsActionAvailable(EGratiaMenuAction Action, int32 Param) const
         const int32 Group = Action == EGratiaMenuAction::Hair ? 1 : Action == EGratiaMenuAction::Cloth ? 2 : Action == EGratiaMenuAction::Body ? 3 : 4;
         return Profile->SecondaryBones.ContainsByPredicate([Group](const auto& Bone) { return Bone.Group == Group; });
     }
+    case EGratiaMenuAction::Primitive:
+    {
+        const auto* Runtime = Cast<AGratiaStage1Runtime>(GetOwner());
+        return Runtime && I && Profile && Profile->Penetration.bEnabled && CharacterScene;
+    }
+    case EGratiaMenuAction::PrimitiveSize:
+    {
+        const auto* Runtime = Cast<AGratiaStage1Runtime>(GetOwner());
+        return Runtime && Runtime->IsPrimitiveShown();
+    }
     case EGratiaMenuAction::Physics: return I && Profile && Profile->Capabilities.bSecondaryPhysics;
     case EGratiaMenuAction::Springs: return I && Profile && Profile->Capabilities.bLocalSprings;
     case EGratiaMenuAction::Sound: return I && Profile && Profile->Capabilities.bSound;
@@ -411,6 +421,8 @@ void UGratiaMenu::Execute(EGratiaMenuAction Action, int32 Param)
     case EGratiaMenuAction::Recenter: if (Runtime) Runtime->Recenter(); break;
     case EGratiaMenuAction::TrackPrev: if (Director) Director->PreviousTrack(); break;
     case EGratiaMenuAction::TrackNext: if (Director) Director->NextTrack(); break;
+    case EGratiaMenuAction::Primitive: if (Runtime) Runtime->SetPrimitiveShown(!Runtime->IsPrimitiveShown()); break;
+    case EGratiaMenuAction::PrimitiveSize: if (Runtime) Runtime->CyclePrimitiveSize(); break;
     }
     if (Director) Director->SaveUserSettings();
     Refresh();
@@ -433,6 +445,7 @@ bool UGratiaMenu::IsSelected(EGratiaMenuAction Action, int32 Param) const
     case EGratiaMenuAction::Springs: return I->bLocalSpring;
     case EGratiaMenuAction::Sound: return I->bSound;
     case EGratiaMenuAction::PartnerView: return Runtime && Runtime->IsPartnerView();
+    case EGratiaMenuAction::Primitive: return Runtime && Runtime->IsPrimitiveShown();
     default: return false;
     }
 }
@@ -451,6 +464,8 @@ FString UGratiaMenu::LabelFor(EGratiaMenuAction Action, int32 Param) const
     case EGratiaMenuAction::MusicUp: return FString::Printf(TEXT("Музыка: %d%%   +"), FMath::RoundToInt((Settings ? Settings->MusicVolume : 0) * 100));
     case EGratiaMenuAction::HapticsUp: return FString::Printf(TEXT("Вибрация: %d%%   +"), FMath::RoundToInt((Settings ? Settings->HapticsScale : 0) * 100));
     case EGratiaMenuAction::HeightUp: return FString::Printf(TEXT("Высота глаз: %+.0f см   +"), Runtime ? Runtime->HeightOffsetCm : 0.0f);
+    case EGratiaMenuAction::PrimitiveSize: return TEXT("Размер: ") + (Runtime && Runtime->IsPrimitiveShown() ? Runtime->GetPrimitiveLabel() : FString(TEXT("включите примитив")));
+    case EGratiaMenuAction::Primitive: Name = TEXT("Примитив"); break;
     case EGratiaMenuAction::Demo: Name = TEXT("Демо реакций"); break;
     case EGratiaMenuAction::Hair: Name = TEXT("Волосы"); break;
     case EGratiaMenuAction::Cloth: Name = TEXT("Одежда"); break;

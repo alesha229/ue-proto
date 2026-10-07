@@ -112,6 +112,11 @@ public:
     /** Spring chains evaluated last frame per group (diagnostics/QA). */
     int32 GetActiveSpringChainCount(uint8 Group) const { return Group < 5 ? ActiveSpringChains[Group] : 0; }
     int32 ActiveSpringChains[5] = {};
+    /** Penetration channel walls: bone -> component-space translation, applied after the soft body. */
+    TArray<TPair<FName, FVector>> PenetrationOffsets;
+    /** Wall bones moved last evaluation (diagnostics/QA). */
+    int32 GetAppliedPenetrationBones() const { return AppliedPenetrationBones; }
+    int32 AppliedPenetrationBones = 0;
 protected:
     virtual FAnimInstanceProxy* CreateAnimInstanceProxy() override;
 };

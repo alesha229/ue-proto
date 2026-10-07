@@ -26,7 +26,8 @@ enum class EGratiaMenuAction : uint8
     Pose, Mood, Demo, Reset,
     Hair, Cloth, Body, Ears, Physics, Springs,
     Quality, Sound, MusicDown, MusicUp, HapticsDown, HapticsUp, HeightDown, HeightUp, Recenter,
-    TrackPrev, TrackNext
+    TrackPrev, TrackNext,
+    Primitive, PrimitiveSize
 };
 
 /** Click/hover target of one button (dynamic delegates need a UFUNCTION). */
