@@ -7,11 +7,15 @@ class UBorder;
 class UButton;
 class UGratiaMenu;
 class UGratiaMenuWidget;
+class UImage;
+class UMaterialInstanceDynamic;
+class UMaterialInterface;
 class UPanelWidget;
 class USizeBox;
 class UScrollBox;
 class UTextBlock;
 class UWidgetSwitcher;
+struct FSlateFontInfo;
 
 /** Everything a menu button can do; UGratiaMenu::Execute applies it. */
 UENUM()
@@ -21,10 +25,11 @@ enum class EGratiaMenuAction : uint8
     Pause, Restart, PrevPart, NextPart, SpeedDown, SpeedUp, PartnerView,
     Pose, Mood, Demo, Reset,
     Hair, Cloth, Body, Ears, Physics, Springs,
-    Quality, Sound, MusicDown, MusicUp, HapticsDown, HapticsUp, HeightDown, HeightUp, Recenter
+    Quality, Sound, MusicDown, MusicUp, HapticsDown, HapticsUp, HeightDown, HeightUp, Recenter,
+    TrackPrev, TrackNext
 };
 
-/** Click target of one button (dynamic delegates need a UFUNCTION). */
+/** Click/hover target of one button (dynamic delegates need a UFUNCTION). */
 UCLASS()
 class GRATIAVR_API UGratiaMenuClick : public UObject
 {
@@ -33,13 +38,18 @@ public:
     TWeakObjectPtr<UGratiaMenuWidget> Widget;
     EGratiaMenuAction Action = EGratiaMenuAction::Close;
     int32 Param = 0;
+    int32 Item = INDEX_NONE;
     UFUNCTION() void OnClicked();
+    UFUNCTION() void OnHovered();
+    UFUNCTION() void OnUnhovered();
 };
 
 /**
- * The VR menu panel, built in C++ (no widget blueprint): a sidebar of tabs and pages for the
- * scene library (cards with thumbnails), playback, character, physics and settings, with an
- * equalizer that moves with the music. Pointer (laser) clicks and stick/keyboard focus both work.
+ * The VR menu panel (ViRo Playspace look), built in C++ without a widget blueprint: a dark violet
+ * glass panel with a neon edge, the GRATIA playspace logo, scene pictures in hexagon frames,
+ * gradient pill buttons, a now-playing strip with track switching and an equalizer, and a dock
+ * of tabs at the bottom. The look comes from the scene library (font and UI materials); without
+ * them it falls back to plain rounded boxes. Pointer clicks and stick/keyboard focus both work.
  */
 UCLASS()
 class GRATIAVR_API UGratiaMenuWidget : public UUserWidget
@@ -57,6 +67,7 @@ public:
     void Navigate(int32 Direction);
     void Activate();
     void Click(EGratiaMenuAction Action, int32 Param);
+    void Hover(int32 Item, bool bHovered);
 
 protected:
     virtual TSharedRef<SWidget> RebuildWidget() override;
@@ -69,11 +80,16 @@ private:
         TWeakObjectPtr<UTextBlock> Label;
         EGratiaMenuAction Action = EGratiaMenuAction::Close;
         int32 Param = 0;
-        /** Page the button lives on; INDEX_NONE = sidebar (always visible). */
+        /** Page the button lives on; INDEX_NONE = header/dock (always visible). */
         int32 Page = INDEX_NONE;
         bool bDynamicLabel = false;
         bool bCard = false;
         FLinearColor Accent = FLinearColor::White;
+        /** Material states of the button (normal, hovered, pressed) or the card picture. */
+        TWeakObjectPtr<UMaterialInstanceDynamic> Normal, Hovered, Pressed;
+        float HoverAmount = 0.0f;
+        bool bHovered = false;
+        FVector2D Size = FVector2D::ZeroVector;
     };
     void BuildTree();
     UPanelWidget* BuildScenesPage();
@@ -81,19 +97,26 @@ private:
     UPanelWidget* BuildCharacterPage();
     UPanelWidget* BuildPhysicsPage();
     UPanelWidget* BuildSettingsPage();
-    UButton* AddButton(UPanelWidget* Parent, const FString& Text, EGratiaMenuAction Action, int32 Param, int32 Page, bool bDynamic = false, float Width = 0.0f);
-    UTextBlock* MakeText(const FString& Text, int32 Size, const FLinearColor& Color, bool bBold = false);
-    void StyleButton(UButton* Button, bool bActive, bool bFocused);
+    UButton* AddButton(UPanelWidget* Parent, const FString& Text, EGratiaMenuAction Action, int32 Param, int32 Page, bool bDynamic = false,
+        float Width = 0.0f, float Height = 64.0f, int32 FontSize = 22);
+    UTextBlock* MakeText(const FString& Text, int32 Size, const FLinearColor& Color, const TCHAR* Typeface = TEXT("Bold"));
+    FSlateFontInfo Font(int32 Size, const TCHAR* Typeface) const;
+    UMaterialInstanceDynamic* MakeMaterial(UMaterialInterface* Parent);
+    void StyleButton(FItem& Item, bool bActive, bool bFocused);
+    void BindClick(UButton* Button, EGratiaMenuAction Action, int32 Param, int32 Item);
     TArray<int32> VisibleItems() const;
 
     UPROPERTY(Transient) TArray<TObjectPtr<UGratiaMenuClick>> Clicks;
+    UPROPERTY(Transient) TArray<TObjectPtr<UMaterialInstanceDynamic>> Materials;
     UPROPERTY(Transient) TObjectPtr<UWidgetSwitcher> Pages;
     UPROPERTY(Transient) TArray<TObjectPtr<USizeBox>> Bars;
     UPROPERTY(Transient) TObjectPtr<UTextBlock> PlaybackText;
     UPROPERTY(Transient) TObjectPtr<UTextBlock> PlaybackTitle;
     UPROPERTY(Transient) TObjectPtr<UTextBlock> Header;
     UPROPERTY(Transient) TObjectPtr<UTextBlock> StatusText;
-    FString LastStatus;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> TrackText;
+    UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> PanelInstance;
+    FString LastStatus, LastTrack;
     UPROPERTY(Transient) TObjectPtr<UScrollBox> SceneScroll;
     TArray<FItem> Items;
     int32 CurrentPage = Scenes;

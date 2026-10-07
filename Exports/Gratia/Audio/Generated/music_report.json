@@ -1,0 +1,26 @@
+{
+  "GratiaLobby": {
+    "seconds": 85.33,
+    "bpm": 90,
+    "peak": 0.89,
+    "rms_db": -12.9
+  },
+  "GratiaNeon": {
+    "seconds": 76.8,
+    "bpm": 100,
+    "peak": 0.89,
+    "rms_db": -13.6
+  },
+  "GratiaVelvet": {
+    "seconds": 75.79,
+    "bpm": 76,
+    "peak": 0.89,
+    "rms_db": -12.8
+  },
+  "GratiaMoon": {
+    "seconds": 60.0,
+    "bpm": 64,
+    "peak": 0.89,
+    "rms_db": -13.0
+  }
+}

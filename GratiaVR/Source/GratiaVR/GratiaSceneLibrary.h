@@ -4,6 +4,8 @@
 #include "GameFramework/SaveGame.h"
 #include "GratiaSceneLibrary.generated.h"
 
+class UFont;
+class UMaterialInterface;
 class UMaterialParameterCollection;
 class USoundBase;
 class UTexture2D;
@@ -28,6 +30,26 @@ public:
     /** X bass, Y mids, Z highs, W beat pulse (1 on a beat, decaying). */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Music")
     TArray<FVector4f> Frames;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Music")
+    FText Title;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Music")
+    FText Artist;
+    /** Left/right channels as mono sounds for two speakers in an environment (spatial stereo). */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Music|Spatial")
+    TObjectPtr<USoundBase> LeftSound;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Music|Spatial")
+    TObjectPtr<USoundBase> RightSound;
+    /** Tracked beat times (seconds): transitions start and land on a beat. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Music|Mix")
+    TArray<float> Beats;
+    /** First strong beat (quiet intros are skipped when mixing in). */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Music|Mix", meta = (Units = "s"))
+    float IntroSeconds = 0.0f;
+    /** Latest beat to start mixing out (8 beats before the end). */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Music|Mix", meta = (Units = "s"))
+    float OutroSeconds = 0.0f;
+    /** First tracked beat at or after Seconds (Seconds itself without beats). */
+    float NextBeat(float Seconds) const;
 
     /** Interpolated frame at a track time (seconds); zero outside the track. */
     FVector4f Sample(float Seconds) const;
@@ -60,18 +82,15 @@ struct GRATIAVR_API FGratiaSceneEntry
     TSoftObjectPtr<UGratiaMusicAnalysis> Music;
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Scene", meta = (ClampMin = "0", ClampMax = "2"))
     float MusicVolume = 0.6f;
+    /** Room acoustics of the environment (reverb on the speakers and the character's voice). */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Scene")
+    TSoftObjectPtr<class UReverbEffect> Reverb;
     /** Analysis of the performance's scene music (drives the environment during the performance). */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Scene")
     TSoftObjectPtr<UGratiaMusicAnalysis> PerformanceMusic;
     /** Start in the partner's eyes (first-person view), as soon as the scene loads. */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Scene")
     bool bStartInPartnerView = false;
-    /** Controller vibration follows the motion of this character bone (semantic name); None = off. */
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Scene")
-    FName HapticBone;
-    /** Bone speed (cm/s) that gives full vibration. */
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Scene", meta = (ClampMin = "1", Units = "cm/s"))
-    float HapticFullSpeedCmPerSecond = 60.0f;
 };
 
 /** Scenes the player picks in the lobby, the lobby itself and the shared look of transitions. */
@@ -87,6 +106,15 @@ public:
     TSoftObjectPtr<UGratiaMusicAnalysis> LobbyMusic;
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lobby", meta = (ClampMin = "0", ClampMax = "2"))
     float LobbyMusicVolume = 0.5f;
+    /** Tracks the player can switch between (menu: previous/next); transitions mix on beats. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Music")
+    TArray<TSoftObjectPtr<UGratiaMusicAnalysis>> Playlist;
+    /** Crossfade length of a track change (beat aligned). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Music", meta = (ClampMin = "0.5", ClampMax = "20", Units = "s"))
+    float CrossfadeSeconds = 6.0f;
+    /** Speaker sound falloff and spread (spatial music from the environment's speakers). */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Music")
+    TObjectPtr<class USoundAttenuation> SpeakerAttenuation;
     /** Materials of the environments read the music from this collection (Bass, Mid, High, Beat, Energy). */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Look")
     TObjectPtr<UMaterialParameterCollection> AudioCollection;
@@ -101,6 +129,20 @@ public:
     TObjectPtr<class UStaticMesh> SphereMesh;
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Look")
     TObjectPtr<class UStaticMesh> CylinderMesh;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Look")
+    TObjectPtr<class UStaticMesh> PlaneMesh;
+    /** Neon grid floor of the lobby/loading space (reads AudioCollection). */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Look")
+    TSoftObjectPtr<UMaterialInterface> GridMaterial;
+    /** Menu look: rounded font, panel backdrop, hexagon picture frame, pill buttons (UI materials). */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Look|Menu")
+    TObjectPtr<UFont> Font;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Look|Menu")
+    TObjectPtr<UMaterialInterface> PanelMaterial;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Look|Menu")
+    TObjectPtr<UMaterialInterface> HexMaterial;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Look|Menu")
+    TObjectPtr<UMaterialInterface> PillMaterial;
     /** Shortest time the loading space stays (a scene never pops in mid-fade). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Look", meta = (ClampMin = "0", ClampMax = "10", Units = "s"))
     float MinLoadingSeconds = 2.0f;
@@ -136,6 +178,8 @@ public:
     UPROPERTY() float HapticsScale = 1.0f;
     UPROPERTY() float HeightOffsetCm = 0.0f;
     UPROPERTY() FName LastScene;
+    /** Playlist entry (analysis asset name) playing when the game was closed. */
+    UPROPERTY() FName LastTrack;
 
     static constexpr const TCHAR* SlotName = TEXT("GratiaUser");
     /** Loaded settings, or defaults when there is no save (or it cannot be read). */

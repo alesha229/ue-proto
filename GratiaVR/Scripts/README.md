@@ -1,5 +1,9 @@
 # Активная подготовка, импорт и сборка
 
+Карта проекта — [README.md](../../README.md). Лобби, сцены и музыка (`setup_scene_experience.py`,
+`prepare_user_music.py`, `generate_scene_music.py`, `import_scene_thumbnails.py`) —
+[EXPERIENCE.md](../../docs/EXPERIENCE.md). Генератор сцен запускается только по `Build.cmd -RegenerateScenes`.
+
 Мокап VaM (KM466, активный путь, см. [MOCAP_KM466.md](../../docs/MOCAP_KM466.md)):
 
 1. `extract_vam_timeline.py` — чтение исходных VaM Timeline-кривых без изменений

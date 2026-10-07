@@ -13,7 +13,8 @@ bool FGratiaMusicAnalysisTest::RunTest(const FString& Parameters)
     Track->FramesPerSecond = 2;
     Track->Frames = {FVector4f(0, .2f, 0, 1), FVector4f(1, .6f, 1, 0)};
     const FVector4f Middle = Track->Sample(.25f);
-    TestTrue(TEXT("Bands and beat interpolate in track time"), FMath::IsNearlyEqual(Middle.X, .5f) && FMath::IsNearlyEqual(Middle.Y, .4f) && FMath::IsNearlyEqual(Middle.W, .5f));
+    TestTrue(FString::Printf(TEXT("Bands interpolate in track time (%.9g, %.9g, %.9g)"), Middle.X, Middle.Y, Middle.W),
+        FMath::IsNearlyEqual(Middle.X, .5f, 1.e-6f) && FMath::IsNearlyEqual(Middle.Y, .4f, 1.e-6f) && FMath::IsNearlyEqual(Middle.W, .5f, 1.e-6f));
     TestEqual(TEXT("Negative time is silent"), Track->Sample(-.1f).X, 0.0f);
     TestEqual(TEXT("Track end is silent"), Track->Sample(1).X, 0.0f);
     TestEqual(TEXT("Huge time cannot overflow the sample index"), Track->Sample(std::numeric_limits<float>::max()).X, 0.0f);

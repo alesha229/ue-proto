@@ -41,9 +41,9 @@ public:
     int32 Selected = 0;
     FString QualityLabel() const;
     const TCHAR* ViewLabel() const;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Menu", meta=(ClampMin="80", ClampMax="400", Units="cm")) float PanelDistanceCm = 180.0f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Menu", meta=(ClampMin="0.04", ClampMax="0.3")) float PanelScale = 0.12f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Menu") FVector2D PanelResolution = FVector2D(1440, 980);
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Menu", meta=(ClampMin="80", ClampMax="400", Units="cm")) float PanelDistanceCm = 165.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Menu", meta=(ClampMin="0.04", ClampMax="0.3")) float PanelScale = 0.1f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Menu") FVector2D PanelResolution = FVector2D(1600, 900);
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Menu|Pointer", meta=(ClampMin="100", ClampMax="1000", Units="cm")) float PointerDistanceCm = 500.0f;
     /** Aim pose is preferred. This rotation is used only by a grip-pose fallback. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Menu|Pointer") FRotator GripPointerRotation = FRotator::ZeroRotator;

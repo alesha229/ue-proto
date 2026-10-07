@@ -4,6 +4,7 @@
 #include "GratiaInteraction.h"
 #include "GratiaLoadingSpace.h"
 #include "GratiaMenu.h"
+#include "GratiaMusicPlayer.h"
 #include "GratiaPerformanceStage.h"
 #include "GratiaPreviewCharacter.h"
 #include "GratiaSoftBodyInteraction.h"
@@ -14,6 +15,7 @@
 #include "Camera/PlayerCameraManager.h"
 #include "Components/AudioComponent.h"
 #include "Components/LightComponent.h"
+#include "Components/SkyLightComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/Level.h"
@@ -21,6 +23,7 @@
 #include "Engine/PostProcessVolume.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
@@ -32,6 +35,7 @@
 #include "Misc/Parse.h"
 #include "Misc/PackageName.h"
 #include "Sound/SoundBase.h"
+#include "Sound/ReverbEffect.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogGratiaScenes, Log, All);
 
@@ -158,9 +162,7 @@ void UGratiaSceneDirector::BeginPlay()
     FActorSpawnParameters Spawn;
     Spawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
     Space = GetWorld()->SpawnActor<AGratiaLoadingSpace>(Spawn);
-    UMaterialInterface* SkyMaterial = Library->LoadingSkyMaterial.LoadSynchronous();
-    UMaterialInterface* GlowMaterial = Library->GlowMaterial.LoadSynchronous();
-    if (!Space || !Library->SphereMesh || !Library->CylinderMesh || !SkyMaterial || !GlowMaterial)
+    if (!Space || !Space->Configure(Library))
     {
         LastError = TEXT("Loading-space mesh or material is unavailable.");
         UE_LOG(LogGratiaScenes, Error, TEXT("SCENES unavailable: %s"), *LastError);
@@ -168,11 +170,12 @@ void UGratiaSceneDirector::BeginPlay()
         Space = nullptr;
         return;
     }
-    Space->Configure(Library->SphereMesh, Library->CylinderMesh, SkyMaterial, GlowMaterial);
-    Ambient = NewObject<UAudioComponent>(GetOwner(), TEXT("SceneMusic"));
-    Ambient->bAutoActivate = false;
-    Ambient->bAllowSpatialization = false;
-    Ambient->RegisterComponent();
+    Music = NewObject<UGratiaMusicPlayer>(GetOwner(), TEXT("SceneMusic"));
+    Music->CrossfadeSeconds = Library->CrossfadeSeconds;
+    Music->SpeakerAttenuation = Library->SpeakerAttenuation;
+    for (const TSoftObjectPtr<UGratiaMusicAnalysis>& Track : Library->Playlist)
+        if (UGratiaMusicAnalysis* Loaded = Track.LoadSynchronous()) Music->Playlist.Add(Loaded);
+    Music->RegisterComponent();
     if (GetCharacter() && GetCharacter()->PerformanceStage) AddTickPrerequisiteComponent(GetCharacter()->PerformanceStage);
     for (TActorIterator<AActor> It(GetWorld()); It; ++It)
         if (It->ActorHasTag(GratiaStudioTag)) StudioActors.Add(*It);
@@ -182,9 +185,8 @@ void UGratiaSceneDirector::BeginPlay()
 
 void UGratiaSceneDirector::EndPlay(const EEndPlayReason::Type Reason)
 {
-    ResetHaptics();
     UnloadEnvironment();
-    if (Ambient) Ambient->Stop();
+    if (Music) Music->Stop(0.0f);
     if (Space) Space->Destroy();
     Super::EndPlay(Reason);
 }
@@ -232,16 +234,14 @@ void UGratiaSceneDirector::SetMusicVolume(float Volume)
     Settings->MusicVolume = FMath::Clamp(FMath::IsFinite(Volume) ? Volume : 1.0f, 0.0f, 2.0f);
     if (AGratiaPreviewCharacter* Character = GetCharacter())
         if (Character->PerformanceStage) Character->PerformanceStage->SetMusicVolumeScale(Settings->MusicVolume);
-    if (Ambient && AmbientTrack)
-    {
-        Ambient->SetVolumeMultiplier(AmbientVolume * Settings->MusicVolume);
-    }
+    if (Music) Music->SetMasterVolume(Settings->MusicVolume);
+    if (AGratiaPreviewCharacter* Character = GetCharacter())
+        if (Character->PerformanceStage && bPlaylistOverride) Character->PerformanceStage->SetMusicVolumeScale(0.0f);
 }
 
 void UGratiaSceneDirector::SetHapticsScale(float Scale)
 {
     if (Settings) Settings->HapticsScale = FMath::Clamp(FMath::IsFinite(Scale) ? Scale : 1.0f, 0.0f, 1.0f);
-    if (Settings && Settings->HapticsScale <= 0.0f) ResetHaptics();
 }
 
 void UGratiaSceneDirector::Fade(float From, float To)
@@ -261,12 +261,12 @@ FVector UGratiaSceneDirector::HeadFloor(float& OutYaw) const
     return FVector(Camera->GetComponentLocation().X, Camera->GetComponentLocation().Y, Pawn->GetActorLocation().Z);
 }
 
-void UGratiaSceneDirector::ShowLoading(const FText& Title, const FText& Subtitle, const FLinearColor& Accent)
+void UGratiaSceneDirector::ShowLoading(const FText& Title, const FText& Subtitle, const FLinearColor& Accent, UTexture2D* Picture)
 {
     if (!Space) return;
     float Yaw = 0.0f;
     const FVector Floor = HeadFloor(Yaw);
-    Space->ShowAt(Floor, Yaw, Title, Subtitle, Accent);
+    Space->ShowAt(Floor, Yaw, Title, Subtitle, Accent, Picture);
 }
 
 void UGratiaSceneDirector::ParkCharacter()
@@ -283,7 +283,6 @@ void UGratiaSceneDirector::ParkCharacter()
 
 void UGratiaSceneDirector::CancelContacts()
 {
-    ResetHaptics();
     AGratiaPreviewCharacter* Character = GetCharacter();
     if (!Character) return;
     if (Character->Interaction)
@@ -293,12 +292,6 @@ void UGratiaSceneDirector::CancelContacts()
         Character->Interaction->ResetState();
     }
     if (Character->SoftBodyInteraction) Character->SoftBodyInteraction->ResetSoftBody();
-}
-
-void UGratiaSceneDirector::ResetHaptics()
-{
-    HapticAmplitude = 0.0f;
-    bHapticValid = false;
 }
 
 bool UGratiaSceneDirector::IsSoundEnabled() const
@@ -407,6 +400,9 @@ void UGratiaSceneDirector::FinishLobby()
     SetStudioVisible(false);
     PerformanceTrack = nullptr;
     Current = INDEX_NONE;
+    Movers.Reset();
+    UGameplayStatics::DeactivateReverbEffect(this, TEXT("GratiaScene"));
+    if (Music) Music->SetSpeakers(nullptr, nullptr);
     PlayAmbient(Library->LobbyMusic, Library->LobbyMusicVolume);
     if (Runtime) Runtime->PlaceAnchor(AnchorHome);
     ShowLoading(FText::GetEmpty(), FText::GetEmpty(), FLinearColor(0.95f, 0.35f, 0.65f));
@@ -466,10 +462,19 @@ void UGratiaSceneDirector::FinishScene()
     Runtime->PlaceAnchor(Stand);
     if (Performance != INDEX_NONE && Entry->bStartInPartnerView && !Runtime->SetPartnerView(true))
     { FailScene(TEXT("Performance partner viewpoint could not be activated.")); return; }
+    // Music plays from the environment's speakers (left/right channels), stereo without them.
+    AActor* SpeakerLeft = GratiaFindTagged(Level, TEXT("GratiaSpeakerL"));
+    AActor* SpeakerRight = GratiaFindTagged(Level, TEXT("GratiaSpeakerR"));
+    if (Music) Music->SetSpeakers(SpeakerLeft && SpeakerRight ? SpeakerLeft : nullptr, SpeakerLeft && SpeakerRight ? SpeakerRight : nullptr);
+    // Ambient light of a streamed environment comes from its own (emissive) sky.
+    if (Level)
+        for (AActor* Actor : Level->Actors)
+            if (Actor) Actor->ForEachComponent<USkyLightComponent>(false, [](USkyLightComponent* Sky) { Sky->RecaptureSky(); });
+    bPlaylistOverride = false;
+    if (Character->PerformanceStage) Character->PerformanceStage->SetMusicVolumeScale(Settings->MusicVolume);
     if (Performance != INDEX_NONE)
     {
-        Ambient->Stop();
-        AmbientTrack = nullptr;
+        if (Music) Music->Stop(1.0f);
         if (PerformanceTrack && PerformanceTrack->Sound != Character->GetPerformance()->Scene.Music)
         {
             UE_LOG(LogGratiaScenes, Warning, TEXT("SCENE music analysis does not match the performance track; reactive music disabled"));
@@ -482,8 +487,9 @@ void UGratiaSceneDirector::FinishScene()
         PlayAmbient(Entry->Music, Entry->MusicVolume);
     }
     CollectReactiveLights();
-    ResetHaptics();
-    bHapticWarning = false;
+    CollectMovers();
+    if (UReverbEffect* Reverb = Entry->Reverb.LoadSynchronous()) UGameplayStatics::ActivateReverbEffect(this, Reverb, TEXT("GratiaScene"), 1.0f, 0.6f, 1.0f);
+    else UGameplayStatics::DeactivateReverbEffect(this, TEXT("GratiaScene"));
     Space->HideSpace();
     Settings->LastScene = Entry->Id;
     SaveUserSettings();
@@ -495,16 +501,101 @@ void UGratiaSceneDirector::FinishScene()
 
 void UGratiaSceneDirector::PlayAmbient(const TSoftObjectPtr<UGratiaMusicAnalysis>& Track, float Volume)
 {
-    if (!Ambient) return;
+    if (!Music) return;
     UGratiaMusicAnalysis* Analysis = Track.LoadSynchronous();
-    AmbientVolume = FMath::Clamp(FMath::IsFinite(Volume) ? Volume : 0.5f, 0.0f, 2.0f);
-    if (!Analysis || !Analysis->Sound || !IsSoundEnabled()) { Ambient->Stop(); AmbientTrack = Analysis; AmbientClock = 0.0f; return; }
-    Ambient->SetVolumeMultiplier(AmbientVolume * (Settings ? Settings->MusicVolume : 1.0f));
-    if (AmbientTrack == Analysis && Ambient->IsPlaying()) return;
-    AmbientTrack = Analysis;
-    AmbientClock = 0.0f;
-    Ambient->SetSound(Analysis->Sound);
-    Ambient->Play();
+    Music->SetMasterVolume(Settings ? Settings->MusicVolume : 1.0f);
+    if (!Analysis || !Analysis->Sound) { Music->Stop(0.5f); return; }
+    Music->Play(Analysis, FMath::Clamp(FMath::IsFinite(Volume) ? Volume : 0.5f, 0.0f, 2.0f), true);
+}
+
+void UGratiaSceneDirector::NextTrack()
+{
+    if (!Music || Music->Playlist.IsEmpty()) return;
+    AGratiaPreviewCharacter* Character = GetCharacter();
+    if (IsPerformanceScene() && !bPlaylistOverride)
+    {
+        // The performance's own music steps aside for the playlist.
+        bPlaylistOverride = true;
+        if (Character && Character->PerformanceStage) Character->PerformanceStage->SetMusicVolumeScale(0.0f);
+        const int32 Last = Settings ? Music->Playlist.IndexOfByPredicate([this](const UGratiaMusicAnalysis* T) { return T->GetFName() == Settings->LastTrack; }) : INDEX_NONE;
+        Music->Play(Music->Playlist[Last == INDEX_NONE ? 0 : Last], 1.0f, false);
+    }
+    else Music->Next();
+    if (Settings && Music->GetCurrent()) Settings->LastTrack = Music->GetCurrent()->GetFName();
+}
+
+void UGratiaSceneDirector::PreviousTrack()
+{
+    if (!Music || Music->Playlist.IsEmpty()) return;
+    if (IsPerformanceScene() && !bPlaylistOverride) { NextTrack(); return; }
+    Music->Previous();
+    if (Settings && Music->GetCurrent()) Settings->LastTrack = Music->GetCurrent()->GetFName();
+}
+
+FString UGratiaSceneDirector::GetTrackText() const
+{
+    const UGratiaMusicAnalysis* Track = Music && Music->IsPlaying() ? Music->GetCurrent() : nullptr;
+    if (!Track && IsPerformanceScene() && !bPlaylistOverride && PerformanceTrack) Track = PerformanceTrack;
+    if (!Track) return FString();
+    const FString Title = Track->Title.IsEmpty() ? Track->GetName() : Track->Title.ToString();
+    return Track->Artist.IsEmpty() ? Title : Title + TEXT("  \u00B7  ") + Track->Artist.ToString();
+}
+
+void UGratiaSceneDirector::CollectMovers()
+{
+    Movers.Reset();
+    MoverTime = 0.0f;
+    const ULevel* Level = Streamed ? Streamed->GetLoadedLevel() : nullptr;
+    if (!Level) return;
+    for (AActor* Actor : Level->Actors)
+    {
+        if (!Actor) continue;
+        FMover Mover;
+        for (const FName& Tag : Actor->Tags)
+        {
+            TArray<FString> Parts;
+            Tag.ToString().ParseIntoArray(Parts, TEXT(":"));
+            if (Parts.Num() >= 2 && Parts[0] == TEXT("GratiaSpin")) Mover.Spin = FCString::Atof(*Parts[1]);
+            if (Parts.Num() >= 2 && Parts[0] == TEXT("GratiaSweep"))
+            {
+                // GratiaSweep:<degrees>:<period s>[:<pivot on local Z, cm>]
+                Mover.Sweep = FCString::Atof(*Parts[1]);
+                if (Parts.Num() >= 3) Mover.SweepPeriod = FMath::Max(0.2f, FCString::Atof(*Parts[2]));
+                if (Parts.Num() >= 4) Mover.PivotOffset = FCString::Atof(*Parts[3]);
+            }
+            if (Parts.Num() >= 2 && Parts[0] == TEXT("GratiaPulse")) Mover.Pulse = FCString::Atof(*Parts[1]);
+        }
+        if (Mover.Spin == 0.0f && Mover.Sweep == 0.0f && Mover.Pulse == 0.0f) continue;
+        Mover.Actor = Actor;
+        Mover.BaseRotation = Actor->GetActorRotation();
+        Mover.BaseLocation = Actor->GetActorLocation();
+        Mover.BaseScale = Actor->GetActorScale3D();
+        Mover.Phase = float(Movers.Num()) * 0.9f;
+        Movers.Add(Mover);
+    }
+}
+
+void UGratiaSceneDirector::UpdateMovers(float Delta)
+{
+    if (Movers.IsEmpty() || State != EGratiaFlowState::Playing) return;
+    // Spins speed up with the bass; sweeps swing wider on the beat.
+    MoverTime += Delta * (0.6f + 0.8f * MusicFrame.X);
+    for (const FMover& Mover : Movers)
+    {
+        AActor* Actor = Mover.Actor.Get();
+        if (!Actor) continue;
+        FRotator Rotation = Mover.BaseRotation;
+        Rotation.Yaw += Mover.Spin * MoverTime;
+        Rotation.Pitch += Mover.Sweep * (0.75f + 0.25f * MusicFrame.W) * FMath::Sin(MoverTime * 2.0f * PI / Mover.SweepPeriod + Mover.Phase);
+        if (Mover.PivotOffset != 0.0f)
+        {
+            // Turn about the pivot (a laser swings from its emitter, not its middle).
+            const FVector Pivot = Mover.BaseLocation + Mover.BaseRotation.RotateVector(FVector(0, 0, Mover.PivotOffset));
+            Actor->SetActorLocationAndRotation(Pivot + Rotation.RotateVector(FVector(0, 0, -Mover.PivotOffset)), Rotation);
+        }
+        else Actor->SetActorRotation(Rotation);
+        if (Mover.Pulse != 0.0f) Actor->SetActorScale3D(Mover.BaseScale * (1.0f + Mover.Pulse * MusicFrame.W));
+    }
 }
 
 void UGratiaSceneDirector::CollectReactiveLights()
@@ -560,7 +651,9 @@ void UGratiaSceneDirector::TickComponent(float Delta, ELevelTick Type, FActorCom
             UnloadEnvironment();
             ParkCharacter();
             SetStudioVisible(false);
-            ShowLoading(Entry.Title, Entry.Description, Entry.Accent);
+            ShowLoading(Entry.Title, Entry.Description, Entry.Accent, Entry.Thumbnail.LoadSynchronous());
+            Movers.Reset();
+            if (Music) Music->SetSpeakers(nullptr, nullptr);
             PlayAmbient(Library->LobbyMusic, Library->LobbyMusicVolume);
             PerformanceTrack = Entry.PerformanceMusic.LoadSynchronous();
             bVisibilityRequested = false;
@@ -615,7 +708,6 @@ void UGratiaSceneDirector::TickComponent(float Delta, ELevelTick Type, FActorCom
         break;
     }
     UpdateMusic(Delta);
-    UpdateHaptics(Delta);
 }
 
 void UGratiaSceneDirector::UpdateMusic(float Delta)
@@ -623,24 +715,9 @@ void UGratiaSceneDirector::UpdateMusic(float Delta)
     const AGratiaPreviewCharacter* Character = GetCharacter();
     const UGratiaPerformanceStage* Stage = Character ? Character->PerformanceStage.Get() : nullptr;
     FVector4f Frame(0, 0, 0, 0);
-    if (Ambient && !IsSoundEnabled()) Ambient->Stop();
-    if (PerformanceTrack && Stage && Stage->IsMusicPlaying() && IsSoundEnabled()) Frame = PerformanceTrack->Sample(Stage->GetMusicTime());
-    else if (AmbientTrack && Ambient && AmbientTrack->Sound && IsSoundEnabled())
-    {
-        const float Duration = AmbientTrack->Sound->GetDuration();
-        if (FMath::IsFinite(Duration) && Duration > 0.0f)
-        {
-            AmbientClock = FMath::Fmod(AmbientClock, Duration);
-            if (!Ambient->IsPlaying())
-            {
-                Ambient->SetSound(AmbientTrack->Sound);
-                Ambient->SetVolumeMultiplier(AmbientVolume * (Settings ? Settings->MusicVolume : 1.0f));
-                Ambient->Play(AmbientClock);
-            }
-            AmbientClock = FMath::Fmod(AmbientClock + Delta, Duration);
-            Frame = AmbientTrack->Sample(AmbientClock);
-        }
-    }
+    if (Music) Music->SetEnabled(IsSoundEnabled());
+    if (!bPlaylistOverride && PerformanceTrack && Stage && Stage->IsMusicPlaying() && IsSoundEnabled()) Frame = PerformanceTrack->Sample(Stage->GetMusicTime());
+    else if (Music && IsSoundEnabled()) Frame = Music->GetFrame();
     // Fast attack, slower release: lights jump with a hit and glow out.
     const float Attack = 1.0f - FMath::Exp(-Delta * 25.0f), Release = 1.0f - FMath::Exp(-Delta * 5.0f);
     for (int32 I = 0; I < 4; ++I) Smoothed[I] = FMath::Lerp(Smoothed[I], Frame[I], Frame[I] > Smoothed[I] ? Attack : Release);
@@ -658,56 +735,25 @@ void UGratiaSceneDirector::UpdateMusic(float Delta)
     for (const FReactiveLight& Light : ReactiveLights)
         if (ULightComponent* Component = Light.Light.Get())
             Component->SetIntensity(Light.BaseIntensity * (0.35f + 1.3f * MusicFrame[Light.Band] + 0.5f * MusicFrame.W));
-}
-
-void UGratiaSceneDirector::UpdateHaptics(float Delta)
-{
-    const AGratiaStage1Runtime* Runtime = GetRuntime();
-    const AGratiaPreviewCharacter* Character = GetCharacter();
-    const FGratiaSceneEntry* Entry = GetCurrentEntry();
-    float Target = 0.0f;
-    if (!IsPerformanceScene() || IsSceneInputBlocked() || !Runtime || !Runtime->bXRActive
-        || (!Runtime->IsHandInteractionAllowed(true) && !Runtime->IsHandInteractionAllowed(false))
-        || !Entry || Entry->HapticBone.IsNone() || !Character->CharacterMesh || Character->IsPerformancePaused() || Delta <= 0.0f)
-    { ResetHaptics(); return; }
-    FName Bone = Character->CharacterProfile ? Character->CharacterProfile->ResolveBone(Entry->HapticBone) : NAME_None;
-    if (Bone.IsNone() || Character->CharacterMesh->GetBoneIndex(Bone) == INDEX_NONE)
-    {
-        if (!bHapticWarning) UE_LOG(LogGratiaScenes, Warning, TEXT("SCENE_HAPTICS unavailable semantic bone %s"), *Entry->HapticBone.ToString());
-        bHapticWarning = true;
-        ResetHaptics();
-        return;
-    }
-    // Motion relative to the character: placing the scene never generates vibration.
-    const FVector Local = Character->GetActorTransform().InverseTransformPosition(Character->CharacterMesh->GetBoneLocation(Bone));
-    if (Local.ContainsNaN()) { ResetHaptics(); return; }
-    if (bHapticValid)
-    {
-        const float Speed = float(FVector::Distance(Local, LastHapticBone)) / Delta;
-        const float FullSpeed = FMath::IsFinite(Entry->HapticFullSpeedCmPerSecond) ? FMath::Max(1.0f, Entry->HapticFullSpeedCmPerSecond) : 60.0f;
-        Target = FMath::IsFinite(Speed) ? FMath::Pow(FMath::Clamp(Speed / FullSpeed, 0.0f, 1.0f), 1.5f) : 0.0f;
-    }
-    LastHapticBone = Local;
-    bHapticValid = true;
-    HapticAmplitude = FMath::FInterpTo(HapticAmplitude, Target, Delta, 12.0f);
+    UpdateMovers(Delta);
 }
 
 void UGratiaSceneDirector::TogglePause()
 {
     AGratiaPreviewCharacter* Character = GetCharacter();
-    if (IsPerformanceScene()) { Character->SetPerformancePlayback(!Character->IsPerformancePaused(), Character->GetPerformanceRate()); ResetHaptics(); }
+    if (IsPerformanceScene()) Character->SetPerformancePlayback(!Character->IsPerformancePaused(), Character->GetPerformanceRate());
 }
 
 void UGratiaSceneDirector::Restart()
 {
     AGratiaPreviewCharacter* Character = GetCharacter();
-    if (IsPerformanceScene()) { Character->SeekPerformancePart(0); ResetHaptics(); }
+    if (IsPerformanceScene()) Character->SeekPerformancePart(0);
 }
 
 void UGratiaSceneDirector::StepPart(int32 Direction)
 {
     AGratiaPreviewCharacter* Character = GetCharacter();
-    if (IsPerformanceScene()) { Character->SeekPerformancePart(Character->PerformancePart + Direction); ResetHaptics(); }
+    if (IsPerformanceScene()) Character->SeekPerformancePart(Character->PerformancePart + Direction);
 }
 
 void UGratiaSceneDirector::StepSpeed(int32 Direction)
@@ -737,8 +783,8 @@ FString UGratiaSceneDirector::GetDiagnostics() const
 {
     static const TCHAR* Names[] = {TEXT("off"), TEXT("lobby"), TEXT("to_loading"), TEXT("loading"), TEXT("to_scene"), TEXT("playing"), TEXT("to_lobby")};
     const FGratiaSceneEntry* Entry = GetCurrentEntry();
-    return FString::Printf(TEXT("state=%s scene=%s environment=%s input_blocked=%d error=%s music=%.2f/%.2f/%.2f/%.2f haptic=%.2f lights=%d"), Names[uint8(State)],
+    return FString::Printf(TEXT("state=%s scene=%s environment=%s input_blocked=%d error=%s music=%.2f/%.2f/%.2f/%.2f lights=%d"), Names[uint8(State)],
         Entry ? *Entry->Id.ToString() : TEXT("-"), Streamed ? (IsEnvironmentReady() ? TEXT("ready") : TEXT("loading")) : TEXT("studio"),
         IsSceneInputBlocked() ? 1 : 0, LastError.IsEmpty() ? TEXT("-") : *LastError,
-        MusicFrame.X, MusicFrame.Y, MusicFrame.Z, MusicFrame.W, HapticAmplitude, ReactiveLights.Num());
+        MusicFrame.X, MusicFrame.Y, MusicFrame.Z, MusicFrame.W, ReactiveLights.Num());
 }

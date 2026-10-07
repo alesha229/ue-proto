@@ -8,6 +8,7 @@ class AGratiaLoadingSpace;
 class AGratiaPreviewCharacter;
 class AGratiaStage1Runtime;
 class UAudioComponent;
+class UGratiaMusicPlayer;
 class ULevelStreamingDynamic;
 class ULightComponent;
 
@@ -66,14 +67,18 @@ public:
 
     /** Music frame (bass, mids, highs, beat) of what plays now. */
     FVector4f GetMusicFrame() const { return MusicFrame; }
-    /** Scene vibration (0..1); Runtime applies the player's scale and each hand's tracking gate. */
-    float GetSceneHapticAmplitude() const { return HapticAmplitude; }
 
     UGratiaUserSettings* GetUserSettings() const { return Settings; }
     /** Writes the character/menu state into the settings and saves them (not in tests). */
     void SaveUserSettings();
     void SetMusicVolume(float Volume);
     void SetHapticsScale(float Scale);
+    /** Playlist: mixes into the next/previous track on a beat (a performance's own music mutes). */
+    void NextTrack();
+    void PreviousTrack();
+    /** "Title - Artist" of what plays now (empty when nothing does). */
+    FString GetTrackText() const;
+    UGratiaMusicPlayer* GetMusicPlayer() const { return Music; }
     FString GetDiagnostics() const;
 
 protected:
@@ -88,20 +93,33 @@ private:
         float BaseIntensity = 0.0f;
         int32 Band = 0;
     };
+    /** Environment props moved by the music: tags GratiaSpin:<deg/s>, GratiaSweep:<deg>:<s>, GratiaPulse:<scale>. */
+    struct FMover
+    {
+        TWeakObjectPtr<AActor> Actor;
+        FRotator BaseRotation = FRotator::ZeroRotator;
+        FVector BaseLocation = FVector::ZeroVector, BaseScale = FVector::OneVector;
+        /** Rotation centre on the actor's local Z (cm, unscaled), e.g. the emitter end of a beam. */
+        float PivotOffset = 0.0f;
+        float Spin = 0.0f, Sweep = 0.0f, SweepPeriod = 4.0f, Pulse = 0.0f, Phase = 0.0f;
+    };
+    void CollectMovers();
+    void UpdateMovers(float Delta);
+    TArray<FMover> Movers;
+    float MoverTime = 0.0f;
 
     AGratiaStage1Runtime* GetRuntime() const;
     AGratiaPreviewCharacter* GetCharacter() const;
     void ApplyUserSettings();
     void Fade(float From, float To);
     FVector HeadFloor(float& OutYaw) const;
-    void ShowLoading(const FText& Title, const FText& Subtitle, const FLinearColor& Accent);
+    void ShowLoading(const FText& Title, const FText& Subtitle, const FLinearColor& Accent, class UTexture2D* Picture = nullptr);
     void ParkCharacter();
     void SetStudioVisible(bool bVisible);
     void UnloadEnvironment();
     void RestoreReactiveLights();
     void FailScene(const FString& Reason);
     void CancelContacts();
-    void ResetHaptics();
     bool IsSoundEnabled() const;
     float GetFadeSeconds() const;
     float GetLoadingTimeout() const;
@@ -109,28 +127,23 @@ private:
     void FinishLobby();
     void PlayAmbient(const TSoftObjectPtr<UGratiaMusicAnalysis>& Track, float Volume);
     void UpdateMusic(float Delta);
-    void UpdateHaptics(float Delta);
     void CollectReactiveLights();
 
     EGratiaFlowState State = EGratiaFlowState::Off;
     int32 Current = INDEX_NONE, Pending = INDEX_NONE;
     float StateSeconds = 0.0f;
     bool bPendingStart = false, bTestMode = false, bFlowQA = false;
-    bool bVisibilityRequested = false, bHapticWarning = false;
+    bool bVisibilityRequested = false;
     FString LastError;
     UPROPERTY(Transient) TObjectPtr<UGratiaUserSettings> Settings;
     UPROPERTY(Transient) TObjectPtr<AGratiaLoadingSpace> Space;
-    UPROPERTY(Transient) TObjectPtr<UAudioComponent> Ambient;
+    UPROPERTY(Transient) TObjectPtr<UGratiaMusicPlayer> Music;
+    /** A playlist track chosen during a performance replaces (mutes) the performance music. */
+    bool bPlaylistOverride = false;
     UPROPERTY(Transient) TObjectPtr<ULevelStreamingDynamic> Streamed;
-    UPROPERTY(Transient) TObjectPtr<UGratiaMusicAnalysis> AmbientTrack;
     UPROPERTY(Transient) TObjectPtr<UGratiaMusicAnalysis> PerformanceTrack;
-    float AmbientClock = 0.0f;
-    float AmbientVolume = 0.5f;
     FVector4f MusicFrame = FVector4f(0, 0, 0, 0);
     FVector4f Smoothed = FVector4f(0, 0, 0, 0);
-    float HapticAmplitude = 0.0f;
-    FVector LastHapticBone = FVector::ZeroVector;
-    bool bHapticValid = false;
     FTransform CharacterHome = FTransform::Identity;
     FTransform AnchorHome = FTransform::Identity;
     bool bHomeSaved = false;

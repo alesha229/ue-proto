@@ -6,6 +6,7 @@
 Builds/
 .vs/
 *.sln
+*.slnx
 *.suo
 *.VC.db
 *.VC.opendb
@@ -67,3 +68,4 @@ Exports/Gratia/Audio/*.wav
 # Player-supplied music (commercial tracks): personal use only, never committed or distributed.
 Exports/Gratia/Audio/UserMusic/
 GratiaVR/Content/Gratia/UserMusic/
+Exports/Gratia/Audio/Generated/*.wav

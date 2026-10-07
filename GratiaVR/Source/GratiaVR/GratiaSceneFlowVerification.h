@@ -6,6 +6,7 @@
 
 class AGratiaStage1Runtime;
 class UGratiaSceneDirector;
+class UGratiaMusicAnalysis;
 class UGratiaSceneLibrary;
 
 /** Opt-in rendered integration test of the scene flow. Never feeds real controller tracking. */
@@ -21,7 +22,7 @@ protected:
     virtual void TickComponent(float Delta, ELevelTick Type, FActorComponentTickFunction* Tick) override;
 
 private:
-    enum class EPhase : uint8 { WaitLobby, LobbyCapture, Travel, Settle, SoundOff, Pause, Resume, Return, Finish };
+    enum class EPhase : uint8 { WaitLobby, LobbyCapture, Travel, Settle, TrackNext, TrackBack, SoundOff, Pause, Resume, Return, Finish };
     AGratiaStage1Runtime* Runtime() const;
     UGratiaSceneDirector* Director() const;
     void Check(bool bPass, const FString& Description);
@@ -41,5 +42,6 @@ private:
     bool bSawToLoading = false, bSawLoading = false, bSawToScene = false;
     bool bBlockedLastTick = false;
     UPROPERTY(Transient) TObjectPtr<UGratiaSceneLibrary> OriginalLibrary;
+    UPROPERTY(Transient) TObjectPtr<UGratiaMusicAnalysis> TrackBefore;
     UPROPERTY(Transient) TObjectPtr<UGratiaSceneLibrary> ErrorLibrary;
 };

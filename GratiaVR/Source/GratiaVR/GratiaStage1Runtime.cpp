@@ -527,9 +527,7 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
             ContactHapticFrequency = Hand.GripPulse > 0 ? 0.3f : SoftBody->GetHapticFrequency(bLeft);
         }
     }
-    const float SceneAmplitude = SceneDirector ? SceneDirector->GetSceneHapticAmplitude() : 0.0f;
-    UpdateHaptics(Hand, bLeft, FMath::Max(ContactHapticAmplitude, SceneAmplitude),
-        ContactHapticAmplitude > SceneAmplitude ? ContactHapticFrequency : 0.5f);
+    UpdateHaptics(Hand, bLeft, ContactHapticAmplitude, ContactHapticFrequency);
     if (Hand.Gate.State == EGratiaHandState::Tracked) ApplyVisualHand(Hand, Target, Desired, DeltaSeconds);
     if (Hand.bSmoothedValid && IsFiniteTransform(Hand.Smoothed)) VisualWorld = Hand.Smoothed;
     if (IsFiniteTransform(VisualWorld)) Hand.LastWorld = VisualWorld;

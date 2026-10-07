@@ -1,6 +1,7 @@
 #include "GratiaSceneFlowVerification.h"
 #include "GratiaCharacterProfile.h"
 #include "GratiaInteraction.h"
+#include "GratiaMusicPlayer.h"
 #include "GratiaMenu.h"
 #include "GratiaMenuWidget.h"
 #include "GratiaPerformanceStage.h"
@@ -173,7 +174,8 @@ void UGratiaSceneFlowVerification::Complete()
     if (Director() && OriginalLibrary) Director()->Library = OriginalLibrary;
     UE_LOG(LogGratiaFlowQA, Display, TEXT("GRATIA_FLOW_QA_%s checks=%d failures=%d scenes=%d seconds=%.2f real_vr_acceptance=0"),
         Failures ? TEXT("FAIL") : TEXT("PASS"), Checks, Failures, CompletedScenes, Elapsed);
-    FPlatformMisc::RequestExitWithStatus(false, Failures ? 1 : 0, TEXT("GratiaSceneFlowQA"));
+    // In the editor (Play) the run only reports: quitting mid-PIE tears the editor down under its own viewport.
+    if (!GetWorld()->IsPlayInEditor()) FPlatformMisc::RequestExitWithStatus(false, Failures ? 1 : 0, TEXT("GratiaSceneFlowQA"));
 }
 
 void UGratiaSceneFlowVerification::TickComponent(float Delta, ELevelTick Type, FActorComponentTickFunction* Tick)
@@ -251,7 +253,8 @@ void UGratiaSceneFlowVerification::TickComponent(float Delta, ELevelTick Type, F
         bSawToLoading |= State == EGratiaFlowState::ToLoading;
         bSawLoading |= State == EGratiaFlowState::Loading;
         bSawToScene |= State == EGratiaFlowState::ToScene;
-        if (State == EGratiaFlowState::Loading && !bLoadingCapture)
+        // Captured once the fade into the loading space has finished (it starts black).
+        if (State == EGratiaFlowState::Loading && !bLoadingCapture && LoadingSeconds >= OriginalLibrary->FadeSeconds + 0.4f)
         {
             Check(Character->IsHidden() && !Character->GetActorEnableCollision(), TEXT("Loading keeps the character hidden and noncolliding"));
             Capture(FString::Printf(TEXT("Loading_%02d"), CompletedScenes));
@@ -294,9 +297,40 @@ void UGratiaSceneFlowVerification::TickComponent(float Delta, ELevelTick Type, F
                 Check(Character->PerformanceStage && Character->PerformanceStage->IsMusicPlaying(), TEXT("Performance scene music plays"));
         }
         else Check(Character->IsIdlePreview(), TEXT("Free play begins in idle"));
+        if (UGratiaMusicPlayer* Music = Flow->GetMusicPlayer(); Music && OriginalLibrary->Scenes[SceneIndex].Performance.IsNone() && !Music->Playlist.IsEmpty())
+        {
+            // Free play: the scene's track plays from the environment speakers; the menu mixes tracks on beats.
+            Check(Music->IsPlaying() && Music->GetCurrent() == OriginalLibrary->Scenes[SceneIndex].Music.Get(), TEXT("Free play plays the scene's track"));
+            if (!OriginalLibrary->Scenes[SceneIndex].Environment.IsNull())
+                Check(Music->IsSpatial(), TEXT("Environment speakers carry the music"));
+            TrackBefore = Music->GetCurrent();
+            Host->Menu->Execute(EGratiaMenuAction::TrackNext);
+            Check(Music->GetCurrent() && Music->GetCurrent() != TrackBefore, TEXT("Next track is chosen from the playlist"));
+            ChangePhase(EPhase::TrackNext);
+            break;
+        }
         CheckSettings();
         ChangePhase(EPhase::SoundOff);
         break;
+    case EPhase::TrackNext:
+    case EPhase::TrackBack:
+    {
+        // A change lands on the playing track's next beat (under a second), then crossfades for seconds.
+        if (PhaseSeconds < 1.6f) break;
+        UGratiaMusicPlayer* Music = Flow->GetMusicPlayer();
+        Check(Music && !Music->IsQueued() && Music->IsPlaying(), TEXT("Track change starts on a beat"));
+        Check(Music && Music->GetAudibleDecks() == 2, TEXT("Track change crossfades both decks"));
+        if (Phase == EPhase::TrackNext)
+        {
+            Host->Menu->Execute(EGratiaMenuAction::TrackPrev);
+            Check(Music && Music->GetCurrent() == TrackBefore, TEXT("Previous track returns to the scene's track"));
+            ChangePhase(EPhase::TrackBack);
+            break;
+        }
+        CheckSettings();
+        ChangePhase(EPhase::SoundOff);
+        break;
+    }
     case EPhase::SoundOff:
         if (PhaseSeconds < 0.4f) break;
         if (Flow->IsPerformanceScene() && Character->PerformanceStage)

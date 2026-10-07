@@ -84,13 +84,26 @@ flowchart LR
   перепривязке Unreal во время пересборки меша/cook. В игре — обычный cloth asset.
 - `GratiaClothVerification`: отдельная opt-in QA мягкой поверхности; synthetic
   нажим/хват, наблюдение частиц и видимых вершин, отпускание и tracking recovery.
-- `GratiaMenu`: скрытое по умолчанию меню в пространстве; получает цель от Runtime.
+- `GratiaMenu`: меню в пространстве; в лобби оно открыто, в сцене по Y/B. Луч из правой
+  руки (`UWidgetInteractionComponent`) и триггер, контекст `IMC_GratiaMenu` добавляется сам
+  (так OpenXR активирует его action set). Внешний вид — `GratiaMenuWidget` (UMG, собран в C++
+  на UI-материалах и шрифте из библиотеки сцен).
+- `GratiaSceneDirector`: поток лобби → загрузка → сцена → лобби. Окружения подгружаются как
+  streaming-уровни с маркерами и тегами (см. [EXPERIENCE.md](EXPERIENCE.md)). Директор ведёт
+  реактивный свет, движущиеся объекты, `MPC_Music`, реверберацию комнаты, перезахват SkyLight
+  и плейлист. `GratiaSceneLibrary` содержит данные: сцены, анализ музыки, плейлист и
+  оформление.
+- `GratiaMusicPlayer`: две деки с переходом по биту (кроссфейд, свип НЧ/ВЧ, автопереход) и
+  левый/правый каналы из колонок окружения. `GratiaLoadingSpace` и `GratiaLoadingWidget` —
+  пространство лобби и загрузки и карточка сцены.
+- `GratiaSceneFlowVerification`: opt-in QA потока сцен (`-GratiaFlowQA`).
 - `GratiaRuntimeVerification`: отдельное состояние smoke/self-test, synthetic-input test,
   soak и метрики. Оно выполняется только при соответствующих аргументах запуска.
   В soak только тест владеет контактными отсчётами: обычные припаркованные desktop-руки
   не обновляют их и не продлевают correction recovery синтетического контакта.
 - `GratiaVREditorTools`: генерация PhysicsAsset и перенос source cloth только
-  в редакторе; модуль отсутствует в игре.
+  в редакторе; модуль отсутствует в игре. `GratiaExperienceToolsLibrary` создаёт font
+  face без Slate и составной шрифт для `setup_scene_experience.py`.
 
 ## Модель и ручная работа
 

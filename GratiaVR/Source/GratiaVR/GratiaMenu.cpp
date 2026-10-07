@@ -344,6 +344,7 @@ bool UGratiaMenu::IsActionAvailable(EGratiaMenuAction Action, int32 Param) const
     switch (Action)
     {
     case EGratiaMenuAction::Tab: case EGratiaMenuAction::Close: case EGratiaMenuAction::Quit: return true;
+    case EGratiaMenuAction::TrackPrev: case EGratiaMenuAction::TrackNext: return Director && Director->Library && !Director->Library->Playlist.IsEmpty();
     case EGratiaMenuAction::StartScene: return Director && Director->Library && Director->Library->Scenes.IsValidIndex(Param) && (Director->GetState() == EGratiaFlowState::Lobby || Director->GetState() == EGratiaFlowState::Playing);
     case EGratiaMenuAction::Lobby: return IsInScene();
     case EGratiaMenuAction::Pose: case EGratiaMenuAction::Demo: return I && CharacterScene && (!Director || !Director->IsPerformanceScene());
@@ -408,6 +409,8 @@ void UGratiaMenu::Execute(EGratiaMenuAction Action, int32 Param)
     case EGratiaMenuAction::HapticsDown: case EGratiaMenuAction::HapticsUp: Director->SetHapticsScale(Director->GetUserSettings()->HapticsScale + (Action == EGratiaMenuAction::HapticsUp ? 0.1f : -0.1f)); break;
     case EGratiaMenuAction::HeightDown: case EGratiaMenuAction::HeightUp: if (Runtime) Runtime->AdjustHeight(Action == EGratiaMenuAction::HeightUp ? Runtime->HeightStepCm : -Runtime->HeightStepCm); break;
     case EGratiaMenuAction::Recenter: if (Runtime) Runtime->Recenter(); break;
+    case EGratiaMenuAction::TrackPrev: if (Director) Director->PreviousTrack(); break;
+    case EGratiaMenuAction::TrackNext: if (Director) Director->NextTrack(); break;
     }
     if (Director) Director->SaveUserSettings();
     Refresh();

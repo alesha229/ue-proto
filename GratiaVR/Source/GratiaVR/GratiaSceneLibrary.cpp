@@ -17,6 +17,12 @@ FVector4f UGratiaMusicAnalysis::Sample(float Seconds) const
     return Result;
 }
 
+float UGratiaMusicAnalysis::NextBeat(float Seconds) const
+{
+    for (const float Beat : Beats) if (Beat >= Seconds) return Beat;
+    return Seconds;
+}
+
 UGratiaUserSettings* UGratiaUserSettings::Load()
 {
     if (UGameplayStatics::DoesSaveGameExist(SlotName, 0))

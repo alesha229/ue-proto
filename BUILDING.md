@@ -1,22 +1,44 @@
 # Сборка и запуск GratiaVR
 
 Рабочий проект: `GratiaVR/GratiaVR.uproject`. Движок по умолчанию: UE 5.8.3 в `E:\ue\UE_5.8`.
+Карта проекта и где что лежит — [README.md](README.md).
 
-1. Закрыть игру и Unreal Editor, запустить **Build.cmd** в этой папке. Он вызывает единственный активный pipeline `GratiaVR/Scripts/Build-Stage1.ps1`.
+## Редактор
+
+**Open-Editor.cmd** компилирует C++ (`GratiaVREditor`) и открывает проект. Play запускает игру
+на мониторе, Play ▸ VR Preview — в шлеме (сначала SteamVR). Если редактор уже открыт, скрипт
+ничего не делает: C++ нельзя пересобрать при открытом редакторе.
+
+## Сборка игры
+
+1. Закрыть игру и Unreal Editor, запустить **Build.cmd** в этой папке. Он вызывает единственный
+   активный pipeline `GratiaVR/Scripts/Build-Stage1.ps1`: компиляция редактора, cook, упаковка,
+   проверка отпечатка исходников и копирование в `Builds/Windows`.
 2. Для VR сначала запустить SteamVR и подключить шлем с двумя контроллерами, затем **Start-VR.cmd**.
 3. Для настольного запуска использовать **Start-Desktop.cmd**.
 
-Единственная папка готового пакета: **Builds/Windows**. Каждый успешный Build.cmd обновляет её. Перед запуском ярлыки проверяют SHA256 исполняемого файла и показывают build id из `build_manifest.json`.
+Единственная папка готового пакета: **Builds/Windows**. Каждый успешный Build.cmd обновляет её;
+промежуточные копии (`GratiaVR/Saved/StagedBuilds`, `GratiaVR/Saved/Cooked`) удаляются после
+успешной сборки. Если игра запущена, сборка останавливается перед копированием и сообщает об этом;
+прежний пакет остаётся целым. Перед запуском ярлыки проверяют SHA256 исполняемого файла и
+показывают build id из `build_manifest.json`.
 
 Команды из терминала:
 
 ```cmd
 Build.cmd
 Build.cmd -EngineRoot "D:\Unreal\UE_5.8"
+Build.cmd -RegenerateScenes
 Start-VR.cmd
 Start-Desktop.cmd
 ```
 
-Дополнительные параметры передаются скрипту сборки или игре. Для сборки без паузы в терминале предварительно выполнить `set GRATIA_NO_PAUSE=1`.
+`-RegenerateScenes` перед сборкой запускает генератор лобби и сцен `setup_scene_experience.py`
+(материалы, окружения, музыка, `DA_SceneLibrary`). Он перезаписывает созданные им ресурсы,
+поэтому без этого ключа сборка их не трогает и ручные правки в редакторе сохраняются.
 
-Логи сборки: `evidence/04/editor_build.log`, `evidence/04/package.log`. `GratiaVR/Saved/StagedBuilds` — промежуточные данные pipeline. Прежние копии проекта сохранены в `Archive/ProjectCopies`; рабочая папка одна — `GratiaVR`.
+Дополнительные параметры передаются скрипту сборки или игре. Для сборки без паузы в терминале
+предварительно выполнить `set GRATIA_NO_PAUSE=1`.
+
+Логи сборки: `evidence/04/editor_build.log`, `evidence/04/package.log`. Прежние копии проекта
+сохранены в `Archive/ProjectCopies`; рабочая папка одна — `GratiaVR`.
