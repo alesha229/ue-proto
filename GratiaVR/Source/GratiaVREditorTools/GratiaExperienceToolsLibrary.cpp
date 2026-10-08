@@ -5,6 +5,12 @@
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "UObject/Package.h"
+#include "AssetCompilingManager.h"
+#include "ContentStreaming.h"
+#include "RenderingThread.h"
+#include "ShaderCompiler.h"
+#include "Engine/StaticMesh.h"
+#include "StaticMeshResources.h"
 
 bool UGratiaExperienceToolsLibrary::BuildCompositeFont(UFont* Font, const TArray<FName>& Names, const TArray<UFontFace*>& Faces)
 {
@@ -22,6 +28,28 @@ bool UGratiaExperienceToolsLibrary::BuildCompositeFont(UFont* Font, const TArray
     Font->LegacyFontName = Names[0];
     Font->MarkPackageDirty();
     return true;
+}
+
+void UGratiaExperienceToolsLibrary::FinishCompilationAndStreaming()
+{
+    if (GShaderCompilingManager) GShaderCompilingManager->FinishAllCompilation();
+    FAssetCompilingManager::Get().FinishAllCompilation();
+    IStreamingManager::Get().StreamAllResources(10.0f);
+    FlushRenderingCommands();
+}
+
+int32 UGratiaExperienceToolsLibrary::ReduceStaticMeshLOD0(UStaticMesh* Mesh, float PercentTriangles)
+{
+    if (!Mesh || Mesh->GetNumSourceModels() < 1 || !FMath::IsFinite(PercentTriangles)) return -1;
+    FMeshReductionSettings& Settings = Mesh->GetSourceModel(0).ReductionSettings;
+    Settings.PercentTriangles = FMath::Clamp(PercentTriangles, 0.01f, 1.0f);
+    Settings.PercentVertices = 1.0f;
+    Settings.TerminationCriterion = EStaticMeshReductionTerimationCriterion::Triangles;
+    Mesh->Modify();
+    Mesh->Build(true);
+    Mesh->PostEditChange();
+    Mesh->MarkPackageDirty();
+    return Mesh->GetRenderData() && Mesh->GetRenderData()->LODResources.Num() > 0 ? Mesh->GetRenderData()->LODResources[0].GetNumTriangles() : -1;
 }
 
 UFontFace* UGratiaExperienceToolsLibrary::ImportFontFace(const FString& Filename, const FString& PackageName)

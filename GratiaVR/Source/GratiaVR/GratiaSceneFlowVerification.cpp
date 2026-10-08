@@ -270,6 +270,7 @@ void UGratiaSceneFlowVerification::TickComponent(float Delta, ELevelTick Type, F
         {
             const ULevelStreamingDynamic* Environment = Flow->GetStreamedEnvironment();
             Check(Environment && Environment->IsLevelLoaded() && Environment->IsLevelVisible(), TEXT("The selected environment is actually streamed and visible"));
+            Check(Flow->GetVisibleBackdrops() == OriginalLibrary->Scenes[SceneIndex].Backdrops.Num(), TEXT("Every backdrop of the environment is streamed and visible"));
         }
         Check(Character->GetActorTransform().ContainsNaN() == false, TEXT("Scene placement has finite transforms"));
         ChangePhase(EPhase::Settle);

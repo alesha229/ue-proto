@@ -13,9 +13,19 @@ library = unreal.load_asset(BASE + '/DA_SceneLibrary')
 assert library
 entries = list(library.get_editor_property('scenes'))
 # The flow check plays the scenes in library order: Playing_<index> is scene <index> in its environment.
+# A performance starts in its first pose (often crouched or turned away), so its card shows the free-play
+# capture of the same environment when there is one.
+def capture_index(index, entry):
+    if str(entry.get_editor_property('performance')) in ('', 'None'):
+        return index
+    environment = entry.get_editor_property('environment')
+    return next((other for other, candidate in enumerate(entries)
+                 if str(candidate.get_editor_property('performance')) in ('', 'None') and candidate.get_editor_property('environment') == environment), index)
+
+
 for index, entry in enumerate(entries):
     id = str(entry.get_editor_property('id'))
-    path = ROOT / 'evidence/04' / f'scene_flow_Playing_{index:02d}.png'
+    path = ROOT / 'evidence/04' / f'scene_flow_Playing_{capture_index(index, entry):02d}.png'
     assert path.is_file(), path
     task = unreal.AssetImportTask()
     for key, value in dict(filename=str(path), destination_path=BASE + '/Previews', destination_name='T_' + id,
@@ -33,7 +43,7 @@ for index, entry in enumerate(entries):
     entry.set_editor_property('thumbnail', texture)
 library.set_editor_property('scenes', entries)
 assert unreal.EditorAssetLibrary.save_loaded_asset(library, only_if_is_dirty=False)
-for old in ('T_Atrium', 'T_PulseStudio'):
+for old in ('T_Atrium', 'T_PulseStudio', 'T_VelvetRoom', 'T_NeonHorizon', 'T_LaserClub', 'T_MoonPavilion'):
     if unreal.EditorAssetLibrary.does_asset_exist(BASE + '/Previews/' + old):
         unreal.EditorAssetLibrary.delete_asset(BASE + '/Previews/' + old)
 unreal.log('GRATIA_SCENE_PREVIEWS_READY capture_build=' + manifest['build_id'])

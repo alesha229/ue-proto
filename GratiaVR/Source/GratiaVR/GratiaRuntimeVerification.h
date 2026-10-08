@@ -54,6 +54,22 @@ private:
     bool bAnimationTimeAdvanced = false;
     float SoakDuration = 0.0f;
     float PerfDuration = 0.0f;
+    /** -GratiaShotSeconds=<s>: one screenshot that many seconds into a soak/perf run (GratiaShot_<s>.png). */
+    float ShotSeconds = 0.0f;
+    bool bShotTaken = false;
+    /** -GratiaProfileGPUSeconds=<s>: one ProfileGPU dump (pass timings to the log) that many seconds into a perf run. */
+    float ProfileGPUSeconds = 0.0f;
+    bool bProfileGPUTaken = false;
+    // Soak response timing (MVP: reaction within 100 ms of contact, neutral within 3 s of release).
+    bool bSoakWasHeld = false, bSoakAwaitReaction = false, bSoakAwaitNeutral = false;
+    float SoakPressTime = 0.0f, SoakReleaseTime = 0.0f;
+    int32 SoakPressSerial = 0, SoakMissedPresses = 0, SoakUnsettledReleases = 0;
+    TArray<float> SoakLatencies, SoakReturns;
+    // Contact event (a zone is entered) -> reaction event; a contact inside the reaction rate limit gets none.
+    int32 SoakPrevEntries = 0, SoakPrevSerial = 0, SoakSuppressedContacts = 0;
+    bool bSoakAwaitContactReaction = false;
+    float SoakContactTime = 0.0f;
+    TArray<float> SoakContactLatencies;
     float MetricsSeconds = 0.0f;
     float MetricsInterval = 0.0f;
     int32 SoakCycle = INDEX_NONE;

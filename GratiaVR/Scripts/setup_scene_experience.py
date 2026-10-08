@@ -9,8 +9,8 @@ Builds, in /Game/Gratia/Experience:
   * music: generated loops (generate_scene_music.py) and the player's own tracks
     (prepare_user_music.py, git-ignored, personal use) with their light/mix analysis and
     left/right channels for the environment speakers; speaker attenuation and room reverbs;
-  * four environments (velvet room, neon horizon, laser club, moon pavilion) with markers,
-    speakers, reactive lights, moving props, fog and post-process grading;
+  * the scene entries of the Fab environments (setup_fab_environments.py: Wabi Sabi guesthouse,
+    Soul: City night quarter) with their backdrop levels;
   * the scene library (scenes, playlist, lobby music, look assets).
 Only development tooling uses Python; the game loads cooked assets. The script re-authors only
 when it or its inputs change (metadata on the library).
@@ -41,7 +41,7 @@ FONTS = ROOT / 'Exports/Gratia/Fonts/Nunito'
 AUTHORING_HASH = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 input_hash = hashlib.sha256()
 for source in sorted([ROOT / 'GratiaVR/Content/Characters/Profiles/DA_Gratia.uasset', ROOT / 'Exports/Gratia/Audio/KM466_Music.wav',
-                      *GENERATED.glob('*.analysis.json'), *USER.glob('*.analysis.json'), *FONTS.glob('*.ttf')]):
+                      OUT / 'fab_environments.json', *GENERATED.glob('*.analysis.json'), *USER.glob('*.analysis.json'), *FONTS.glob('*.ttf')]):
     input_hash.update(str(source.relative_to(ROOT)).encode())
     if source.is_file():
         input_hash.update(hashlib.sha256(source.read_bytes()).digest())
@@ -553,269 +553,15 @@ if SHOULD_AUTHOR:
     reverb_pavilion = reverb('RE_Pavilion', density=0.7, diffusion=0.7, gain=0.32, gain_hf=0.55, decay_time=1.8, decay_hf_ratio=0.6, late_gain=1.0)
 
     # ---------------------------------------------------------------------------------- environments
+    # Scenes are built from Fab packs by setup_fab_environments.py (run before this script); the
+    # generated rooms of the first ViRo pass were replaced at the user's request on 7 October 2026.
     SPHERE = unreal.load_asset('/Engine/BasicShapes/Sphere')
     CYLINDER = unreal.load_asset('/Engine/BasicShapes/Cylinder')
-    CUBE = unreal.load_asset('/Engine/BasicShapes/Cube')
-    CONE = unreal.load_asset('/Engine/BasicShapes/Cone')
     PLANE = unreal.load_asset('/Engine/BasicShapes/Plane')
-
-    def mesh(label, shape, position, scale, mat, rotation=(0, 0, 0), collision=False, tags=()):
-        actor = ACTORS.spawn_actor_from_class(unreal.StaticMeshActor, unreal.Vector(*position), unreal.Rotator(roll=rotation[2], pitch=rotation[0], yaw=rotation[1]))
-        actor.set_actor_label('Experience_' + label)
-        component = actor.static_mesh_component
-        component.set_static_mesh(shape)
-        component.set_material(0, mat)
-        component.set_collision_profile_name('BlockAll' if collision else 'NoCollision')
-        component.set_editor_property('cast_shadow', False)
-        component.set_mobility(unreal.ComponentMobility.MOVABLE if tags else unreal.ComponentMobility.STATIC)
-        actor.set_actor_scale3d(unreal.Vector(*scale))
-        if tags:
-            actor.set_editor_property('tags', [unreal.Name(t) for t in tags])
-        return actor
-
-    def box(label, center, size, mat, rotation=(0, 0, 0), collision=False, tags=()):
-        return mesh(label, CUBE, center, (size[0] / 100, size[1] / 100, size[2] / 100), mat, rotation, collision, tags)
-
-    def cyl(label, center, radius, height, mat, rotation=(0, 0, 0), collision=False, tags=()):
-        return mesh(label, CYLINDER, center, (radius / 50, radius / 50, height / 100), mat, rotation, collision, tags)
-
-    def ball(label, center, radius, mat, tags=()):
-        return mesh(label, SPHERE, center, (radius / 50,) * 3, mat, tags=tags)
-
-    def tube(label, a, b, radius, mat, tags=()):
-        # A cylinder from point a to point b (neon tube, laser beam, chain).
-        ax, ay, az = a; bx, by, bz = b
-        dx, dy, dz = bx - ax, by - ay, bz - az
-        length = math.sqrt(dx * dx + dy * dy + dz * dz)
-        yaw = math.degrees(math.atan2(dy, dx))
-        pitch = -math.degrees(math.atan2(math.sqrt(dx * dx + dy * dy), dz))  # tilts local Z from up towards the yaw direction
-        return mesh(label, CYLINDER, ((ax + bx) / 2, (ay + by) / 2, (az + bz) / 2), (radius / 50, radius / 50, length / 100), mat, (pitch, yaw, 0), tags=tags)
-
-    def ring(label, center, radius, thickness, mat, segments=48):
-        # Neon ring lying flat (a cylinder would be a solid glowing disc).
-        cx, cy, cz = center
-        points = [(cx + radius * math.cos(2 * math.pi * i / segments), cy + radius * math.sin(2 * math.pi * i / segments), cz) for i in range(segments)]
-        for i in range(segments):
-            tube(f'{label}{i}', points[i], points[(i + 1) % segments], thickness, mat)
-
-    def light(label, position, rgb, intensity, radius, tags=(), kind=unreal.PointLight, rotation=(0, 0, 0)):
-        actor = ACTORS.spawn_actor_from_class(kind, unreal.Vector(*position), unreal.Rotator(roll=rotation[2], pitch=rotation[0], yaw=rotation[1]))
-        actor.set_actor_label('Experience_' + label)
-        component = actor.get_component_by_class(unreal.LocalLightComponent)
-        props(component, intensity=float(intensity), cast_shadows=False, attenuation_radius=float(radius))
-        component.set_light_color(color(rgb))
-        component.set_mobility(unreal.ComponentMobility.MOVABLE)
-        if tags:
-            actor.set_editor_property('tags', [unreal.Name(t) for t in tags])
-        return actor
-
-    def marker(tag, position, yaw):
-        actor = ACTORS.spawn_actor_from_class(unreal.TargetPoint, unreal.Vector(*position), unreal.Rotator(pitch=0, yaw=yaw, roll=0))
-        actor.set_actor_label('Experience_' + tag)
-        actor.set_editor_property('tags', [unreal.Name(tag)])
-
-    def atmosphere(sky_light, fog_rgb, fog_density, bloom, saturation, tint, vignette=0.45, exposure=0.0, fog_height=0.0):
-        skylight = ACTORS.spawn_actor_from_class(unreal.SkyLight, unreal.Vector(0, 0, 300))
-        skylight.set_actor_label('Experience_SkyLight')
-        # Captures only the far sky sphere and mountains (water and lacquer reflect them), not the room.
-        props(skylight.light_component, intensity=float(sky_light), lower_hemisphere_is_black=False, real_time_capture=False, sky_distance_threshold=3000.0)
-        skylight.light_component.set_mobility(unreal.ComponentMobility.MOVABLE)
-        fog = ACTORS.spawn_actor_from_class(unreal.ExponentialHeightFog, unreal.Vector(0, 0, fog_height))
-        fog.set_actor_label('Experience_Fog')
-        props(fog.component, fog_density=float(fog_density), fog_height_falloff=0.2, fog_inscattering_luminance=color(fog_rgb), fog_max_opacity=0.9)
-        volume = ACTORS.spawn_actor_from_class(unreal.PostProcessVolume, unreal.Vector(0, 0, 0))
-        volume.set_actor_label('Experience_Grade')
-        volume.set_editor_property('unbound', True)
-        pp = volume.get_editor_property('settings')
-        props(pp, override_bloom_intensity=True, bloom_intensity=float(bloom), override_bloom_threshold=True, bloom_threshold=0.6,
-              override_color_saturation=True, color_saturation=unreal.Vector4(saturation, saturation, saturation, 1.0),
-              override_scene_color_tint=True, scene_color_tint=color(tint),
-              override_vignette_intensity=True, vignette_intensity=float(vignette),
-              override_auto_exposure_bias=True, auto_exposure_bias=float(exposure))
-        volume.set_editor_property('settings', pp)
-
-    def begin(name):
-        path = BASE + '/Environments/' + name
-        if LIB.does_asset_exist(path):
-            assert LEVELS.load_level(path)
-            for actor in ACTORS.get_all_level_actors():
-                if actor.get_actor_label().startswith('Experience_'):
-                    assert ACTORS.destroy_actor(actor)
-        else:
-            assert LEVELS.new_level(path)
-        return path
-
-    def finish():
-        assert LEVELS.save_current_level()
-
-    def stand(character_z=0.0):
-        marker('GratiaCharacterSpot', (0, 0, character_z), 90)
-        marker('GratiaPlayerSpot', (-150, 0, 0), 0)
-
-    def speakers(x, y, z, mat_body, mat_ring, height=180):
-        for side, sign in (('L', -1), ('R', 1)):
-            box('Speaker' + side, (x, sign * y, height / 2), (60, 60, height), mat_body, collision=True)
-            for index, ring_z in enumerate((height * 0.3, height * 0.72)):
-                cyl(f'Speaker{side}Cone{index}', (x - 31, sign * y, ring_z), 22 - index * 8, 3, mat_ring, rotation=(90, 0, 0))
-            point = ACTORS.spawn_actor_from_class(unreal.TargetPoint, unreal.Vector(x - 35, sign * y, height * 0.6))
-            point.set_actor_label('Experience_GratiaSpeaker' + side)
-            point.set_editor_property('tags', [unreal.Name('GratiaSpeaker' + side)])
-
-    def heart(label, center_y, center_z, x, scale, mat):
-        points = []
-        for i in range(48):
-            t = 2 * math.pi * i / 48
-            hx = 16 * math.sin(t) ** 3
-            hy = 13 * math.cos(t) - 5 * math.cos(2 * t) - 2 * math.cos(3 * t) - math.cos(4 * t)
-            points.append((x, center_y + hx * scale, center_z + hy * scale))
-        for i in range(48):
-            tube(f'{label}{i}', points[i], points[(i + 1) % 48], 2.0, mat)
-
-    environments = {}
-
-    # Velvet room: plum velvet walls, magenta curtains, wood beams, pink neon frame and heart.
-    environments['VelvetRoom'] = begin('L_VelvetRoom')
-    box('Floor', (0, 0, -5), (1000, 1000, 10), MI['LacquerWine'], collision=True)
-    box('Ceiling', (0, 0, 405), (1000, 1000, 10), MI['WoodDark'])
-    for x in range(-450, 451, 150):
-        box(f'Beam{x}', (x, 0, 385), (22, 1000, 28), MI['WoodDark'])
-    box('Rafter', (0, 0, 370), (1000, 18, 20), MI['WoodDark'])
-    box('BackWall', (505, 0, 200), (10, 1000, 400), MI['VelvetPlum'], collision=True)
-    box('FrontWall', (-505, 0, 200), (10, 1000, 400), MI['VelvetPlum'], collision=True)
-    for sign in (-1, 1):
-        box(f'SideWall{sign}', (0, sign * 505, 200), (1000, 10, 400), MI['VelvetPlum'], collision=True)
-    for y in range(-400, 401, 100):
-        box(f'CurtainBack{y}', (478 - (y // 100 % 2) * 8, y, 190), (30, 112, 380), MI['VelvetCurtainY'])
-    for sign in (-1, 1):
-        for x in range(-350, 451, 100):
-            box(f'CurtainSide{sign}_{x}', (x, sign * (478 - (x // 100 % 2) * 8), 190), (112, 30, 380), MI['VelvetCurtainX'])
-    for z in (25, 355):
-        tube(f'FrameH{z}', (455, -420, z), (455, 420, z), 2.2, MI['Pink'])
-    for sign in (-1, 1):
-        tube(f'FrameV{sign}', (455, sign * 420, 25), (455, sign * 420, 355), 2.2, MI['Pink'])
-        tube(f'FloorStrip{sign}', (-490, sign * 470, 3), (490, sign * 470, 3), 1.8, MI['Magenta'])
-        tube(f'CoveStrip{sign}', (-490, sign * 470, 360), (490, sign * 470, 360), 1.8, MI['Violet'])
-    heart('Heart', 0, 250, 450, 4.2, MI['Pink'])
-    cyl('Bed', (290, 0, 22), 150, 44, MI['Satin'], collision=True)
-    ring('BedRim', (290, 0, 44), 150, 1.5, MI['PinkSoft'])
-    for index, y in enumerate((-70, 0, 70)):
-        mesh(f'Pillow{index}', SPHERE, (380, y, 60), (0.55, 0.35, 0.22), MI['Satin'])
-    speakers(330, 340, 0, MI['LacquerBlack'], MI['Cyan'])
-    for index, (y, z) in enumerate(((-250, 300), (250, 300), (-120, 330), (120, 330))):
-        ball(f'Lantern{index}', (420, y, z), 9, MI['OrbPink'], tags=('GratiaPulse:0.25',))
-    light('KeyPink', (300, -300, 250), PINK, 80, 900, ('GratiaAudioLight',))
-    light('KeyMagenta', (300, 300, 250), MAGENTA, 80, 900, ('GratiaAudioLight', 'GratiaAudioMid'))
-    light('Fill', (-250, 0, 260), (0.55, 0.35, 1.0), 35, 1000)
-    light('Rim', (160, 0, 300), (1.0, 0.4, 0.8), 70, 500, ('GratiaAudioLight', 'GratiaAudioHigh'))
-    atmosphere(0.8, (0.18, 0.02, 0.16), 0.015, 1.6, 1.15, (1.0, 0.92, 1.0), 0.5)
-    stand()
-    finish()
-
-    # Neon horizon: synthwave grid to a striped sun, stage with a neon ring, receding arches.
-    environments['NeonHorizon'] = begin('L_NeonHorizon')
-    box('Floor', (0, 0, -5), (60000, 60000, 10), MI['Grid'], collision=True)
-    ball('Sky', (0, 0, 0), 45000, MI['SkySun'])
-    cyl('Stage', (0, 0, 8), 190, 16, MI['LacquerBlack'], collision=True)
-    ring('StageRing', (0, 0, 16), 190, 2.0, MI['Pink'])
-    cyl('StageRing2', (0, 0, 3), 230, 2, MI['Cyan'])
-    for index, x in enumerate((260, 520, 780, 1040)):
-        mat = MI['Pink'] if index % 2 == 0 else MI['Cyan']
-        half = 260 + index * 40
-        top = 330 + index * 30
-        tube(f'Arch{index}L', (x, -half, 0), (x, -half, top), 3.0, mat)
-        tube(f'Arch{index}R', (x, half, 0), (x, half, top), 3.0, mat)
-        tube(f'Arch{index}T', (x, -half, top), (x, half, top), 3.0, mat)
-    for index, (x, y, s) in enumerate(((9000, -5000, 40), (11000, 3500, 55), (13000, -1200, 70), (8000, 7000, 35), (12500, -9000, 60), (10500, 9500, 45))):
-        mesh(f'Mountain{index}', CONE, (x, y, s * 50 * 0.5 - 50), (s, s, s * 0.55), MI['SilhouetteMagenta'])
-    speakers(220, 420, 0, MI['LacquerBlack'], MI['Pink'], 200)
-    for index, (x, y, z) in enumerate(((-300, -600, 250), (-300, 600, 250), (700, -900, 400), (700, 900, 400))):
-        ball(f'Orb{index}', (x, y, z), 18, MI['OrbPink'] if index % 2 else MI['OrbLilac'], tags=('GratiaPulse:0.3',))
-    light('Pink', (150, -260, 220), PINK, 2200, 900, ('GratiaAudioLight',))
-    light('Cyan', (150, 260, 220), CYAN, 2200, 900, ('GratiaAudioLight', 'GratiaAudioHigh'))
-    light('Front', (-220, 0, 260), (0.75, 0.55, 1.0), 900, 900)
-    atmosphere(1.0, (0.20, 0.03, 0.25), 0.003, 2.0, 1.2, (1.0, 0.95, 1.0), 0.4)
-    stand(16)
-    finish()
-
-    # Laser club: LED floor, neon tubes on black walls, truss with sweeping lasers, disco ball.
-    environments['LaserClub'] = begin('L_LaserClub')
-    box('Floor', (0, 0, -5), (1400, 1400, 10), led, collision=True)
-    box('Ceiling', (0, 0, 605), (1400, 1400, 10), MI['LacquerBlack'])
-    box('BackWall', (705, 0, 300), (10, 1400, 600), MI['LacquerBlack'], collision=True)
-    box('FrontWall', (-705, 0, 300), (10, 1400, 600), MI['LacquerBlack'], collision=True)
-    for sign in (-1, 1):
-        box(f'SideWall{sign}', (0, sign * 705, 300), (1400, 10, 600), MI['LacquerBlack'], collision=True)
-        for index, x in enumerate(range(-630, 631, 140)):
-            tube(f'Tube{sign}_{x}', (x, sign * 690, 20), (x, sign * 690, 560), 3.0, MI['Cyan'] if index % 2 else MI['Magenta'])
-    for index, y in enumerate(range(-630, 631, 140)):
-        tube(f'TubeBack{y}', (690, y, 20), (690, y, 560), 3.0, MI['Pink'] if index % 2 else MI['Violet'])
-    for x in (-400, 0, 400):
-        box(f'Truss{x}', (x, 0, 560), (30, 1300, 30), MI['LacquerSteel'])
-    box('TrussBack', (600, 0, 560), (30, 1300, 30), MI['LacquerSteel'])
-    beams = [MI['LaserGreen'], MI['LaserPink'], MI['LaserCyan']]
-    for emitter, y in enumerate((-480, -240, 0, 240, 480)):
-        box(f'Emitter{emitter}', (600, y, 540), (30, 30, 20), MI['LacquerSteel'])
-        for beam in range(5):
-            spread = (beam - 2) * 9
-            yaw = 180 + spread + (y / 480) * 12
-            pitch = 106 + emitter * 4
-            length = 2200
-            dx = math.sin(math.radians(pitch)) * math.cos(math.radians(yaw)) * length
-            dy = math.sin(math.radians(pitch)) * math.sin(math.radians(yaw)) * length
-            dz = math.cos(math.radians(pitch)) * length
-            actor = tube(f'Laser{emitter}_{beam}', (600, y, 540), (600 + dx, y + dy, 540 + dz), 0.7, beams[(emitter + beam) % 3],
-                         tags=(f'GratiaSweep:{8 + beam}:{2.4 + emitter * 0.3}:{-length / 2:.0f}',))
-    ball('Disco', (0, 0, 480), 38, disco, tags=('GratiaSpin:40',))
-    tube('DiscoChain', (0, 0, 518), (0, 0, 600), 0.8, MI['LacquerSteel'])
-    box('Booth', (470, 0, 55), (120, 320, 110), MI['LacquerBlack'], collision=True)
-    tube('BoothTrim', (409, -160, 108), (409, 160, 108), 2.0, MI['Pink'])
-    speakers(470, 330, 0, MI['LacquerBlack'], MI['Magenta'], 240)
-    light('Magenta', (200, -400, 400), MAGENTA, 900, 1100, ('GratiaAudioLight',))
-    light('Cyan', (200, 400, 400), CYAN, 900, 1100, ('GratiaAudioLight', 'GratiaAudioHigh'))
-    light('Pink', (-300, 0, 450), PINK, 600, 1100, ('GratiaAudioLight', 'GratiaAudioMid'))
-    light('Fill', (-200, 0, 250), (0.6, 0.45, 1.0), 200, 800)
-    atmosphere(0.6, (0.20, 0.02, 0.22), 0.035, 2.2, 1.25, (1.0, 0.9, 1.0), 0.55)
-    stand()
-    finish()
-
-    # Moon pavilion: marble platform with columns and a roof, lanterns, water, moon and stars.
-    environments['MoonPavilion'] = begin('L_MoonPavilion')
-    box('Water', (0, 0, -40), (60000, 60000, 10), MI['Water'], collision=True)
-    ball('Sky', (0, 0, 0), 45000, MI['SkyMoon'])
-    cyl('Platform', (0, 0, -20), 460, 40, MI['Marble'], collision=True)
-    ring('PlatformRim', (0, 0, 0), 460, 2.0, MI['PinkSoft'], 64)
-    for step in range(3):
-        box(f'Step{step}', (-480 - step * 40, 0, -10 - step * 10), (60, 320, 20 + step * 0), MI['Marble'], collision=True)
-    for index in range(8):
-        angle = 2 * math.pi * index / 8 + math.pi / 8
-        x, y = 400 * math.cos(angle), 400 * math.sin(angle)
-        cyl(f'Column{index}', (x, y, 165), 22, 330, MI['Marble'], collision=True)
-        box(f'Capital{index}', (x, y, 335), (64, 64, 14), MI['MarbleDark'])
-        lx, ly = 400 * math.cos(angle + math.pi / 8), 400 * math.sin(angle + math.pi / 8)
-        tube(f'Chain{index}', (lx * 0.92, ly * 0.92, 345), (lx * 0.92, ly * 0.92, 290), 0.6, MI['MarbleDark'])
-        ball(f'Lantern{index}', (lx * 0.92, ly * 0.92, 278), 13, MI['OrbLilac'] if index % 2 else MI['OrbPink'], tags=('GratiaPulse:0.2',))
-    cyl('RoofRing', (0, 0, 352), 480, 26, MI['MarbleDark'])
-    ring('RoofTrim', (0, 0, 338), 478, 1.6, MI['PinkSoft'], 64)
-    mesh('Roof', CONE, (0, 0, 470), (10.8, 10.8, 2.3), MI['MarbleDark'])
-    ball('RoofOrb', (0, 0, 600), 16, MI['OrbWarm'], tags=('GratiaPulse:0.3',))
-    for index in range(16):
-        angle = 2 * math.pi * index / 16
-        distance = 1200 + (index % 4) * 500
-        ball(f'FloatLantern{index}', (distance * math.cos(angle), distance * math.sin(angle), -20 + (index % 3) * 15), 16, MI['OrbWarm'], tags=('GratiaPulse:0.25',))
-    for index, (x, y, s) in enumerate(((14000, -8000, 90), (16000, 3000, 110), (12000, 9000, 70), (-12000, 6000, 80), (-14000, -7000, 100))):
-        mesh(f'Mountain{index}', CONE, (x, y, s * 25 - 60), (s, s, s * 0.5), MI['SilhouetteLilac'])
-    speakers(300, 280, 0, MI['MarbleDark'], MI['Violet'], 160)
-    moon = ACTORS.spawn_actor_from_class(unreal.DirectionalLight, unreal.Vector(0, 0, 500), unreal.Rotator(pitch=-22, yaw=200, roll=0))
-    moon.set_actor_label('Experience_Moonlight')
-    props(moon.light_component, intensity=2.5, cast_shadows=False)
-    moon.light_component.set_light_color(color((0.7, 0.62, 1.0)))
-    moon.light_component.set_mobility(unreal.ComponentMobility.MOVABLE)
-    light('LanternA', (250, -250, 230), PINK, 14, 800, ('GratiaAudioLight',))
-    light('LanternB', (250, 250, 230), LILAC, 14, 800, ('GratiaAudioLight', 'GratiaAudioMid'))
-    light('Front', (-260, 0, 240), (0.7, 0.55, 1.0), 10, 900)
-    atmosphere(1.0, (0.10, 0.03, 0.20), 0.008, 1.6, 1.1, (0.95, 0.92, 1.0), 0.4, fog_height=-40)
-    stand()
-    finish()
+    fab = json.loads((OUT / 'fab_environments.json').read_text(encoding='utf-8'))['scenes']
+    environments = {name: scene['environment'] for name, scene in fab.items()}
+    backdrops = {name: [unreal.load_asset(path) for path in scene['backdrops']] for name, scene in fab.items()}
+    assert all(all(backdrops[name]) for name in backdrops), 'A Fab backdrop level is missing; run setup_fab_environments.py'
 
     # ---------------------------------------------------------------------------------- library
     profile = unreal.load_asset('/Game/Characters/Profiles/DA_Gratia')
@@ -824,7 +570,7 @@ if SHOULD_AUTHOR:
 
     def entry(id, title, description, env, accent, music, music_volume, reverb_effect, performance=''):
         obj = props(unreal.GratiaSceneEntry(), id=unreal.Name(id), title=title, description=description, environment=unreal.load_asset(environments[env]),
-                    accent=color(accent), performance=unreal.Name(performance), music_volume=music_volume, reverb=reverb_effect)
+                    backdrops=backdrops[env], accent=color(accent), performance=unreal.Name(performance), music_volume=music_volume, reverb=reverb_effect)
         if music:
             obj.set_editor_property('music', music)
         preview = f'{BASE}/Previews/T_{id}'
@@ -834,18 +580,19 @@ if SHOULD_AUTHOR:
         return obj
 
     pick = lambda slug, fallback: user.get(slug, generated[fallback])
-    entry('VelvetRoom', 'Бархатная комната', 'Розовый неон, бархат и шёлк', 'VelvetRoom', PINK, pick('Addict', 'GratiaVelvet'), 0.9, reverb_room)
-    entry('NeonHorizon', 'Неоновый горизонт', 'Синтвейв под звёздами', 'NeonHorizon', CYAN, pick('StayAtYourHouse', 'GratiaNeon'), 0.9, reverb_open)
-    entry('LaserClub', 'Лазерный клуб', 'Басы, лазеры и дым', 'LaserClub', MAGENTA, pick('NeverSee', 'GratiaNeon'), 1.0, reverb_club)
-    entry('MoonPavilion', 'Лунный павильон', 'Ночь, фонари и луна', 'MoonPavilion', LILAC, pick('MechanicalCorpse', 'GratiaMoon'), 0.85, reverb_pavilion)
+    entry('WabiSabi', 'Гостевой дом', 'Ваби-саби: дерево, лён и дневной свет', 'WabiSabi', (0.95, 0.62, 0.38), pick('MechanicalCorpse', 'GratiaMoon'), 0.8, reverb_room)
+    entry('SoulCity', 'Ночной квартал', 'Площадь среди трущоб, неон и огни окон', 'SoulCity', CYAN, pick('NeverSee', 'GratiaNeon'), 0.9, reverb_open)
+    entry('SoulCityRain', 'Дождливая ночь', 'Та же площадь под ливнем', 'SoulCityRain', LILAC, pick('Brain', 'GratiaMoon'), 0.9, reverb_open)
     performance_analysis = unreal.load_asset(BASE + '/DA_KM466Analysis') if LIB.does_asset_exist(BASE + '/DA_KM466Analysis') else None
     for index, clip in enumerate(performances):
         name = str(clip.get_editor_property('name'))
         if not (clip.get_editor_property('clip') or clip.get_editor_property('segments')):
             continue
-        env = 'VelvetRoom' if index % 2 else 'MoonPavilion'
+        # A performance with a partner lying on the floor needs the open plaza; the furnished guesthouse
+        # only has a 1.6 m clear strip, enough for one standing character.
+        env = 'SoulCity' if clip.get_editor_property('scene').get_editor_property('partner_mesh') else 'WabiSabi'
         item = entry('Performance_' + str(index), name, 'Шоу · управление воспроизведением', env, (0.75, 0.3, 1.0), None, 0.8,
-                     reverb_room if env == 'VelvetRoom' else reverb_pavilion, name)
+                     reverb_room if env == 'WabiSabi' else reverb_open, name)
         if performance_analysis and clip.get_editor_property('scene').get_editor_property('music') == performance_analysis.get_editor_property('sound'):
             item.set_editor_property('performance_music', performance_analysis)
     library = data(BASE + '/DA_SceneLibrary', unreal.GratiaSceneLibrary)
@@ -868,7 +615,8 @@ if SHOULD_AUTHOR:
             actor.set_editor_property('tags', tags)
     assert LEVELS.save_current_level()
     # Assets of the first experience pass, replaced by the ones above.
-    for old in ('Environments/L_Atrium', 'Environments/L_PulseStudio', 'Materials/M_LoadingSky', 'Materials/M_Floor', 'Materials/M_Architecture',
+    for old in ('Environments/L_Atrium', 'Environments/L_PulseStudio', 'Environments/L_VelvetRoom', 'Environments/L_NeonHorizon',
+                'Environments/L_LaserClub', 'Environments/L_MoonPavilion', 'Materials/M_LoadingSky', 'Materials/M_Floor', 'Materials/M_Architecture',
                 'Materials/M_ReactiveTrim', 'S_Ambient', 'DA_AmbientAnalysis'):
         if LIB.does_asset_exist(BASE + '/' + old):
             LIB.delete_asset(BASE + '/' + old)

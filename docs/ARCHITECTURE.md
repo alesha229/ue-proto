@@ -89,7 +89,8 @@ flowchart LR
   (так OpenXR активирует его action set). Внешний вид — `GratiaMenuWidget` (UMG, собран в C++
   на UI-материалах и шрифте из библиотеки сцен).
 - `GratiaSceneDirector`: поток лобби → загрузка → сцена → лобби. Окружения подгружаются как
-  streaming-уровни с маркерами и тегами (см. [EXPERIENCE.md](EXPERIENCE.md)). Директор ведёт
+  streaming-уровни с маркерами и тегами (см. [EXPERIENCE.md](EXPERIENCE.md)), вместе с ними —
+  неизменённые уровни паков Fab (`FGratiaSceneEntry::Backdrops`). Директор ведёт
   реактивный свет, движущиеся объекты, `MPC_Music`, реверберацию комнаты, перезахват SkyLight
   и плейлист. `GratiaSceneLibrary` содержит данные: сцены, анализ музыки, плейлист и
   оформление.
@@ -103,7 +104,9 @@ flowchart LR
   не обновляют их и не продлевают correction recovery синтетического контакта.
 - `GratiaVREditorTools`: генерация PhysicsAsset и перенос source cloth только
   в редакторе; модуль отсутствует в игре. `GratiaExperienceToolsLibrary` создаёт font
-  face без Slate и составной шрифт для `setup_scene_experience.py`.
+  face без Slate и составной шрифт для `setup_scene_experience.py`, дожидается шейдеров перед
+  SceneCapture и уменьшает LOD0 мешей паков для `setup_fab_environments.py` (в коммандлете нет
+  подсистемы редактора мешей, на которую опираются Python-обёртки).
 
 ## Модель и ручная работа
 
@@ -162,7 +165,12 @@ SHA-256 исходников/настроек/скриптов/ассетов и
    клипы, cooked/evaluated morph curves и снимки готовой игры.
 5. `-GratiaSoakSeconds=900`: длительный synthetic mixed soak; учитывает реальные срабатывания
    внутри синтетического сценария, не выдаёт номер целевой зоны за доказательство её покрытия.
-6. Реальный VR: левый стик, tracking/contact/menu и SteamVR frame delivery проверяются устройствами.
+   Измеряет время от события контакта до реакции (p95 ≤ 100 мс) и от отпускания до нейтрали (≤ 3 с).
+   С `-GratiaScene=<Id>` идёт в настоящем окружении (сцена открывается без лобби).
+6. `-GratiaPerfSeconds=<с>`: метрики кадра в `Saved/GratiaMetrics.csv`, затем выход. Для оценки VR-нагрузки
+   без шлема: `-emulatestereo -RenderOffScreen -ForceRes -ResX=5144 -ResY=2572` (2 × 2572² — Quest 2).
+   `-GratiaShotSeconds=<с>` — снимок, `-GratiaProfileGPUSeconds=<с>` — дерево GPU-проходов `ProfileGPU` в журнал.
+7. Реальный VR: левый стик, tracking/contact/menu и SteamVR frame delivery проверяются устройствами.
 
 F1 показывает raw/mapped stick, Pawn delta и причину блокировки. `MOVEMENT` в логе
 различает missing player/action/context, zero input, menu blocked, collision blocked и moving.

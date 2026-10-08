@@ -74,6 +74,12 @@ struct GRATIAVR_API FGratiaSceneEntry
     /** Streamed environment level; empty keeps the persistent studio room. */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Scene")
     TSoftObjectPtr<UWorld> Environment;
+    /**
+     * Art levels streamed together with Environment at the same origin, unmodified (asset-pack maps keep
+     * their baked lighting). Markers, speakers and reactive lights belong in Environment.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Scene")
+    TArray<TSoftObjectPtr<UWorld>> Backdrops;
     /** Character profile performance by name; None = free play (idle, touch and reactions). */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Scene")
     FName Performance;

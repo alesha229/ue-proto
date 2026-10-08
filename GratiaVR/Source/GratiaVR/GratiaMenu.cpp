@@ -318,6 +318,9 @@ void UGratiaMenu::ApplyQuality(int32 Profile, bool bResetMotion)
     {
         PC->ConsoleCommand(FString::Printf(TEXT("r.ScreenPercentage %d"), Profile == 0 ? 70 : Profile == 1 ? 85 : 100), false);
         PC->ConsoleCommand(FString::Printf(TEXT("sg.EffectsQuality %d"), Profile), false);
+        // Forward MSAA: 4x costs ~1.6 ms of the VR frame in the guesthouse (RTX 3060, 2 x 2572^2 at 85 %),
+        // so Low and Medium use 2x and High keeps 4x for stronger GPUs.
+        PC->ConsoleCommand(FString::Printf(TEXT("r.MSAACount %d"), Profile == 2 ? 4 : 2), false);
     }
     if (GEngine && GEngine->XRSystem.IsValid())
         if (IHeadMountedDisplay* HMD = GEngine->XRSystem->GetHMDDevice()) HMD->SetPixelDensity(Profile == 0 ? 0.70f : Profile == 1 ? 0.85f : 1.0f);

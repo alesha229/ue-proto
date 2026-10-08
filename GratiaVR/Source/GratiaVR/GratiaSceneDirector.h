@@ -57,6 +57,8 @@ public:
     bool CanStartScene(int32 Index, FString& Reason) const;
     bool IsEnvironmentReady() const;
     const ULevelStreamingDynamic* GetStreamedEnvironment() const { return Streamed.Get(); }
+    /** Backdrop levels of the current scene that are loaded and visible. */
+    int32 GetVisibleBackdrops() const;
 
     // Playback of a performance scene.
     void TogglePause();
@@ -133,6 +135,8 @@ private:
     int32 Current = INDEX_NONE, Pending = INDEX_NONE;
     float StateSeconds = 0.0f;
     bool bPendingStart = false, bTestMode = false, bFlowQA = false;
+    /** -GratiaScene=<Id>: start straight in this scene (performance and soak runs in a real environment). */
+    FName PinnedScene;
     bool bVisibilityRequested = false;
     FString LastError;
     UPROPERTY(Transient) TObjectPtr<UGratiaUserSettings> Settings;
@@ -141,6 +145,11 @@ private:
     /** A playlist track chosen during a performance replaces (mutes) the performance music. */
     bool bPlaylistOverride = false;
     UPROPERTY(Transient) TObjectPtr<ULevelStreamingDynamic> Streamed;
+    UPROPERTY(Transient) TArray<TObjectPtr<ULevelStreamingDynamic>> Backdrops;
+    /** Environment and backdrop streams that exist. */
+    TArray<ULevelStreamingDynamic*> GetStreams() const;
+    bool AreStreamsVisible() const;
+    void SetStreamsVisible(bool bVisible);
     UPROPERTY(Transient) TObjectPtr<UGratiaMusicAnalysis> PerformanceTrack;
     FVector4f MusicFrame = FVector4f(0, 0, 0, 0);
     FVector4f Smoothed = FVector4f(0, 0, 0, 0);

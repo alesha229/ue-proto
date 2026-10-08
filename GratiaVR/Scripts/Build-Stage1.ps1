@@ -27,6 +27,21 @@ if (-not $SkipEditorBuild) {
 $sceneLibrary = Join-Path $projectRoot 'Content\Gratia\Experience\DA_SceneLibrary.uasset'
 if ($RegenerateScenes -or -not (Test-Path -LiteralPath $sceneLibrary)) {
     $editorExe = Join-Path $EngineRoot 'Engine\Binaries\Win64\UnrealEditor-Cmd.exe'
+    # Fab environments (packs from the Epic Games Launcher, see docs/EXPERIENCE.md), then their baked light.
+    $fabScript = (Join-Path $PSScriptRoot 'setup_fab_environments.py').Replace('\','/')
+    & $editorExe $projectFile '-run=pythonscript' "-script=$fabScript" '-unattended' '-nop4' '-nosplash' '-NullRHI' '-nohmd' '-ddc=InstalledNoZenLocalFallback' '-SkipZenStore' 2>&1 | Tee-Object -FilePath (Join-Path $evidenceRoot 'fab_environments.log')
+    if ($LASTEXITCODE -ne 0) { throw "Fab environment preparation failed ($LASTEXITCODE)" }
+    $fabReport = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $projectRoot) 'evidence\experience\fab_environments.json') -Raw | ConvertFrom-Json
+    foreach ($bake in $fabReport.bake) {
+        $bakeMap = $bake.map
+        $mapName = Split-Path -Leaf $bakeMap
+        & $editorExe $projectFile '-run=ResavePackages' '-BuildLighting' "-Quality=$($bake.quality)" '-AllowCommandletRendering' "-Map=$mapName" '-unattended' '-nop4' '-nosplash' '-nohmd' '-ddc=InstalledNoZenLocalFallback' '-SkipZenStore' 2>&1 | Tee-Object -FilePath (Join-Path $evidenceRoot "fab_lighting_$mapName.log")
+        if ($LASTEXITCODE -ne 0) { throw "Light bake failed for $bakeMap ($LASTEXITCODE)" }
+        if (Select-String -Path (Join-Path $evidenceRoot "fab_lighting_$mapName.log") -Pattern 'Skipping Lighting Build' -Quiet) { throw "Light bake was skipped for $bakeMap" }
+        $stampRoot = Join-Path $projectRoot 'Saved\FabBake'
+        New-Item -ItemType Directory -Path $stampRoot -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $stampRoot "$mapName.stamp") -Value ([DateTimeOffset]::UtcNow.ToString('o')) -Encoding utf8
+    }
     $experienceScript = (Join-Path $PSScriptRoot 'setup_scene_experience.py').Replace('\','/')
     & $editorExe $projectFile '-run=pythonscript' "-script=$experienceScript" '-unattended' '-nop4' '-nosplash' '-NullRHI' '-nohmd' '-ddc=InstalledNoZenLocalFallback' '-SkipZenStore' 2>&1 | Tee-Object -FilePath (Join-Path $evidenceRoot 'experience_assets.log')
     if ($LASTEXITCODE -ne 0) { throw "Scene asset preparation failed ($LASTEXITCODE)" }

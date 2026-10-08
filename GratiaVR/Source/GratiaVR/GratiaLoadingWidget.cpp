@@ -16,9 +16,9 @@
 
 namespace
 {
-const FLinearColor GratiaInk(1.0f, 0.93f, 0.98f);
-const FLinearColor GratiaPink(1.0f, 0.06f, 0.42f);
-const FLinearColor GratiaLilac(0.55f, 0.40f, 1.0f);
+const FLinearColor GratiaLoadingInk(1.0f, 0.93f, 0.98f);
+const FLinearColor GratiaLoadingPink(1.0f, 0.06f, 0.42f);
+const FLinearColor GratiaLoadingLilac(0.55f, 0.40f, 1.0f);
 constexpr float GratiaBarWidth = 720.0f;
 
 FSlateBrush GratiaLoadingRounded(const FLinearColor& Fill, float Radius)
@@ -80,14 +80,14 @@ void UGratiaLoadingWidget::BuildTree()
     }
     SceneBox->AddChild(Picture);
     Column->AddChildToVerticalBox(SceneBox)->SetHorizontalAlignment(HAlign_Center);
-    Title = MakeText(58, TEXT("Black"), GratiaInk);
+    Title = MakeText(58, TEXT("Black"), GratiaLoadingInk);
     FSlateFontInfo TitleFont = Title->GetFont();
     TitleFont.OutlineSettings.OutlineSize = 3;
-    TitleFont.OutlineSettings.OutlineColor = GratiaPink;
+    TitleFont.OutlineSettings.OutlineColor = GratiaLoadingPink;
     TitleFont.LetterSpacing = 60;
     Title->SetFont(TitleFont);
     Column->AddChildToVerticalBox(Title)->SetPadding(FMargin(0, 18, 0, 0));
-    Subtitle = MakeText(30, TEXT("Bold"), GratiaLilac);
+    Subtitle = MakeText(30, TEXT("Bold"), GratiaLoadingLilac);
     Subtitle->SetAutoWrapText(true);
     Column->AddChildToVerticalBox(Subtitle)->SetPadding(FMargin(40, 2, 40, 26));
     // Progress: dark track with a pink-to-violet fill.
@@ -104,20 +104,20 @@ void UGratiaLoadingWidget::BuildTree()
     Fill = WidgetTree->ConstructWidget<USizeBox>();
     Fill->SetWidthOverride(0.0f);
     UBorder* FillBox = WidgetTree->ConstructWidget<UBorder>();
-    FillBox->SetBrush(GratiaLoadingRounded(GratiaPink, 7.0f));
+    FillBox->SetBrush(GratiaLoadingRounded(GratiaLoadingPink, 7.0f));
     Fill->AddChild(FillBox);
     UOverlaySlot* FillSlot = Bar->AddChildToOverlay(Fill);
     FillSlot->SetHorizontalAlignment(HAlign_Left);
     FillSlot->SetVerticalAlignment(VAlign_Fill);
     Column->AddChildToVerticalBox(Track)->SetHorizontalAlignment(HAlign_Center);
-    Percent = MakeText(24, TEXT("ExtraBold"), GratiaPink);
+    Percent = MakeText(24, TEXT("ExtraBold"), GratiaLoadingPink);
     FSlateFontInfo PercentFont = Percent->GetFont();
     PercentFont.LetterSpacing = 300;
     Percent->SetFont(PercentFont);
     Column->AddChildToVerticalBox(Percent)->SetPadding(FMargin(0, 10, 0, 18));
-    Tip = MakeText(28, TEXT("Bold"), GratiaInk * 0.85f);
+    Tip = MakeText(28, TEXT("Bold"), GratiaLoadingInk * 0.85f);
     Column->AddChildToVerticalBox(Tip);
-    Notice = MakeText(26, TEXT("ExtraBold"), GratiaPink);
+    Notice = MakeText(26, TEXT("ExtraBold"), GratiaLoadingPink);
     Notice->SetAutoWrapText(true);
     Notice->SetVisibility(ESlateVisibility::Collapsed);
     Column->AddChildToVerticalBox(Notice)->SetPadding(FMargin(60, 0));

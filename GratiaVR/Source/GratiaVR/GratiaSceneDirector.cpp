@@ -151,9 +151,12 @@ void UGratiaSceneDirector::BeginPlay()
     bFlowQA = FParse::Param(*Command, TEXT("GratiaFlowQA"));
     Command.ReplaceInline(TEXT("-GratiaFlowQA"), TEXT(""), ESearchCase::IgnoreCase);
     Command.ReplaceInline(TEXT("-GratiaLobby"), TEXT(""), ESearchCase::IgnoreCase);
-    bTestMode = !bFlowQA && Command.Contains(TEXT("-Gratia"), ESearchCase::IgnoreCase);
+    // -GratiaScene=<Id> keeps the scene flow on in test runs and opens that scene without the lobby.
+    FString Pinned;
+    if (FParse::Value(*Command, TEXT("GratiaScene="), Pinned)) PinnedScene = FName(*Pinned);
+    bTestMode = !bFlowQA && PinnedScene.IsNone() && Command.Contains(TEXT("-Gratia"), ESearchCase::IgnoreCase);
     if (!Library) Library = LoadObject<UGratiaSceneLibrary>(nullptr, TEXT("/Game/Gratia/Experience/DA_SceneLibrary.DA_SceneLibrary"));
-    Settings = bTestMode || bFlowQA ? NewObject<UGratiaUserSettings>(this) : UGratiaUserSettings::Load();
+    Settings = bTestMode || bFlowQA || !PinnedScene.IsNone() ? NewObject<UGratiaUserSettings>(this) : UGratiaUserSettings::Load();
     if (!Library || Library->Scenes.IsEmpty() || bTestMode)
     {
         UE_LOG(LogGratiaScenes, Display, TEXT("SCENES off (%s)"), bTestMode ? TEXT("test run") : TEXT("no scene library"));
@@ -225,7 +228,7 @@ void UGratiaSceneDirector::SaveUserSettings()
     Settings->bSound = Interaction->bSound;
     if (Runtime && !Runtime->IsPartnerView()) Settings->HeightOffsetCm = Runtime->HeightOffsetCm;
     Settings->Sanitize();
-    if (!bTestMode && !bFlowQA && !Settings->Save()) UE_LOG(LogGratiaScenes, Warning, TEXT("SCENE_SETTINGS failed to save player settings"));
+    if (!bTestMode && !bFlowQA && PinnedScene.IsNone() && !Settings->Save()) UE_LOG(LogGratiaScenes, Warning, TEXT("SCENE_SETTINGS failed to save player settings"));
 }
 
 void UGratiaSceneDirector::SetMusicVolume(float Volume)
@@ -318,12 +321,44 @@ void UGratiaSceneDirector::SetStudioVisible(bool bVisible)
 void UGratiaSceneDirector::UnloadEnvironment()
 {
     RestoreReactiveLights();
-    if (!Streamed) return;
-    Streamed->SetShouldBeVisible(false);
-    Streamed->SetShouldBeLoaded(false);
-    Streamed->SetIsRequestingUnloadAndRemoval(true);
+    for (ULevelStreamingDynamic* Stream : GetStreams())
+    {
+        Stream->SetShouldBeVisible(false);
+        Stream->SetShouldBeLoaded(false);
+        Stream->SetIsRequestingUnloadAndRemoval(true);
+    }
     Streamed = nullptr;
+    Backdrops.Reset();
     bVisibilityRequested = false;
+}
+
+TArray<ULevelStreamingDynamic*> UGratiaSceneDirector::GetStreams() const
+{
+    TArray<ULevelStreamingDynamic*> Streams;
+    if (Streamed) Streams.Add(Streamed);
+    for (ULevelStreamingDynamic* Stream : Backdrops)
+        if (Stream) Streams.Add(Stream);
+    return Streams;
+}
+
+bool UGratiaSceneDirector::AreStreamsVisible() const
+{
+    for (const ULevelStreamingDynamic* Stream : GetStreams())
+        if (!Stream->IsLevelVisible()) return false;
+    return true;
+}
+
+void UGratiaSceneDirector::SetStreamsVisible(bool bVisible)
+{
+    for (ULevelStreamingDynamic* Stream : GetStreams()) Stream->SetShouldBeVisible(bVisible);
+}
+
+int32 UGratiaSceneDirector::GetVisibleBackdrops() const
+{
+    int32 Count = 0;
+    for (const ULevelStreamingDynamic* Stream : Backdrops)
+        Count += Stream && Stream->IsLevelLoaded() && Stream->IsLevelVisible();
+    return Count;
 }
 
 void UGratiaSceneDirector::RestoreReactiveLights()
@@ -336,7 +371,10 @@ void UGratiaSceneDirector::RestoreReactiveLights()
 bool UGratiaSceneDirector::IsEnvironmentReady() const
 {
     const FGratiaSceneEntry* Entry = GetCurrentEntry();
-    return Entry && (Entry->Environment.IsNull() || (Streamed && Streamed->IsLevelLoaded()));
+    if (!Entry || (!Entry->Environment.IsNull() && !Streamed) || Backdrops.Num() != Entry->Backdrops.Num()) return false;
+    for (const ULevelStreamingDynamic* Stream : GetStreams())
+        if (!Stream->IsLevelLoaded()) return false;
+    return true;
 }
 
 void UGratiaSceneDirector::FailScene(const FString& Reason)
@@ -427,6 +465,7 @@ void UGratiaSceneDirector::FinishScene()
     if (!CanStartScene(Current, Reason)) { FailScene(Reason); return; }
     const ULevel* Level = Streamed ? Streamed->GetLoadedLevel() : nullptr;
     if (!Entry->Environment.IsNull() && (!Level || !Streamed->IsLevelVisible())) { FailScene(TEXT("Environment did not become visible.")); return; }
+    if (GetVisibleBackdrops() != Entry->Backdrops.Num()) { FailScene(TEXT("Environment backdrop did not become visible.")); return; }
     const AActor* CharacterSpot = GratiaFindTagged(Level, GratiaCharacterSpotTag);
     const AActor* PlayerSpot = GratiaFindTagged(Level, GratiaPlayerSpotTag);
     if (Level)
@@ -467,9 +506,10 @@ void UGratiaSceneDirector::FinishScene()
     AActor* SpeakerRight = GratiaFindTagged(Level, TEXT("GratiaSpeakerR"));
     if (Music) Music->SetSpeakers(SpeakerLeft && SpeakerRight ? SpeakerLeft : nullptr, SpeakerLeft && SpeakerRight ? SpeakerRight : nullptr);
     // Ambient light of a streamed environment comes from its own (emissive) sky.
-    if (Level)
-        for (AActor* Actor : Level->Actors)
-            if (Actor) Actor->ForEachComponent<USkyLightComponent>(false, [](USkyLightComponent* Sky) { Sky->RecaptureSky(); });
+    for (const ULevelStreamingDynamic* Stream : GetStreams())
+        if (const ULevel* StreamLevel = Stream->GetLoadedLevel())
+            for (AActor* Actor : StreamLevel->Actors)
+                if (Actor) Actor->ForEachComponent<USkyLightComponent>(false, [](USkyLightComponent* Sky) { Sky->RecaptureSky(); });
     bPlaylistOverride = false;
     if (Character->PerformanceStage) Character->PerformanceStage->SetMusicVolumeScale(Settings->MusicVolume);
     if (Performance != INDEX_NONE)
@@ -495,8 +535,8 @@ void UGratiaSceneDirector::FinishScene()
     SaveUserSettings();
     Fade(1.0f, 0.0f);
     State = EGratiaFlowState::Playing;
-    UE_LOG(LogGratiaScenes, Display, TEXT("SCENE_READY %s environment=%s performance=%d partner_view=%d lights=%d"), *Entry->Id.ToString(),
-        Level ? *Level->GetOuter()->GetName() : TEXT("studio"), Performance, Runtime->IsPartnerView() ? 1 : 0, ReactiveLights.Num());
+    UE_LOG(LogGratiaScenes, Display, TEXT("SCENE_READY %s environment=%s backdrops=%d performance=%d partner_view=%d lights=%d"), *Entry->Id.ToString(),
+        Level ? *Level->GetOuter()->GetName() : TEXT("studio"), GetVisibleBackdrops(), Performance, Runtime->IsPartnerView() ? 1 : 0, ReactiveLights.Num());
 }
 
 void UGratiaSceneDirector::PlayAmbient(const TSoftObjectPtr<UGratiaMusicAnalysis>& Track, float Volume)
@@ -629,6 +669,13 @@ void UGratiaSceneDirector::TickComponent(float Delta, ELevelTick Type, FActorCom
         bHomeSaved = true;
         ApplyUserSettings();
         EnterLobby();
+        if (!PinnedScene.IsNone())
+        {
+            const int32 Index = Library ? Library->FindScene(PinnedScene) : INDEX_NONE;
+            UE_LOG(LogGratiaScenes, Display, TEXT("SCENE_PINNED %s index=%d"), *PinnedScene.ToString(), Index);
+            if (Index == INDEX_NONE || !StartScene(Index))
+                UE_LOG(LogGratiaScenes, Error, TEXT("SCENE_PINNED_FAILED %s: %s"), *PinnedScene.ToString(), Index == INDEX_NONE ? TEXT("no such scene") : *LastError);
+        }
     }
     if (State == EGratiaFlowState::Off) return;
     StateSeconds += Delta;
@@ -638,9 +685,9 @@ void UGratiaSceneDirector::TickComponent(float Delta, ELevelTick Type, FActorCom
     case EGratiaFlowState::ToLoading:
         if (StateSeconds < FadeTime) break;
         {
-            if (Streamed && Streamed->IsLevelVisible())
+            if (GetStreams().ContainsByPredicate([](const ULevelStreamingDynamic* Stream) { return Stream->IsLevelVisible(); }))
             {
-                Streamed->SetShouldBeVisible(false);
+                SetStreamsVisible(false);
                 if (StateSeconds > FadeTime + GetLoadingTimeout()) FailScene(TEXT("Previous environment could not be hidden."));
                 break;
             }
@@ -664,6 +711,17 @@ void UGratiaSceneDirector::TickComponent(float Delta, ELevelTick Type, FActorCom
                 if (!bOk || !Streamed) { Streamed = nullptr; FailScene(FString::Printf(TEXT("Environment failed to stream: %s"), *Entry.Environment.ToString())); break; }
                 Streamed->SetShouldBeVisible(false);
             }
+            FString BackdropError;
+            for (const TSoftObjectPtr<UWorld>& Backdrop : Entry.Backdrops)
+            {
+                bool bOk = false;
+                ULevelStreamingDynamic* Stream = Backdrop.IsNull() ? nullptr
+                    : ULevelStreamingDynamic::LoadLevelInstanceBySoftObjectPtr(this, Backdrop, FVector::ZeroVector, FRotator::ZeroRotator, bOk);
+                if (!bOk || !Stream) { BackdropError = FString::Printf(TEXT("Backdrop failed to stream: %s"), *Backdrop.ToString()); break; }
+                Stream->SetShouldBeVisible(false);
+                Backdrops.Add(Stream);
+            }
+            if (!BackdropError.IsEmpty()) { FailScene(BackdropError); break; }
             Fade(1.0f, 0.0f);
             State = EGratiaFlowState::Loading;
         }
@@ -671,7 +729,9 @@ void UGratiaSceneDirector::TickComponent(float Delta, ELevelTick Type, FActorCom
     case EGratiaFlowState::Loading:
     {
         const bool bReady = IsEnvironmentReady();
-        if ((Streamed && Streamed->GetLevelStreamingState() == ELevelStreamingState::FailedToLoad) || StateSeconds > GetLoadingTimeout())
+        const bool bFailed = GetStreams().ContainsByPredicate([](const ULevelStreamingDynamic* Stream)
+            { return Stream->GetLevelStreamingState() == ELevelStreamingState::FailedToLoad; });
+        if (bFailed || StateSeconds > GetLoadingTimeout())
         { FailScene(TEXT("Environment loading failed or exceeded its time limit.")); break; }
         const float MinLoading = FMath::IsFinite(Library->MinLoadingSeconds) ? FMath::Clamp(Library->MinLoadingSeconds, 0.0f, 10.0f) : 2.0f;
         const float Waited = FMath::Clamp(StateSeconds / FMath::Max(0.1f, MinLoading), 0.0f, 1.0f);
@@ -684,22 +744,23 @@ void UGratiaSceneDirector::TickComponent(float Delta, ELevelTick Type, FActorCom
         if (!bVisibilityRequested)
         {
             bVisibilityRequested = true;
-            if (Streamed) Streamed->SetShouldBeVisible(true);
+            SetStreamsVisible(true);
         }
-        if (!Streamed || Streamed->IsLevelVisible()) FinishScene();
+        if (AreStreamsVisible()) FinishScene();
         else if (StateSeconds > FadeTime + GetLoadingTimeout()) FailScene(TEXT("Environment could not become visible."));
         break;
     case EGratiaFlowState::ToLobby:
         if (StateSeconds < FadeTime) break;
-        if (Streamed && Streamed->IsLevelVisible())
+        if (GetStreams().ContainsByPredicate([](const ULevelStreamingDynamic* Stream) { return Stream->IsLevelVisible(); }))
         {
-            Streamed->SetShouldBeVisible(false);
+            SetStreamsVisible(false);
             if (StateSeconds < FadeTime + GetLoadingTimeout()) break;
             LastError = TEXT("Environment unload exceeded its time limit.");
-            if (const ULevel* Level = Streamed->GetLoadedLevel())
-                for (AActor* Actor : Level->Actors)
-                    if (Actor) { Actor->SetActorHiddenInGame(true); Actor->SetActorEnableCollision(false);
-                        Actor->ForEachComponent<USceneComponent>(false, [](USceneComponent* Component) { Component->SetVisibility(false); }); }
+            for (const ULevelStreamingDynamic* Stream : GetStreams())
+                if (const ULevel* Level = Stream->GetLoadedLevel())
+                    for (AActor* Actor : Level->Actors)
+                        if (Actor) { Actor->SetActorHiddenInGame(true); Actor->SetActorEnableCollision(false);
+                            Actor->ForEachComponent<USceneComponent>(false, [](USceneComponent* Component) { Component->SetVisibility(false); }); }
             UE_LOG(LogGratiaScenes, Warning, TEXT("SCENE_FAILED %s"), *LastError);
         }
         FinishLobby();

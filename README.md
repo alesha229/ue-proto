@@ -60,7 +60,8 @@ ue proto/
 | `Gratia/Input` | Input Actions игры (захват, меню, поворот) |
 | `Gratia/Performance` | Музыка перформанса KM466 |
 | `Gratia/Experience/DA_SceneLibrary` | Список сцен (название, окружение, трек, акустика, картинка), плейлист, музыка лобби, оформление меню |
-| `Gratia/Experience/Environments` | Окружения `L_VelvetRoom`, `L_NeonHorizon`, `L_LaserClub`, `L_MoonPavilion`; во время игры подгружаются в `L_Stage1` |
+| `Gratia/Experience/Environments` | Уровни сцен `L_WabiSabi`, `L_SoulCity` (маркеры, колонки, свет под музыку) и `Fab/L_WabiSabi_Art` (арт-уровень с запечённым светом); во время игры подгружаются в `L_Stage1` вместе с декорациями |
+| `Wabi_Sabi_Interior`, `SoulCity` | Паки Fab (только локально, не в git; установка — [docs/EXPERIENCE.md](docs/EXPERIENCE.md#подготовка-контента)) |
 | `Gratia/Experience/Materials`, `Music`, `Font`, `Previews` | Материалы окружений и меню, сгенерированные треки, шрифт Nunito, картинки карточек |
 | `Gratia/UserMusic` | Ваши треки (только локально, не в git) |
 | `XRFramework`, `XRMannequins`, `Characters/Mannequins` | Из шаблона Epic VR. Используются: VR-pawn, ввод контроллеров, модели рук, Manny |

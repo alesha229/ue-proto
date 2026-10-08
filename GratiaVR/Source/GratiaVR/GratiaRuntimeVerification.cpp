@@ -82,6 +82,8 @@ void UGratiaRuntimeVerification::ConfigureFromCommandLine()
     FParse::Value(FCommandLine::Get(), TEXT("GratiaCorrectivePrefix="), ReactionQACorrectivePrefix);
     FParse::Value(FCommandLine::Get(), TEXT("GratiaSoakSeconds="), SoakDuration);
     FParse::Value(FCommandLine::Get(), TEXT("GratiaPerfSeconds="), PerfDuration);
+    FParse::Value(FCommandLine::Get(), TEXT("GratiaShotSeconds="), ShotSeconds);
+    FParse::Value(FCommandLine::Get(), TEXT("GratiaProfileGPUSeconds="), ProfileGPUSeconds);
     SoakDuration = FMath::Clamp(SoakDuration, 0.0f, 3600.0f);
     PerfDuration = FMath::Clamp(PerfDuration, 0.0f, 3600.0f);
     if (SoakDuration > 0.0f || PerfDuration > 0.0f)
@@ -1264,6 +1266,19 @@ void UGratiaRuntimeVerification::RunSoakAndMetrics(float DeltaSeconds)
         || !FMath::IsFinite(DeltaSeconds) || DeltaSeconds <= 0.0f) return;
     MetricsSeconds += DeltaSeconds;
     MetricsInterval += DeltaSeconds;
+    if (ProfileGPUSeconds > 0.0f && !bProfileGPUTaken && MetricsSeconds >= ProfileGPUSeconds && GEngine)
+    {
+        bProfileGPUTaken = true;
+        UE_LOG(LogGratiaVerification, Display, TEXT("PROFILEGPU requested at %.1fs"), MetricsSeconds);
+        GEngine->Exec(GetWorld(), TEXT("ProfileGPU"));
+    }
+    if (ShotSeconds > 0.0f && !bShotTaken && MetricsSeconds >= ShotSeconds)
+    {
+        bShotTaken = true;
+        FScreenshotRequest::RequestScreenshot(FPaths::Combine(FPaths::ProjectSavedDir(),
+            FString::Printf(TEXT("Screenshots/Windows/GratiaShot_%d.png"), FMath::RoundToInt(ShotSeconds))), false, false);
+        UE_LOG(LogGratiaVerification, Display, TEXT("SHOT requested at %.1fs: %s"), MetricsSeconds, *FScreenshotRequest::GetFilename());
+    }
     if (SoakDuration > 0.0f && Runtime.TargetCharacter.IsValid())
     {
         auto* Character = Runtime.TargetCharacter.Get();
@@ -1306,6 +1321,49 @@ void UGratiaRuntimeVerification::RunSoakAndMetrics(float DeltaSeconds)
             const int32 ContactHand = (Cycle / Contact->Zones.Num()) % 2;
             Contact->SetHandSample(true, Raw, VisualLeft, Held && (ContactHand == 0 || Cycle % 3 == 0));
             Contact->SetHandSample(false, Raw, VisualRight, Held && (ContactHand == 1 || Cycle % 3 == 0));
+            // Response timing: press -> first reaction event, release -> neutral (before the next press).
+            if (Held && !bSoakWasHeld)
+            {
+                if (bSoakAwaitNeutral) ++SoakUnsettledReleases;
+                bSoakAwaitNeutral = false;
+                SoakPressTime = MetricsSeconds; SoakPressSerial = Contact->ReactionSerial; bSoakAwaitReaction = true;
+            }
+            if (bSoakAwaitReaction && Contact->ReactionSerial != SoakPressSerial)
+            {
+                SoakLatencies.Add(MetricsSeconds - SoakPressTime);
+                bSoakAwaitReaction = false;
+            }
+            if (!Held && bSoakWasHeld)
+            {
+                SoakMissedPresses += bSoakAwaitReaction ? 1 : 0;
+                bSoakAwaitReaction = false;
+                SoakReleaseTime = MetricsSeconds; bSoakAwaitNeutral = true;
+            }
+            if (bSoakAwaitNeutral && Contact->Reaction < 0.01f && Contact->ActiveZone == INDEX_NONE)
+            {
+                SoakReturns.Add(MetricsSeconds - SoakReleaseTime);
+                bSoakAwaitNeutral = false;
+            }
+            bSoakWasHeld = Held;
+            int32 Entries = 0;
+            for (const auto& Entered : Contact->Zones) Entries += Entered.Reactions;
+            if (Entries > SoakPrevEntries)
+            {
+                if (Contact->ReactionSerial != SoakPrevSerial) SoakContactLatencies.Add(0.0f);
+                else { bSoakAwaitContactReaction = true; SoakContactTime = MetricsSeconds; }
+            }
+            else if (bSoakAwaitContactReaction && Contact->ReactionSerial != SoakPrevSerial)
+            {
+                SoakContactLatencies.Add(MetricsSeconds - SoakContactTime);
+                bSoakAwaitContactReaction = false;
+            }
+            if (bSoakAwaitContactReaction && MetricsSeconds - SoakContactTime > 1.0f)
+            {
+                ++SoakSuppressedContacts;
+                bSoakAwaitContactReaction = false;
+            }
+            SoakPrevEntries = Entries;
+            SoakPrevSerial = Contact->ReactionSerial;
         }
         else if (!bSoakContactAvailabilityReported)
         {
@@ -1353,6 +1411,13 @@ void UGratiaRuntimeVerification::RunSoakAndMetrics(float DeltaSeconds)
         bTestFailed = true;
         UE_LOG(LogGratiaVerification, Error, TEXT("METRICS could not save=%s"), *MetricsPath);
     }
+    // A measurement run (-GratiaPerfSeconds without soak) ends by itself once its metrics are written.
+    if (SoakDuration <= 0.0f)
+    {
+        UE_LOG(LogGratiaVerification, Display, TEXT("GRATIA_PERF_%s seconds=%.1f"), bTestFailed ? TEXT("FAIL") : TEXT("DONE"), MetricsSeconds);
+        FPlatformMisc::RequestExitWithStatus(false, bTestFailed ? 1 : 0, TEXT("GratiaPerf"));
+        return;
+    }
     if (SoakDuration > 0.0f)
     {
         if (Runtime.TargetCharacter.IsValid() && Runtime.TargetCharacter->CharacterProfile)
@@ -1373,6 +1438,26 @@ void UGratiaRuntimeVerification::RunSoakAndMetrics(float DeltaSeconds)
                     TestCheck(ActualSoakReactions > 0, TEXT("Soak generated at least one actual runtime contact reaction"));
                 else TestSkip(TEXT("Soak is too short for acquisition and final release; positive contact-reaction coverage is not asserted"));
                 TestCheck(Contact->Reaction < 0.01f && Contact->ActiveZone == INDEX_NONE, TEXT("Soak returns to neutral after final release"));
+                auto Percentile = [](TArray<float> Values, float P)
+                {
+                    if (Values.IsEmpty()) return 0.0f;
+                    Values.Sort();
+                    return Values[FMath::Clamp(FMath::CeilToInt(P * Values.Num()) - 1, 0, Values.Num() - 1)];
+                };
+                const float LatencyP95 = Percentile(SoakLatencies, 0.95f), LatencyMax = Percentile(SoakLatencies, 1.0f);
+                const float ReturnMax = Percentile(SoakReturns, 1.0f);
+                const float ContactP95 = Percentile(SoakContactLatencies, 0.95f);
+                // Press: the synthetic hand jumps into the zone; a jump the contact solver has to correct past
+                // MaxHandCorrectionCm holds contacts for ContactRecoverySeconds (safety gate, by design).
+                UE_LOG(LogGratiaVerification, Display, TEXT("SOAK RESPONSE contact_to_reaction_ms median=%.1f p95=%.1f max=%.1f contacts=%d suppressed_by_rate_limit=%d | press_to_reaction_ms median=%.1f p95=%.1f max=%.1f presses_without_reaction=%d | returns=%d return_s median=%.2f max=%.2f unsettled_before_next_press=%d"),
+                    1000.0f * Percentile(SoakContactLatencies, 0.5f), 1000.0f * ContactP95, 1000.0f * Percentile(SoakContactLatencies, 1.0f),
+                    SoakContactLatencies.Num(), SoakSuppressedContacts,
+                    1000.0f * Percentile(SoakLatencies, 0.5f), 1000.0f * LatencyP95, 1000.0f * LatencyMax, SoakMissedPresses,
+                    SoakReturns.Num(), Percentile(SoakReturns, 0.5f), ReturnMax, SoakUnsettledReleases);
+                if (!SoakContactLatencies.IsEmpty())
+                    TestCheck(ContactP95 <= 0.1f, TEXT("Soak reactions start within 100 ms of the contact event (p95)"));
+                if (!SoakReturns.IsEmpty())
+                    TestCheck(ReturnMax <= 3.0f, TEXT("Soak reactions return to neutral within 3 s of release"));
                 UE_LOG(LogGratiaVerification, Display, TEXT("SOAK CONTACT COVERAGE: generated_cycles=%d zone_touch_entries=%d actual_reaction_serial_events=%d; a generated cycle or zone entry is not proof that its target reaction ran"),
                     SoakCycle == INDEX_NONE ? 0 : SoakCycle + 1, ZoneTouchEntries, ActualSoakReactions);
             }
