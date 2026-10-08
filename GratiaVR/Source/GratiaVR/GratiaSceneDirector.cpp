@@ -157,6 +157,9 @@ void UGratiaSceneDirector::BeginPlay()
     bTestMode = !bFlowQA && PinnedScene.IsNone() && Command.Contains(TEXT("-Gratia"), ESearchCase::IgnoreCase);
     if (!Library) Library = LoadObject<UGratiaSceneLibrary>(nullptr, TEXT("/Game/Gratia/Experience/DA_SceneLibrary.DA_SceneLibrary"));
     Settings = bTestMode || bFlowQA || !PinnedScene.IsNone() ? NewObject<UGratiaUserSettings>(this) : UGratiaUserSettings::Load();
+    // -GratiaQuality=<0..2>: quality profile for measurement runs (not saved: such runs use fresh settings).
+    int32 ForcedQuality = INDEX_NONE;
+    if (!PinnedScene.IsNone() && FParse::Value(*Command, TEXT("GratiaQuality="), ForcedQuality)) Settings->Quality = FMath::Clamp(ForcedQuality, 0, 2);
     if (!Library || Library->Scenes.IsEmpty() || bTestMode)
     {
         UE_LOG(LogGratiaScenes, Display, TEXT("SCENES off (%s)"), bTestMode ? TEXT("test run") : TEXT("no scene library"));
