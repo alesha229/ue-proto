@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/Ticker.h"
 #include "GameFramework/Actor.h"
 #include "GratiaStage1Runtime.generated.h"
 
@@ -160,6 +161,13 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Primitive")
     bool SetPrimitiveShown(bool bShown);
     bool IsPrimitiveShown() const { return Primitive != nullptr; }
+    /**
+     * Pauses the game (animation, physics, performance and music) while the headset has no input focus - the SteamVR
+     * dashboard is open or the headset is taken off - and resumes when focus returns. OpenXR reports focus through
+     * FApp::HasVRFocus; a core ticker watches it because the paused world does not tick actors.
+     */
+    void SetFocusPaused(bool bPaused);
+    bool IsFocusPaused() const { return bFocusPaused; }
     UFUNCTION(BlueprintCallable, Category = "Primitive")
     void CyclePrimitiveSize();
     FString GetPrimitiveLabel() const;
@@ -234,6 +242,14 @@ public:
     double PerfSpikeSecond = 0.0;
     void LogFramePerformance(float DeltaSeconds);
     FString GetPerformanceContext() const;
+    /** GPU times of the PERF window (median and p95 in its line) and of the current scene visit: SCENE_PERF is
+     *  logged when the player leaves the scene or quits, so a headset session reports each environment's cost. */
+    TArray<float> PerfWindowGPU, ScenePerfGPU, ScenePerfFrame;
+    bool bStickRecenterHeld = false;
+    FName ScenePerfKey;
+    double ScenePerfSince = 0.0;
+    FName GetScenePerfKey() const;
+    void FlushScenePerformance();
 
     UFUNCTION(BlueprintCallable, Category = "Stage 1|Calibration")
     void Recenter();
@@ -328,6 +344,9 @@ private:
     /** Applies the desired visible hand smoothly; a free hand rides the controller directly. */
     void ApplyVisualHand(FHandProxy& Hand, const FTransform& Target, const FTransform& Desired, float DeltaSeconds);
     void UpdateHandPose(FHandProxy& Hand, bool bLeft, const FVector& Near);
+    bool bFocusPaused = false;
+    FTSTicker::FDelegateHandle FocusTicker;
+    bool TickFocus(float Delta);
     void UpdateHaptics(FHandProxy& Hand, bool bLeft, float Amplitude, float Frequency);
 
     TWeakObjectPtr<APlayerController> PlayerController;

@@ -69,6 +69,8 @@ Exports/Gratia/Audio/*.wav
 Exports/Gratia/Audio/UserMusic/
 GratiaVR/Content/Gratia/UserMusic/
 Exports/Gratia/Audio/Generated/*.wav
+# Synthesized reaction voice: generate_reaction_voice.py recreates it (the imported assets are in Content).
+Exports/Gratia/Audio/Reactions/*.wav
 
 # Fab packs (Fab Standard License: use in the project, no redistribution of the source assets).
 # Restored from the Epic Games Launcher, see docs/EXPERIENCE.md.

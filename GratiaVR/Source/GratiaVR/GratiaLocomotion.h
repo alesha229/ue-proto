@@ -31,6 +31,14 @@ public:
     float StickDeadZone = 0.18f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Movement", meta=(ClampMin="1", ClampMax="90"))
     float SnapDegrees = 30.0f;
+    /** The right stick turns continuously (SmoothTurnDegreesPerSecond at full deflection) instead of in snaps. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Movement")
+    bool bSmoothTurn = false;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Movement", meta=(ClampMin="10", ClampMax="360"))
+    float SmoothTurnDegreesPerSecond = 120.0f;
+    /** Comfort presets of the menu. Turn: 0 snap 30 degrees, 1 snap 45, 2 smooth. Walk: 0 slow, 1 normal, 2 fast. */
+    void SetComfort(int32 TurnMode, int32 WalkSpeed);
+    static float WalkSpeedFor(int32 WalkSpeed);
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Movement", meta=(ClampMin="1"))
     float BodyRadiusCm = 22.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Movement", meta=(ClampMin="1"))

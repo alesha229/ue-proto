@@ -30,6 +30,10 @@ grip_right = asset('IA_GripRight', unreal.InputAction)
 for action in (grab_left, grab_right, grip_left, grip_right):
     action.set_editor_property('value_type', unreal.InputActionValueType.AXIS1D)
     action.set_editor_property('consume_input', True)
+# Clicking either stick recenters the player (the menu item and the loading tips promise it).
+recenter = asset('IA_Recenter', unreal.InputAction)
+recenter.set_editor_property('value_type', unreal.InputActionValueType.BOOLEAN)
+recenter.set_editor_property('consume_input', True)
 bindings = []
 
 def mapping(action, key, y=False, negative=False):
@@ -74,6 +78,9 @@ for prefix, stick in xr_sticks:
             if unreal.InputLibrary.key_is_valid(probe):
                 mapping(action, key)
                 break
+    # Sticks only: a Vive trackpad is pressed while walking.
+    for side in ('Left', 'Right') if stick == 'Thumbstick' else ():
+        mapping(recenter, f'{prefix}_{side}_{stick}_Click')
 mapping(grab_left, 'Z')
 mapping(grab_right, 'X')
 mapping(grip_left, 'C')
@@ -135,7 +142,7 @@ for prefix, left_previous in [('OculusTouch', 'X'), ('ValveIndex', 'A')]:
 mapping(next_action, 'Down')
 mapping(next_action, 'Up', negative=True)
 mapping(apply_action, 'Enter')
-for item in [walk, turn, block, grab_left, grab_right, grip_left, grip_right, toggle, next_action, apply_action, movement_context, context]:
+for item in [walk, turn, block, grab_left, grab_right, grip_left, grip_right, recenter, toggle, next_action, apply_action, movement_context, context]:
     description = 'action_description' if isinstance(item, unreal.InputAction) else 'context_description'
     item.set_editor_property(description, item.get_name())
     assert library.save_loaded_asset(item, only_if_is_dirty=False)

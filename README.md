@@ -15,6 +15,7 @@ PC VR игра на Unreal Engine 5.8.3 (OpenXR / SteamVR). Персонаж Gra
 | Играть в редакторе в шлеме | Запустить SteamVR, затем **Play ▸ VR Preview** |
 | Собрать игру | Закрыть редактор и игру, запустить **Build.cmd**. Результат: `Builds/Windows`, единственная папка со сборкой |
 | Запустить сборку | **Start-VR.cmd** (шлем) или **Start-Desktop.cmd** (монитор) |
+| Запустить без сборки пакета | **Play-VR.cmd** или **Play-Desktop.cmd**: игра прямо из проекта через редактор (`-game`), C++ дособирается сам |
 
 Управление в шлеме — таблица в [GratiaVR/README.md](GratiaVR/README.md#запуск-и-управление).
 
@@ -35,7 +36,7 @@ ue proto/
 ├─ evidence/                 логи и снимки проверок; не в git
 ├─ Archive/ProjectCopies/    две старые копии проекта после перехода на 5.8; не используются, не в git
 ├─ Gratia.blend, Gratia_source.blend, Gratia_working.blend   исходная модель; не изменять
-└─ Open-Editor.cmd, Open-Code.cmd, Build.cmd, Start-VR.cmd, Start-Desktop.cmd, Start-BlenderMCP.cmd
+└─ Open-Editor.cmd, Open-Code.cmd, Build.cmd, Start-VR.cmd, Start-Desktop.cmd, Play-VR.cmd, Play-Desktop.cmd, Start-BlenderMCP.cmd
 ```
 
 Служебные папки Unreal (`Binaries`, `Intermediate`, `Saved`, `DerivedDataCache`) создаются сами
@@ -98,7 +99,7 @@ ue proto/
 | `GratiaInteraction`, `GratiaContactSolver`, `GratiaBodySurface` | Касания: зоны, коллизии руки с телом, выбор реакции |
 | `GratiaSoftBodyInteraction`, `GratiaSecondaryMotion` | Мягкое тело: нажим, сжатие, захват, пряди волос |
 | `GratiaPenetrator`, `GratiaPenetration`, `GratiaPenetrationMath` | Суставной примитив (размеры S–XXL) и каналы тела: захват у входа, суставы по каналу, кости стенок, реакции, вибрация |
-| `GratiaReactionPresentation` | Звук и подписи реакций |
+| `GratiaReactionPresentation`, `GratiaBubbleWidget` | Ответ на касание: реплика в облачке у головы и голос (строки `ReactionLines` профиля) |
 | `GratiaPerformanceStage` | Перформансы (KM466): музыка, партнёр, вид его глазами |
 | `GratiaMenu`, `GratiaMenuWidget` | Меню в пространстве (логика и вид) |
 | `GratiaSceneDirector`, `GratiaSceneLibrary`, `GratiaMusicPlayer`, `GratiaLoadingSpace`, `GratiaLoadingWidget` | Лобби → загрузка → сцена, музыка и переходы, экран загрузки |

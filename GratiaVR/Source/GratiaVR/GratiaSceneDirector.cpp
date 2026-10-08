@@ -1,4 +1,6 @@
 #include "GratiaSceneDirector.h"
+#include "GratiaLocomotion.h"
+#include "GratiaReactionPresentation.h"
 #include "GratiaAnimInstance.h"
 #include "GratiaCharacterProfile.h"
 #include "GratiaInteraction.h"
@@ -82,8 +84,11 @@ const FGratiaSceneEntry* UGratiaSceneDirector::GetCurrentEntry() const
 
 bool UGratiaSceneDirector::IsPerformanceScene() const
 {
+    // The scene's own performance, not a free-play stance the character was switched into.
     const AGratiaPreviewCharacter* Character = GetCharacter();
-    return State == EGratiaFlowState::Playing && Character && Character->PreviewPose == EGratiaPreviewPose::Performance;
+    const FGratiaSceneEntry* Entry = GetCurrentEntry();
+    return State == EGratiaFlowState::Playing && Character && Character->PreviewPose == EGratiaPreviewPose::Performance
+        && Entry && !Entry->Performance.IsNone();
 }
 
 float UGratiaSceneDirector::GetFadeSeconds() const
@@ -151,12 +156,15 @@ void UGratiaSceneDirector::BeginPlay()
     bFlowQA = FParse::Param(*Command, TEXT("GratiaFlowQA"));
     Command.ReplaceInline(TEXT("-GratiaFlowQA"), TEXT(""), ESearchCase::IgnoreCase);
     Command.ReplaceInline(TEXT("-GratiaLobby"), TEXT(""), ESearchCase::IgnoreCase);
+    // Menu captures need the real lobby/scene menu; they run with fresh settings like the flow check.
+    bMenuShots = FParse::Param(*Command, TEXT("GratiaMenuShots"));
+    Command.ReplaceInline(TEXT("-GratiaMenuShots"), TEXT(""), ESearchCase::IgnoreCase);
     // -GratiaScene=<Id> keeps the scene flow on in test runs and opens that scene without the lobby.
     FString Pinned;
     if (FParse::Value(*Command, TEXT("GratiaScene="), Pinned)) PinnedScene = FName(*Pinned);
     bTestMode = !bFlowQA && PinnedScene.IsNone() && Command.Contains(TEXT("-Gratia"), ESearchCase::IgnoreCase);
     if (!Library) Library = LoadObject<UGratiaSceneLibrary>(nullptr, TEXT("/Game/Gratia/Experience/DA_SceneLibrary.DA_SceneLibrary"));
-    Settings = bTestMode || bFlowQA || !PinnedScene.IsNone() ? NewObject<UGratiaUserSettings>(this) : UGratiaUserSettings::Load();
+    Settings = bTestMode || bFlowQA || bMenuShots || !PinnedScene.IsNone() ? NewObject<UGratiaUserSettings>(this) : UGratiaUserSettings::Load();
     // -GratiaQuality=<0..2>: quality profile for measurement runs (not saved: such runs use fresh settings).
     int32 ForcedQuality = INDEX_NONE;
     if (!PinnedScene.IsNone() && FParse::Value(*Command, TEXT("GratiaQuality="), ForcedQuality)) Settings->Quality = FMath::Clamp(ForcedQuality, 0, 2);
@@ -211,8 +219,12 @@ void UGratiaSceneDirector::ApplyUserSettings()
     Interaction->bPhysicalMotion = Settings->bPhysics;
     Interaction->bLocalSpring = Settings->bSprings;
     Interaction->bSound = Settings->bSound;
+    Interaction->Mood = Settings->Mood;
     Runtime->AdjustHeight(Settings->HeightOffsetCm - Runtime->HeightOffsetCm);
     SetMusicVolume(Settings->MusicVolume);
+    SetVoiceVolume(Settings->VoiceVolume);
+    SetCaptions(Settings->bCaptions);
+    SetComfort(Settings->TurnMode, Settings->WalkSpeed);
 }
 
 void UGratiaSceneDirector::SaveUserSettings()
@@ -229,9 +241,10 @@ void UGratiaSceneDirector::SaveUserSettings()
     Settings->bPhysics = Interaction->bPhysicalMotion;
     Settings->bSprings = Interaction->bLocalSpring;
     Settings->bSound = Interaction->bSound;
+    Settings->Mood = Interaction->Mood;
     if (Runtime && !Runtime->IsPartnerView()) Settings->HeightOffsetCm = Runtime->HeightOffsetCm;
     Settings->Sanitize();
-    if (!bTestMode && !bFlowQA && PinnedScene.IsNone() && !Settings->Save()) UE_LOG(LogGratiaScenes, Warning, TEXT("SCENE_SETTINGS failed to save player settings"));
+    if (!bTestMode && !bFlowQA && !bMenuShots && PinnedScene.IsNone() && !Settings->Save()) UE_LOG(LogGratiaScenes, Warning, TEXT("SCENE_SETTINGS failed to save player settings"));
 }
 
 void UGratiaSceneDirector::SetMusicVolume(float Volume)
@@ -248,6 +261,45 @@ void UGratiaSceneDirector::SetMusicVolume(float Volume)
 void UGratiaSceneDirector::SetHapticsScale(float Scale)
 {
     if (Settings) Settings->HapticsScale = FMath::Clamp(FMath::IsFinite(Scale) ? Scale : 1.0f, 0.0f, 1.0f);
+}
+
+void UGratiaSceneDirector::SetVoiceVolume(float Volume)
+{
+    if (!Settings) return;
+    Settings->VoiceVolume = FMath::Clamp(FMath::IsFinite(Volume) ? Volume : 1.0f, 0.0f, 1.0f);
+    if (AGratiaPreviewCharacter* Character = GetCharacter())
+        if (Character->ReactionPresentation) Character->ReactionPresentation->VoiceVolume = Settings->VoiceVolume;
+}
+
+void UGratiaSceneDirector::SetCaptions(bool bShow)
+{
+    if (!Settings) return;
+    Settings->bCaptions = bShow;
+    if (AGratiaPreviewCharacter* Character = GetCharacter())
+        if (Character->ReactionPresentation) Character->ReactionPresentation->bPresentCaptions = bShow;
+}
+
+void UGratiaSceneDirector::SetComfort(int32 TurnMode, int32 WalkSpeed)
+{
+    if (!Settings) return;
+    Settings->TurnMode = FMath::Clamp(TurnMode, 0, 2);
+    Settings->WalkSpeed = FMath::Clamp(WalkSpeed, 0, 2);
+    if (AGratiaStage1Runtime* Runtime = GetRuntime())
+        if (Runtime->Locomotion) Runtime->Locomotion->SetComfort(Settings->TurnMode, Settings->WalkSpeed);
+}
+
+void UGratiaSceneDirector::ResetUserSettings()
+{
+    if (!Settings) return;
+    const FName Track = Settings->LastTrack, Scene = Settings->LastScene;
+    UGratiaUserSettings* Defaults = Cast<UGratiaUserSettings>(UGameplayStatics::CreateSaveGameObject(UGratiaUserSettings::StaticClass()));
+    if (!Defaults) return;
+    Defaults->LastTrack = Track;
+    Defaults->LastScene = Scene;
+    Settings = Defaults;
+    ApplyUserSettings();
+    SaveUserSettings();
+    UE_LOG(LogGratiaScenes, Display, TEXT("SCENE_SETTINGS reset to defaults"));
 }
 
 void UGratiaSceneDirector::Fade(float From, float To)
@@ -580,7 +632,10 @@ FString UGratiaSceneDirector::GetTrackText() const
     const UGratiaMusicAnalysis* Track = Music && Music->IsPlaying() ? Music->GetCurrent() : nullptr;
     if (!Track && IsPerformanceScene() && !bPlaylistOverride && PerformanceTrack) Track = PerformanceTrack;
     if (!Track) return FString();
-    const FString Title = Track->Title.IsEmpty() ? Track->GetName() : Track->Title.ToString();
+    // An untitled performance track is named after its show, never after the asset.
+    const FGratiaSceneEntry* Entry = GetCurrentEntry();
+    const FString Title = !Track->Title.IsEmpty() ? Track->Title.ToString()
+        : Track == PerformanceTrack && Entry ? FString(TEXT("Музыка шоу «")) + Entry->Title.ToString() + TEXT("»") : FString(TEXT("Без названия"));
     return Track->Artist.IsEmpty() ? Title : Title + TEXT("  \u00B7  ") + Track->Artist.ToString();
 }
 
@@ -834,13 +889,13 @@ FString UGratiaSceneDirector::GetPlaybackText() const
 {
     const AGratiaPreviewCharacter* Character = GetCharacter();
     const FGratiaPerformanceClip* Performance = IsPerformanceScene() ? Character->GetPerformance() : nullptr;
-    if (!Performance) return TEXT("Free play");
+    if (!Performance) return TEXT("Свободная игра");
     float Total = 0.0f;
     for (int32 Part = 0; Part < Performance->NumParts(); ++Part)
         if (const UAnimSequence* Clip = Performance->GetPart(Part)) Total += Clip->GetPlayLength();
     const float Time = Character->PerformanceStage ? Character->PerformanceStage->GetPerformanceTime() : 0.0f;
-    return FString::Printf(TEXT("Part %d/%d   %s / %s   %.2gx%s"), Character->PerformancePart + 1, Performance->NumParts(),
-        *GratiaClock(Time), *GratiaClock(Total), Character->GetPerformanceRate(), Character->IsPerformancePaused() ? TEXT("   paused") : TEXT(""));
+    return FString::Printf(TEXT("Часть %d из %d  ·  %s / %s  ·  %.2g×%s"), Character->PerformancePart + 1, Performance->NumParts(),
+        *GratiaClock(Time), *GratiaClock(Total), Character->GetPerformanceRate(), Character->IsPerformancePaused() ? TEXT("  ·  пауза") : TEXT(""));
 }
 
 FString UGratiaSceneDirector::GetDiagnostics() const

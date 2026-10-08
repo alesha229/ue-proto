@@ -38,6 +38,18 @@ The profile owns model-specific references and names:
   ReactShy (Reserved), ReactPout (zone Hair) — Zenless-Zone-Zero-style clips from
   `author_anime_clips.py`. Runtime QA checks the selection; reaction QA
   `-GratiaReactionMood=N` checks the mood clips in the packaged game.
+- ReactionLines: what the character answers a reaction with — a speech bubble (`Text`, shown by
+  her head, facing the player, for `ContactSettings.CaptionSeconds`) and a voice (`Sound`, played
+  at the touched zone). A line may be limited to a mood (`Mood` 0 calm, 1 cheerful, 2 reserved),
+  to contact zones or penetration channels (`Zones`) and to a touch force (`Force`: Gentle, or
+  Strong = faster than `StrongReactionSpeedCmPerSecond`). The presenter takes the most specific
+  matches (strong touch, then zone, then mood) and picks one at random, never the same line twice in
+  a row. Without lines a profile keeps ReactionSounds/DefaultReactionSound (or a short chime) and
+  shows no bubble. Gratia: 33 Russian lines and 21 synthesized non-verbal voice clips
+  (`generate_reaction_voice.py`, `setup_character_presentation.py`).
+- Free-play stances: in a scene the Pose item switches between idle and every PerformanceClip that is
+  a looping single clip without music, partner or viewpoint; `Label` is what the menu shows
+  (Gratia: `Idle ZZZ` is «игривая»). Diagnostic Arms/Head and full performances stay on F2 in the studio.
 - Semantic bone and morph maps. Gameplay asks for Head, LeftHand, BlinkLeft,
   Smile or Surprise; it does not contain exported Gratia bone names.
 - Character contact-zone geometry and hold permissions.

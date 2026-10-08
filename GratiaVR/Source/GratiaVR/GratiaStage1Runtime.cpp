@@ -63,6 +63,15 @@ namespace
         Rotation.Normalize();
         return FTransform(Rotation, FMath::Lerp(From.GetLocation(), To.GetLocation(), Alpha), To.GetScale3D());
     }
+
+    float GratiaPercentile(TArray<float> Values, float Fraction)
+    {
+        if (Values.IsEmpty()) return 0.0f;
+        Values.Sort();
+        const float Rank = (Values.Num() - 1) * FMath::Clamp(Fraction, 0.0f, 1.0f);
+        const int32 Low = FMath::FloorToInt(Rank);
+        return FMath::Lerp(Values[Low], Values[FMath::Min(Low + 1, Values.Num() - 1)], Rank - Low);
+    }
 }
 
 AGratiaStage1Runtime::AGratiaStage1Runtime()
@@ -97,12 +106,16 @@ void AGratiaStage1Runtime::BeginPlay()
     Verification->ConfigureFromCommandLine();
     BindPlayer();
     SetTargetCharacter(TargetCharacter.Get());
+    FocusTicker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &AGratiaStage1Runtime::TickFocus), 0.1f);
     UE_LOG(LogGratiaStage1, Display, TEXT("BUILD id=%s commit=%s"), TEXT(GRATIA_BUILD_ID), TEXT(GRATIA_BUILD_COMMIT));
     UE_LOG(LogGratiaStage1, Display, TEXT("Stage 1 runtime started. R=recenter, PgUp/PgDn=height, Home=reset height, F1=debug, F6=primitive on/off, F7=primitive size, F8/F9=toggle forced left/right tracking loss."));
 }
 
 void AGratiaStage1Runtime::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+    FTSTicker::GetCoreTicker().RemoveTicker(FocusTicker);
+    FocusTicker.Reset();
+    FlushScenePerformance();
     ReleasePrimitive(LeftHand, true, TEXT("end play"));
     ReleasePrimitive(RightHand, false, TEXT("end play"));
     UpdateHaptics(LeftHand, true, 0.0f, 0.0f);
@@ -144,6 +157,28 @@ void AGratiaStage1Runtime::SetTargetCharacter(AGratiaPreviewCharacter* Character
         Character->Penetration->AddTickPrerequisiteActor(this);
         Character->Penetration->SetPenetrator(Primitive);
     }
+}
+
+bool AGratiaStage1Runtime::TickFocus(float Delta)
+{
+    const bool bLost = bXRActive && FApp::UseVRFocus() && !FApp::HasVRFocus();
+    if (bLost != bFocusPaused) SetFocusPaused(bLost);
+    return true;
+}
+
+void AGratiaStage1Runtime::SetFocusPaused(bool bPaused)
+{
+    if (bPaused == bFocusPaused) return;
+    bFocusPaused = bPaused;
+    if (bPaused)
+    {
+        UpdateHaptics(LeftHand, true, 0.0f, 0.0f);
+        UpdateHaptics(RightHand, false, 0.0f, 0.0f);
+    }
+    // Non-UI sounds (music, voices, rain) pause with the game.
+    UGameplayStatics::SetGamePaused(this, bPaused);
+    UE_LOG(LogGratiaStage1, Display, TEXT("FOCUS %s: game %s"), bPaused ? TEXT("lost") : TEXT("back"),
+        UGameplayStatics::IsGamePaused(this) ? TEXT("paused") : TEXT("running"));
 }
 
 bool AGratiaStage1Runtime::SetPrimitiveShown(bool bShown)
@@ -242,7 +277,10 @@ void AGratiaStage1Runtime::Tick(float DeltaSeconds)
             if (PC->WasInputKeyJustPressed(EKeys::F2)) Menu->Execute(EGratiaMenuAction::Pose);
             if (PC->WasInputKeyJustPressed(EKeys::F3)) Menu->Execute(EGratiaMenuAction::Reset);
         }
-        if (PC->WasInputKeyJustPressed(EKeys::R)) Recenter();
+        // R on the keyboard, either stick click on the controllers (edge, so holding it recenters once).
+        const bool bStickRecenter = HandInput && HandInput->IsRecenterPressed();
+        if (PC->WasInputKeyJustPressed(EKeys::R) || (bStickRecenter && !bStickRecenterHeld)) Recenter();
+        bStickRecenterHeld = bStickRecenter;
         if (PC->WasInputKeyJustPressed(EKeys::PageUp)) AdjustHeight(HeightStepCm);
         if (PC->WasInputKeyJustPressed(EKeys::PageDown)) AdjustHeight(-HeightStepCm);
         if (PC->WasInputKeyJustPressed(EKeys::Home)) ResetHeight();
@@ -304,22 +342,68 @@ FString AGratiaStage1Runtime::GetPerformanceContext() const
         Physics ? Physics->GetHandPressureMs() : 0.0f, Physics ? Physics->GetHandPressureQueries() : 0);
 }
 
+FName AGratiaStage1Runtime::GetScenePerfKey() const
+{
+    if (!SceneDirector || !SceneDirector->IsActive()) return FName(TEXT("Stage"));
+    if (SceneDirector->IsInScene())
+    {
+        const FGratiaSceneEntry* Entry = SceneDirector->GetCurrentEntry();
+        return Entry ? Entry->Id : FName(TEXT("Scene"));
+    }
+    return SceneDirector->GetState() == EGratiaFlowState::Lobby ? FName(TEXT("Lobby")) : NAME_None;
+}
+
+void AGratiaStage1Runtime::FlushScenePerformance()
+{
+    // A visit counts from 3 s after it starts (streaming and first draws) and needs ~2 s of frames.
+    if (!ScenePerfKey.IsNone() && ScenePerfFrame.Num() >= 120)
+    {
+        double Seconds = 0.0;
+        int32 Late = 0;
+        for (const float Ms : ScenePerfFrame)
+        {
+            Seconds += Ms / 1000.0;
+            Late += Ms > 1000.0f / 85.0f ? 1 : 0;
+        }
+        UE_LOG(LogGratiaStage1, Display, TEXT("SCENE_PERF scene=%s seconds=%.0f fps=%.1f frame_p95=%.1f gpu_med=%.2f gpu_p95=%.2f gpu_p99=%.2f late=%.1f%% quality=%d"),
+            *ScenePerfKey.ToString(), Seconds, ScenePerfFrame.Num() / FMath::Max(Seconds, 0.001), GratiaPercentile(ScenePerfFrame, 0.95f),
+            GratiaPercentile(ScenePerfGPU, 0.5f), GratiaPercentile(ScenePerfGPU, 0.95f), GratiaPercentile(ScenePerfGPU, 0.99f), 100.0f * Late / ScenePerfFrame.Num(),
+            TargetCharacter.IsValid() && TargetCharacter->Interaction ? TargetCharacter->Interaction->Quality : -1);
+    }
+    ScenePerfGPU.Reset();
+    ScenePerfFrame.Reset();
+}
+
 void AGratiaStage1Runtime::LogFramePerformance(float DeltaSeconds)
 {
     // Thread times are the previous frame's; the worst frame of each window is logged with context.
     const float FrameMs = DeltaSeconds * 1000.0f;
     const float SlowMs = 1000.0f / 72.0f;
+    const float GPUMs = static_cast<float>(FPlatformTime::ToMilliseconds(RHIGetGPUFrameCycles()));
+    const double Now = FPlatformTime::Seconds();
     ++PerfFrames;
     PerfWindowSeconds += DeltaSeconds;
+    PerfWindowGPU.Add(GPUMs);
     if (FrameMs > SlowMs) ++PerfSlowFrames;
     if (FrameMs > PerfWorstMs)
     {
         PerfWorstMs = FrameMs;
         PerfWorstGameMs = static_cast<float>(FPlatformTime::ToMilliseconds(GGameThreadTime));
         PerfWorstRenderMs = static_cast<float>(FPlatformTime::ToMilliseconds(GRenderThreadTime));
-        PerfWorstGPUMs = static_cast<float>(FPlatformTime::ToMilliseconds(RHIGetGPUFrameCycles()));
+        PerfWorstGPUMs = GPUMs;
     }
-    const double Now = FPlatformTime::Seconds();
+    const FName SceneKey = GetScenePerfKey();
+    if (SceneKey != ScenePerfKey)
+    {
+        FlushScenePerformance();
+        ScenePerfKey = SceneKey;
+        ScenePerfSince = Now;
+    }
+    else if (!SceneKey.IsNone() && Now - ScenePerfSince > 3.0)
+    {
+        ScenePerfGPU.Add(GPUMs);
+        ScenePerfFrame.Add(FrameMs);
+    }
     if (FrameMs > 40.0f)
     {
         if (Now - PerfSpikeSecond >= 1.0) { PerfSpikeSecond = Now; PerfSpikesThisSecond = 0; }
@@ -333,12 +417,13 @@ void AGratiaStage1Runtime::LogFramePerformance(float DeltaSeconds)
     if (PerfSlowFrames > 0 || ++PerfQuietWindows >= 5)
     {
         PerfQuietWindows = 0;
-        UE_LOG(LogGratiaStage1, Display, TEXT("PERF fps=%.1f worst=%.1fms (game=%.1f render=%.1f gpu=%.1f) slow=%d/%d %s"),
-            PerfFrames / PerfWindowSeconds, PerfWorstMs, PerfWorstGameMs, PerfWorstRenderMs, PerfWorstGPUMs, PerfSlowFrames, PerfFrames,
-            *GetPerformanceContext());
+        UE_LOG(LogGratiaStage1, Display, TEXT("PERF fps=%.1f gpu_med=%.1f gpu_p95=%.1f worst=%.1fms (game=%.1f render=%.1f gpu=%.1f) slow=%d/%d %s"),
+            PerfFrames / PerfWindowSeconds, GratiaPercentile(PerfWindowGPU, 0.5f), GratiaPercentile(PerfWindowGPU, 0.95f), PerfWorstMs, PerfWorstGameMs,
+            PerfWorstRenderMs, PerfWorstGPUMs, PerfSlowFrames, PerfFrames, *GetPerformanceContext());
     }
     PerfWindowSeconds = PerfWorstMs = PerfWorstGameMs = PerfWorstRenderMs = PerfWorstGPUMs = 0.0f;
     PerfFrames = PerfSlowFrames = 0;
+    PerfWindowGPU.Reset();
 }
 
 void AGratiaStage1Runtime::BindPlayer()

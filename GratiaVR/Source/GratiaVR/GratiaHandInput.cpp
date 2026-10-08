@@ -23,6 +23,8 @@ UGratiaHandInput::UGratiaHandInput()
     static ConstructorHelpers::FObjectFinder<UInputAction> PL(TEXT("/Game/Gratia/Input/IA_GripLeft.IA_GripLeft"));
     static ConstructorHelpers::FObjectFinder<UInputAction> PR(TEXT("/Game/Gratia/Input/IA_GripRight.IA_GripRight"));
     GripLeft = PL.Object; GripRight = PR.Object;
+    static ConstructorHelpers::FObjectFinder<UInputAction> RC(TEXT("/Game/Gratia/Input/IA_Recenter.IA_Recenter"));
+    RecenterAction = RC.Object;
 }
 void UGratiaHandInput::UpdateInput()
 {
@@ -37,7 +39,7 @@ void UGratiaHandInput::UpdateInput()
             Input = NewObject<UEnhancedInputComponent>(PC, TEXT("GratiaHandActions"));
             Input->Priority = 70; Input->bBlockInput = false;
             Input->BindActionValue(LeftAction); Input->BindActionValue(RightAction);
-            for (UInputAction* Action : {GripLeft.Get(), GripRight.Get(), GraspLeft.Get(), GraspRight.Get(), IndexLeft.Get(), IndexRight.Get()})
+            for (UInputAction* Action : {GripLeft.Get(), GripRight.Get(), GraspLeft.Get(), GraspRight.Get(), IndexLeft.Get(), IndexRight.Get(), RecenterAction.Get()})
                 if (Action) Input->BindActionValue(Action);
             Input->RegisterComponent(); PC->PushInputComponent(Input);
         }
@@ -66,6 +68,10 @@ float UGratiaHandInput::GetGrip(bool bLeft) const
     const FInputActionValue Value = Input->GetBoundActionValue(Action);
     const float Scalar = Value.GetValueType() == EInputActionValueType::Boolean ? (Value.Get<bool>() ? 1.0f : 0.0f) : Value.Get<float>();
     return FMath::IsFinite(Scalar) ? FMath::Clamp(Scalar, 0.0f, 1.0f) : 0.0f;
+}
+bool UGratiaHandInput::IsRecenterPressed() const
+{
+    return bReady && RecenterAction && Input && Input->GetBoundActionValue(RecenterAction).Get<bool>();
 }
 float UGratiaHandInput::GetGrasp(bool bLeft) const { return FMath::Max(GetGrip(bLeft), ReadAction(bLeft ? GraspLeft.Get() : GraspRight.Get(), bLeft)); }
 float UGratiaHandInput::GetIndexCurl(bool bLeft) const { return ReadAction(bLeft ? IndexLeft.Get() : IndexRight.Get(), bLeft); }

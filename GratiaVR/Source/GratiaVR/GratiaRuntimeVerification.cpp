@@ -866,9 +866,9 @@ void UGratiaRuntimeVerification::RunReactionResourceQA(float DeltaSeconds)
             TestCheck(Animation->ReactionClip == ReactionQAClip.Get() && Animation->IsReactionCuePlaying(),
                 TEXT("The normal animation instance selected and plays the exact requested clip after the contact serial"));
             if (Character->ReactionPresentation && Character->ReactionPresentation->bPresentCaptions && Profile->ContactSettings.CaptionSeconds > 0.0f)
-                TestCheck(Character->ReactionPresentation->IsCaptionVisible()
-                    && Character->ReactionPresentation->GetCaptionText().Contains(ReactionQAZone),
-                    TEXT("The event subscriber presents the actual contact zone caption"));
+                TestCheck(Character->ReactionPresentation->GetPresentedZone() == FName(*ReactionQAZone)
+                    && Character->ReactionPresentation->IsCaptionVisible() == !Profile->ReactionLines.IsEmpty(),
+                    TEXT("The event subscriber answers the actual contact zone (a speech bubble when the profile has lines)"));
             UE_LOG(LogGratiaVerification, Display, TEXT("REACTION QA SELECTED: zone=%s serial=%d clip=%s time=%.4f duration=%.4f"),
                 *ReactionQAZone, ReactionQASerial, *GetPathNameSafe(Animation->ReactionClip), Animation->ReactionTime, Animation->ReactionClipDuration);
         }

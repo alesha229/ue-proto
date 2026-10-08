@@ -38,7 +38,7 @@ flowchart LR
     Profile --> Physics[SecondaryMotion / driven Chaos]
     Profile --> Cloth
     Contact --> Anim
-    Contact -->|OnContactReaction / OnContactReset| Present[ReactionPresentation / local sound / captions]
+    Contact -->|OnContactReaction / OnContactReset| Present[ReactionPresentation / voice / speech bubble]
     Profile --> Present
     Menu[World menu] --> Move
     Menu --> Contact
@@ -54,9 +54,11 @@ flowchart LR
 - `GratiaInteraction`: hover/touch/hold/cooldown, владелец руки, выбор реакции,
   событие `OnContactReaction`. Контактные зоны и collision proxies задаются раздельно.
 - `GratiaReactionPresentation`: явно принадлежит хосту персонажа и подписан на события
-  взаимодействия. Показывает временную подпись и воспроизводит звук; контакты не создают
-  компоненты текста или звуковые ресурсы. `OnContactReset` очищает подпись и останавливает
-  звук при сбросе/смене профиля; подписки удаляются в EndPlay.
+  взаимодействия. Выбирает строку профиля `ReactionLines` (сильное касание, затем зона или канал,
+  затем настроение; без повтора подряд), показывает её текст в облачке (`GratiaBubbleWidget` в
+  `UWidgetComponent` у головы, справа от игрока, лицом к нему) и играет её голос из места касания;
+  контакты не создают компоненты текста или звуковые ресурсы. `OnContactReset` прячет облачко и
+  останавливает звук при сбросе/смене профиля; подписки удаляются в EndPlay.
   Звук реакции пространственный (`ReactionAttenuation`: затухание и направление от зоны касания).
 - `GratiaPerformanceStage`: сцена текущего перформанса из профиля (`FGratiaPerformanceScene`):
   музыка по часам перформанса (через все части, пересинхронизация после перемотки/повтора),
@@ -86,8 +88,12 @@ flowchart LR
   нажим/хват, наблюдение частиц и видимых вершин, отпускание и tracking recovery.
 - `GratiaMenu`: меню в пространстве; в лобби оно открыто, в сцене по Y/B. Луч из правой
   руки (`UWidgetInteractionComponent`) и триггер, контекст `IMC_GratiaMenu` добавляется сам
-  (так OpenXR активирует его action set). Внешний вид — `GratiaMenuWidget` (UMG, собран в C++
-  на UI-материалах и шрифте из библиотеки сцен).
+  (так OpenXR активирует его action set). Внешний вид — `GratiaMenuWidget` (UMG, собран в C++,
+  стиль — скруглённые плашки Slate в коде; из библиотеки сцен только шрифт и кадры сцен). Положение
+  считает `UGratiaMenu::ComputePanelTransform` (ниже глаз, не ниже пола и мебели под панелью, лицом к
+  глазам); при повороте головы больше `FollowAngleDegrees` панель догоняет взгляд.
+- Пауза без фокуса: core ticker в `AGratiaStage1Runtime` следит за `FApp::HasVRFocus` (OpenXR) и ставит
+  игру на паузу, пока фокуса нет.
 - `GratiaSceneDirector`: поток лобби → загрузка → сцена → лобби. Окружения подгружаются как
   streaming-уровни с маркерами и тегами (см. [EXPERIENCE.md](EXPERIENCE.md)), вместе с ними —
   неизменённые уровни паков Fab (`FGratiaSceneEntry::Backdrops`). Директор ведёт
@@ -115,8 +121,9 @@ semantic bone/morph maps, возможности, зоны/прокси, тай�
 бюджеты, приводы и пружины. У другого профиля отсутствующие возможности отключаются явно.
 Runtime не меняет общий Data Asset. Подробный порядок замены — [CHARACTER_PROFILE.md](CHARACTER_PROFILE.md).
 
-Для звука профиль содержит необязательные `ReactionSounds` (имя зоны → ресурс, затем
-ключ `Default`) и `DefaultReactionSound`. Если ресурс не назначен, presenter использует
+Для ответа профиль содержит `ReactionLines` (текст облачка, голос, настроение, зоны или каналы, сила
+касания); без голоса у строки звучат `ReactionSounds` (имя зоны → ресурс, затем ключ `Default`) и
+`DefaultReactionSound`. Профиль без строк не показывает облачко, а без звуков presenter использует
 короткий процедурный сигнал. Назначенные звуки должны быть конечными и не зацикленными.
 Выключатель `Interaction.bSound`, capability профиля и cooldown сохраняются; параметры
 подписи берутся из `ContactSettings`. Presenter можно отключить для своего слушателя

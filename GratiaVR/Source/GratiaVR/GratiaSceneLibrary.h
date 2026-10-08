@@ -170,7 +170,7 @@ class GRATIAVR_API UGratiaUserSettings : public USaveGame
 {
     GENERATED_BODY()
 public:
-    static constexpr int32 CurrentVersion = 2;
+    static constexpr int32 CurrentVersion = 3;
     UPROPERTY() int32 Version = CurrentVersion;
     UPROPERTY() int32 Quality = 1;
     UPROPERTY() bool bHair = true;
@@ -180,9 +180,19 @@ public:
     UPROPERTY() bool bPhysics = true;
     UPROPERTY() bool bSprings = true;
     UPROPERTY() bool bSound = true;
+    /** Reaction character: 0 calm, 1 cheerful, 2 reserved. */
+    UPROPERTY() int32 Mood = 0;
     UPROPERTY() float MusicVolume = 1.0f;
     UPROPERTY() float HapticsScale = 1.0f;
     UPROPERTY() float HeightOffsetCm = 0.0f;
+    /** Reaction voice volume, 0..1 (version 3). */
+    UPROPERTY() float VoiceVolume = 1.0f;
+    /** Reaction lines in a speech bubble by the head. */
+    UPROPERTY() bool bCaptions = true;
+    /** Right stick turning: 0 snap 30 degrees, 1 snap 45 degrees, 2 smooth. */
+    UPROPERTY() int32 TurnMode = 0;
+    /** Stick walking speed: 0 slow, 1 normal, 2 fast. */
+    UPROPERTY() int32 WalkSpeed = 1;
     UPROPERTY() FName LastScene;
     /** Playlist entry (analysis asset name) playing when the game was closed. */
     UPROPERTY() FName LastTrack;

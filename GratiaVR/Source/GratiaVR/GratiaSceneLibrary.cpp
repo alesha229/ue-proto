@@ -43,9 +43,13 @@ void UGratiaUserSettings::Sanitize()
 {
     Version = CurrentVersion;
     Quality = FMath::Clamp(Quality, 0, 2);
+    Mood = FMath::Clamp(Mood, 0, 2);
     MusicVolume = FMath::Clamp(FMath::IsFinite(MusicVolume) ? MusicVolume : 1.0f, 0.0f, 2.0f);
     HapticsScale = FMath::Clamp(FMath::IsFinite(HapticsScale) ? HapticsScale : 1.0f, 0.0f, 1.0f);
     HeightOffsetCm = FMath::Clamp(FMath::IsFinite(HeightOffsetCm) ? HeightOffsetCm : 0.0f, -100.0f, 100.0f);
+    VoiceVolume = FMath::Clamp(FMath::IsFinite(VoiceVolume) ? VoiceVolume : 1.0f, 0.0f, 1.0f);
+    TurnMode = FMath::Clamp(TurnMode, 0, 2);
+    WalkSpeed = FMath::Clamp(WalkSpeed, 0, 2);
 }
 
 bool UGratiaUserSettings::Save()

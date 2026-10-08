@@ -230,6 +230,35 @@ FString AGratiaPreviewCharacter::GetPreviewPoseLabel() const
     }
 }
 
+FString AGratiaPreviewCharacter::GetPoseMenuLabel() const
+{
+    switch (PreviewPose)
+    {
+    case EGratiaPreviewPose::Arms: return TEXT("проверка рук");
+    case EGratiaPreviewPose::Head: return TEXT("проверка головы");
+    case EGratiaPreviewPose::Performance:
+        if (const FGratiaPerformanceClip* Performance = GetPerformance(); Performance && !Performance->Label.IsEmpty())
+            return Performance->Label.ToString();
+        return GetPreviewPoseLabel();
+    default: return TEXT("обычная");
+    }
+}
+
+bool AGratiaPreviewCharacter::IsStance(int32 Index) const
+{
+    if (!CharacterProfile || !CharacterProfile->PerformanceClips.IsValidIndex(Index)) return false;
+    const FGratiaPerformanceClip& Clip = CharacterProfile->PerformanceClips[Index];
+    return Clip.Clip && Clip.bLoop && Clip.Segments.IsEmpty() && !Clip.Scene.Music && !Clip.Scene.PartnerMesh && !Clip.Scene.bHasViewpoint;
+}
+
+void AGratiaPreviewCharacter::CycleStance()
+{
+    int32 Next = PreviewPose == EGratiaPreviewPose::Performance ? PerformanceIndex + 1 : 0;
+    while (CharacterProfile && CharacterProfile->PerformanceClips.IsValidIndex(Next) && !IsStance(Next)) ++Next;
+    if (IsStance(Next) && SetPerformance(Next)) return;
+    SetPreviewPose(EGratiaPreviewPose::Idle);
+}
+
 bool AGratiaPreviewCharacter::SetPerformance(int32 Index)
 {
     if (!CharacterProfile || !CharacterProfile->PerformanceClips.IsValidIndex(Index) || !CharacterProfile->PerformanceClips[Index].Clip)

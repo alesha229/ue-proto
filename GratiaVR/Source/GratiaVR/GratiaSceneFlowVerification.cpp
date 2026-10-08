@@ -1,4 +1,7 @@
 #include "GratiaSceneFlowVerification.h"
+#include "GratiaReactionPresentation.h"
+#include "GratiaLocomotion.h"
+#include "Kismet/GameplayStatics.h"
 #include "GratiaCharacterProfile.h"
 #include "GratiaInteraction.h"
 #include "GratiaMusicPlayer.h"
@@ -102,8 +105,16 @@ void UGratiaSceneFlowVerification::CheckSettings()
     Host->Menu->Toggle();
     Check(Host->Menu->bOpen && Host->Menu->GetWidget(), TEXT("Scene menu opens with a real widget"));
     Check(!Host->IsSceneInteractionAllowed(), TEXT("An open menu blocks scene interaction"));
-    for (int32 Page = 0; Page < 5; ++Page) Host->Menu->Execute(EGratiaMenuAction::Tab, Page);
-    Check(Host->Menu->bOpen, TEXT("All five menu pages remain accessible"));
+    int32 PagesShown = 0;
+    for (int32 Page = 0; Page < UGratiaMenuWidget::PageCount; ++Page)
+    {
+        Host->Menu->Execute(EGratiaMenuAction::Tab, Page);
+        PagesShown += Host->Menu->GetWidget()->GetPage() == Page && Host->Menu->GetWidget()->CountVisibleItems() > 0;
+    }
+    Check(Host->Menu->bOpen && PagesShown == UGratiaMenuWidget::PageCount, TEXT("All menu pages open and offer controls"));
+    Host->Menu->Execute(EGratiaMenuAction::Tab, UGratiaMenuWidget::Playback);
+    Check(Host->Menu->GetWidget()->GetEmptyState().IsEmpty() == Flow->IsPerformanceScene(), TEXT("The show page explains itself outside a show"));
+    Host->Menu->Execute(EGratiaMenuAction::Tab, UGratiaMenuWidget::Scenes);
     const int32 Quality = Interaction->Quality;
     for (int32 Profile = 0; Profile < 3; ++Profile)
     {
@@ -139,6 +150,36 @@ void UGratiaSceneFlowVerification::CheckSettings()
     Check(Host->HeightOffsetCm > Height, TEXT("Height adjustment reaches the runtime"));
     Host->Menu->Execute(EGratiaMenuAction::HeightDown);
     Check(FMath::IsNearlyEqual(Host->HeightOffsetCm, Height), TEXT("Height adjustment restores"));
+    // Voice, captions, comfort and the reset of all settings.
+    UGratiaReactionPresentation* Presenter = Character->ReactionPresentation;
+    Host->Menu->Execute(EGratiaMenuAction::Captions);
+    Check(!Settings->bCaptions && Presenter && !Presenter->bPresentCaptions, TEXT("Captions switch off through the menu"));
+    Host->Menu->Execute(EGratiaMenuAction::Captions);
+    Check(Settings->bCaptions && Presenter && Presenter->bPresentCaptions, TEXT("Captions switch back on"));
+    Flow->SetVoiceVolume(1.0f);
+    Host->Menu->Execute(EGratiaMenuAction::VoiceDown);
+    Check(Settings->VoiceVolume < 1.0f && Presenter && FMath::IsNearlyEqual(Presenter->VoiceVolume, Settings->VoiceVolume), TEXT("Voice volume reaches the reaction voice"));
+    Host->Menu->Execute(EGratiaMenuAction::VoiceUp);
+    Check(FMath::IsNearlyEqual(Settings->VoiceVolume, 1.0f), TEXT("Voice volume restores"));
+    UGratiaLocomotion* Walk = Host->Locomotion;
+    Host->Menu->Execute(EGratiaMenuAction::TurnMode, 2);
+    Check(Walk && Walk->bSmoothTurn && Settings->TurnMode == 2, TEXT("Smooth turning through the menu"));
+    Host->Menu->Execute(EGratiaMenuAction::TurnMode, 1);
+    Check(Walk && !Walk->bSmoothTurn && Walk->SnapDegrees == 45.0f, TEXT("45 degree snap turns through the menu"));
+    Host->Menu->Execute(EGratiaMenuAction::WalkSpeed, 2);
+    Check(Walk && Walk->SpeedCmPerSecond == 180.0f && Settings->WalkSpeed == 2, TEXT("Fast walking through the menu"));
+    Flow->SetMusicVolume(0.5f);
+    Host->Menu->Execute(EGratiaMenuAction::ResetSettings);
+    Settings = Flow->GetUserSettings();
+    Check(Settings && Settings->TurnMode == 0 && Settings->WalkSpeed == 1 && Settings->bCaptions && FMath::IsNearlyEqual(Settings->MusicVolume, 1.0f)
+        && Walk && !Walk->bSmoothTurn && Walk->SnapDegrees == 30.0f && Walk->SpeedCmPerSecond == 120.0f && Interaction->Quality == 1,
+        TEXT("Reset restores every setting and applies it"));
+    if (!Settings) return;
+    // Focus loss (SteamVR dashboard, headset off) pauses the game; focus back resumes it.
+    Host->SetFocusPaused(true);
+    Check(Host->IsFocusPaused() && UGameplayStatics::IsGamePaused(Host), TEXT("Focus loss pauses the game"));
+    Host->SetFocusPaused(false);
+    Check(!Host->IsFocusPaused() && !UGameplayStatics::IsGamePaused(Host), TEXT("Focus return resumes the game"));
     Check(Interaction->bSound, TEXT("Sound starts enabled in the isolated QA settings"));
     Host->Menu->Execute(EGratiaMenuAction::Sound);
     Check(!Interaction->bSound, TEXT("Sound menu disables audio"));

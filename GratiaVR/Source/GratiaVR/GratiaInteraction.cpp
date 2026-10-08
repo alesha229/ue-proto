@@ -162,7 +162,8 @@ double UGratiaInteraction::CharacterScale() const
 
 bool UGratiaInteraction::SceneBounds(FVector& Center, FVector& Extent) const
 {
-    if (!IsValid(SceneContactActor.Get())) return false;
+    // A hidden scene object (the studio while an environment is shown) cannot be touched.
+    if (!IsValid(SceneContactActor.Get()) || SceneContactActor->IsHidden()) return false;
     SceneContactActor->GetActorBounds(false, Center, Extent);
     return ValidBounds(Center, Extent);
 }

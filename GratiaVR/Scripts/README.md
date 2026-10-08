@@ -4,6 +4,26 @@
 `prepare_user_music.py`, `generate_scene_music.py`, `import_scene_thumbnails.py`) —
 [EXPERIENCE.md](../../docs/EXPERIENCE.md). Генератор сцен запускается только по `Build.cmd -RegenerateScenes`.
 
+Ответ персонажа на касание (`DA_Gratia.ReactionLines`, см. [CHARACTER_PROFILE.md](../../docs/CHARACTER_PROFILE.md)):
+
+1. `generate_reaction_voice.py` — системный Python (numpy/scipy): формантный синтез 21 короткого невербального
+   звука (мягкое «ах», «мм», «хм?», вдох-испуг, смешок, вздох, протяжное «а-ах»; по 3 варианта) в
+   `Exports/Gratia/Audio/Reactions/` (WAV не в git, `reactions.json` — в git). `--plot out.png` — спектрограммы.
+2. `setup_character_presentation.py` — коммандлет: импорт звуков в `/Game/Gratia/Audio/Reactions`, реплики
+   (текст облачка, голос, настроение, зоны или каналы, сила касания) и подписи поз свободной игры в `DA_Gratia`.
+
+Ввод контроллеров — `setup_gratia_locomotion.py` (коммандлет): ходьба, поворот, хват, grip, меню и
+`IA_Recenter` (клик любым стиком — центровка).
+
+Звуки меню — `setup_menu_sounds.py` (коммандлет): копии штатных VR-звуков интерфейса движка
+(клик, открытие, закрытие) в `/Game/Gratia/Audio/UI`, чтобы они попадали в сборку; отчёт
+`evidence/04/menu_sounds.json`.
+
+Игра без сборки пакета — `Play-Project.cmd [vr|desktop]` (ярлыки `Play-VR.cmd` и `Play-Desktop.cmd` в корне):
+дособирает C++ модуль редактора (если редактор закрыт) и запускает игру из проекта с `-game`.
+`-GratiaMenuShots` — снять все страницы меню в `GratiaVR/Saved/Screenshots/MenuShots` и выйти
+(с `-GratiaScene=<Id>` — меню внутри сцены).
+
 Мокап VaM (KM466, активный путь, см. [MOCAP_KM466.md](../../docs/MOCAP_KM466.md)):
 
 1. `extract_vam_timeline.py` — чтение исходных VaM Timeline-кривых без изменений

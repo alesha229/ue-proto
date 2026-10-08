@@ -35,4 +35,16 @@ public:
      */
     UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
     static int32 ReduceStaticMeshLOD0(UStaticMesh* Mesh, float PercentTriangles);
+    /**
+     * Static mesh (PackageName, e.g. /Game/Env/SM_RainStreaks; rebuilt in place when it exists) of Streaks rain
+     * streaks for a rain animated by its material: each streak is two crossed quads Width x Length standing on the
+     * disc of Radius around the origin (z 0..Length), in material slot "Rain". UV0 spans each quad (x across, y up
+     * the streak); UV1 = (phase 0..1, brightness 0.5..1) of the streak. The material lifts a streak by up to
+     * FallHeight and lets it fall; the bounds are extended by FallHeight upwards. Clearings (x, y, radius in mesh
+     * space) stay dry: around the player's eyes (streaks there are large and costly in a headset) and through the
+     * character. Returns null on bad input.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
+    static UStaticMesh* CreateRainStreakMesh(const FString& PackageName, int32 Streaks, float Radius, float Length, float Width,
+        float FallHeight, int32 Seed, const TArray<FVector>& Clearings);
 };

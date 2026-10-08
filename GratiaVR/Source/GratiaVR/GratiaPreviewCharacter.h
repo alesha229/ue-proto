@@ -115,6 +115,12 @@ public:
 
     UFUNCTION(BlueprintPure, Category = "Gratia|Preview")
     FString GetPreviewPoseLabel() const;
+    /** The pose as the player sees it in the menu (the clip's Label, Russian UI words for idle and checks). */
+    FString GetPoseMenuLabel() const;
+    /** A looping single clip without partner, music or viewpoint: another way to stand in free play. */
+    bool IsStance(int32 PerformanceIndex) const;
+    /** Free play: idle, then every stance clip, then idle again. */
+    void CycleStance();
 
     UFUNCTION(BlueprintCallable, Category = "Gratia|Preview")
     void CyclePreviewPose();

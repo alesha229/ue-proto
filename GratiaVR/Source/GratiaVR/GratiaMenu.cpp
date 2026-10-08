@@ -19,6 +19,7 @@
 #include "Engine/StaticMesh.h"
 #include "IXRTrackingSystem.h"
 #include "IHeadMountedDisplay.h"
+#include "StereoRendering.h"
 #include "MotionControllerComponent.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
@@ -28,7 +29,14 @@
 #include "InputCoreTypes.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetSystemLibrary.h"
+#include "Sound/SoundBase.h"
+#include "Engine/World.h"
+#include "CollisionQueryParams.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "UObject/ConstructorHelpers.h"
+#include "UnrealClient.h"
+#include "Misc/Paths.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogGratiaMenu, Log, All);
 namespace
@@ -51,10 +59,22 @@ UGratiaMenu::UGratiaMenu()
     static ConstructorHelpers::FObjectFinder<UInputAction> C(TEXT("/Game/Gratia/Input/IA_MenuApply.IA_MenuApply"));
     static ConstructorHelpers::FObjectFinder<UInputMappingContext> D(TEXT("/Game/Gratia/Input/IMC_GratiaMenu.IMC_GratiaMenu"));
     ToggleAction = A.Object; NextAction = B.Object; ApplyAction = C.Object; MenuMapping = D.Object;
+    // Interface sounds (copies of the engine's VR editor UI sounds, setup_menu_sounds.py).
+    static ConstructorHelpers::FObjectFinder<USoundBase> Click(TEXT("/Game/Gratia/Audio/UI/S_MenuClick.S_MenuClick"));
+    static ConstructorHelpers::FObjectFinder<USoundBase> Opened(TEXT("/Game/Gratia/Audio/UI/S_MenuOpen.S_MenuOpen"));
+    static ConstructorHelpers::FObjectFinder<USoundBase> Closed(TEXT("/Game/Gratia/Audio/UI/S_MenuClose.S_MenuClose"));
+    ClickSound = Click.Object; OpenSound = Opened.Object; CloseSound = Closed.Object;
 }
 void UGratiaMenu::BeginPlay()
 {
     Super::BeginPlay();
+    if (FParse::Param(FCommandLine::Get(), TEXT("GratiaMenuShots")))
+    {
+        ShotStep = 0;
+        // Close enough for the panel to fill a desktop view; the placement itself is checked by RunChecks.
+        PanelDistanceCm = 105.0f;
+        PanelBelowEyeCm = 0.0f;
+    }
     // The menu context is applied as the registered asset itself: OpenXR activates the action
     // set of a registered mapping context only, so a runtime copy never received the trigger
     // in the headset (desktop keys/mouse still worked). Stick navigation lives in the asset
@@ -153,14 +173,105 @@ bool UGratiaMenu::Open(bool bLobby)
     auto* Runtime = Cast<AGratiaStage1Runtime>(GetOwner());
     UCameraComponent* Camera = Runtime ? Runtime->GetPlayerCamera() : nullptr;
     if (!Camera || !EnsureWidget(PC)) return false;
-    const FRotator Yaw(0, Camera->GetComponentRotation().Yaw, 0);
-    const FVector Position = Camera->GetComponentLocation() + Yaw.Vector() * PanelDistanceCm;
-    Panel->SetWorldLocation(Position);
-    Panel->SetWorldRotation((Camera->GetComponentLocation() - Position).Rotation());
+    Panel->SetWorldTransform(ComputePanelTransform(Camera));
+    bFollowing = false;
     SetOpen(true);
     if (bLobby) Widget->ShowPage(UGratiaMenuWidget::Scenes);
     Refresh();
     return true;
+}
+FTransform UGratiaMenu::ComputePanelTransform(const UCameraComponent* Camera) const
+{
+    if (!Camera) return Panel ? Panel->GetComponentTransform() : FTransform::Identity;
+    const FVector Eye = Camera->GetComponentLocation();
+    const FRotator Yaw(0.0, Camera->GetComponentRotation().Yaw, 0.0);
+    FVector Position = Eye + Yaw.Vector() * PanelDistanceCm - FVector(0.0, 0.0, PanelBelowEyeCm);
+    // Lowest allowed centre: half the panel above the floor (the player's floor, or furniture under the panel).
+    const double HalfHeight = 0.5 * PanelResolution.Y * PanelScale;
+    double Floor = -UE_BIG_NUMBER;
+    const auto* Runtime = Cast<AGratiaStage1Runtime>(GetOwner());
+    const APawn* Pawn = Runtime ? Runtime->GetPlayerPawn() : nullptr;
+    if (Pawn) Floor = Pawn->GetActorLocation().Z;
+    if (UWorld* World = GetWorld())
+    {
+        FCollisionQueryParams Query(SCENE_QUERY_STAT(GratiaMenuFloor), false, GetOwner());
+        if (Pawn) Query.AddIgnoredActor(Pawn);
+        FHitResult Hit;
+        // Static geometry only: the character standing in front must not lift the panel.
+        if (World->LineTraceSingleByObjectType(Hit, FVector(Position.X, Position.Y, Eye.Z + 20.0), FVector(Position.X, Position.Y, Eye.Z - 400.0),
+            FCollisionObjectQueryParams(ECC_WorldStatic), Query))
+            Floor = FMath::Max(Floor, double(Hit.ImpactPoint.Z));
+    }
+    if (Floor > -UE_BIG_NUMBER) Position.Z = FMath::Max(Position.Z, Floor + HalfHeight + PanelFloorClearanceCm);
+    FRotator Facing = (Eye - Position).Rotation();
+    Facing.Roll = 0.0;
+    return FTransform(Facing, Position, FVector(PanelScale));
+}
+void UGratiaMenu::UpdateFollow(float Delta)
+{
+    const auto* Runtime = Cast<AGratiaStage1Runtime>(GetOwner());
+    const UCameraComponent* Camera = Runtime ? Runtime->GetPlayerCamera() : nullptr;
+    if (!bOpen || !Panel || !Camera) { bFollowing = false; return; }
+    // The panel stays where it opened until the head turns well away from it, then glides back in front.
+    const FVector ToPanel = (Panel->GetComponentLocation() - Camera->GetComponentLocation()).GetSafeNormal2D();
+    const FVector Ahead = FRotator(0.0, Camera->GetComponentRotation().Yaw, 0.0).Vector();
+    const double Angle = FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(FVector::DotProduct(ToPanel, Ahead), -1.0, 1.0)));
+    if (!bFollowing && Angle > FollowAngleDegrees) bFollowing = true;
+    if (!bFollowing) return;
+    FollowTarget = ComputePanelTransform(Camera);
+    const float Alpha = FMath::Clamp(Delta * 6.0f, 0.0f, 1.0f);
+    const FVector Location = FMath::Lerp(Panel->GetComponentLocation(), FollowTarget.GetLocation(), double(Alpha));
+    const FQuat Rotation = FQuat::Slerp(Panel->GetComponentQuat(), FollowTarget.GetRotation(), double(Alpha));
+    Panel->SetWorldLocationAndRotation(Location, Rotation);
+    if (FVector::Dist(Location, FollowTarget.GetLocation()) < 1.0 && Rotation.AngularDistance(FollowTarget.GetRotation()) < 0.01) bFollowing = false;
+}
+void UGratiaMenu::TickShots(float Delta)
+{
+    ShotSeconds += Delta;
+    const UGratiaSceneDirector* Director = GetDirector();
+    if (ShotStep == 0)
+    {
+        // Wait until the lobby or the scene has settled, then open the menu in front of the head.
+        if (!Director || (Director->GetState() != EGratiaFlowState::Lobby && Director->GetState() != EGratiaFlowState::Playing) || ShotSeconds < 8.0f) return;
+        if (bOpen) Close();
+        if (!Open(false) || !Widget) { ShotStep = INDEX_NONE; return; }
+        Widget->ShowPage(0);
+        ShotStep = 1; ShotSeconds = 0.0f;
+        return;
+    }
+    const int32 Page = (ShotStep - 1) / 2;
+    if (Page >= UGratiaMenuWidget::PageCount)
+    {
+        if (ShotSeconds > 1.5f) UKismetSystemLibrary::QuitGame(this, BoundController.Get(), EQuitPreference::Quit, false);
+        return;
+    }
+    if ((ShotStep - 1) % 2 == 0)
+    {
+        if (ShotSeconds < 1.0f) return;
+        const FGratiaSceneEntry* Entry = Director ? Director->GetCurrentEntry() : nullptr;
+        const FString Name = FString::Printf(TEXT("MenuShot_%s_%d.png"), Entry ? *Entry->Id.ToString() : TEXT("Lobby"), Page);
+        FScreenshotRequest::RequestScreenshot(FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Screenshots/MenuShots"), Name), false, false);
+        UE_LOG(LogGratiaMenu, Display, TEXT("MENU SHOT %s empty='%s' visible=%d"), *Name, *Widget->GetEmptyState(), Widget->CountVisibleItems());
+    }
+    else
+    {
+        if (ShotSeconds < 0.6f) return;
+        if (Page + 1 < UGratiaMenuWidget::PageCount) Widget->ShowPage(Page + 1);
+    }
+    ++ShotStep;
+    ShotSeconds = 0.0f;
+}
+void UGratiaMenu::PointerFeedback(bool bClick)
+{
+    if (bClick && ClickSound) UGameplayStatics::PlaySound2D(this, ClickSound, 0.5f);
+    const auto* Runtime = Cast<AGratiaStage1Runtime>(GetOwner());
+    APlayerController* PC = BoundController.Get();
+    if (!PC || !Runtime || !Runtime->bXRActive) return;
+    const auto* Director = GetDirector();
+    const float Scale = Director && Director->GetUserSettings() ? Director->GetUserSettings()->HapticsScale : 1.0f;
+    if (Scale <= 0.0f) return;
+    PC->SetHapticsByValue(bClick ? 0.6f : 0.3f, (bClick ? 0.45f : 0.18f) * Scale, EControllerHand::Right);
+    HapticSeconds = bClick ? 0.05f : 0.025f;
 }
 void UGratiaMenu::Toggle() { if (bOpen) Close(); else Open(false); }
 void UGratiaMenu::OpenLobby() { Open(true); }
@@ -168,6 +279,7 @@ void UGratiaMenu::Close() { SetOpen(false); }
 void UGratiaMenu::SetOpen(bool bValue)
 {
     const bool WasOpen = bOpen;
+    if (bValue != WasOpen && (bValue ? OpenSound : CloseSound)) UGameplayStatics::PlaySound2D(this, bValue ? OpenSound : CloseSound, 0.45f);
     if (!bValue) ReleasePointer();
     bOpen = bValue;
     if (Panel)
@@ -314,17 +426,26 @@ void UGratiaMenu::ApplyQuality(int32 Profile, bool bResetMotion)
         I->bLocalSpring = IsActionAvailable(EGratiaMenuAction::Springs);
     }
     auto* PC = UGameplayStatics::GetPlayerController(this, 0);
+    // One resolution scale per profile. In the headset it sizes the runtime's render target (vr.PixelDensity: less
+    // to render and to composite, no upscale pass); r.ScreenPercentage would scale the views inside it once more
+    // (Medium was 0.85 x 0.85 = 72 % per axis). On a monitor (and in the stereo emulation) it is the screen percentage.
+    const float Scale = Profile == 0 ? 0.70f : Profile == 1 ? 0.85f : 1.0f;
+    IHeadMountedDisplay* HMD = GEngine && GEngine->XRSystem.IsValid() && GEngine->StereoRenderingDevice.IsValid()
+        && GEngine->StereoRenderingDevice->IsStereoEnabled() ? GEngine->XRSystem->GetHMDDevice() : nullptr;
+    if (HMD) HMD->SetPixelDensity(Scale);
     if (PC)
     {
-        PC->ConsoleCommand(FString::Printf(TEXT("r.ScreenPercentage %d"), Profile == 0 ? 70 : Profile == 1 ? 85 : 100), false);
+        PC->ConsoleCommand(FString::Printf(TEXT("r.ScreenPercentage %d"), HMD ? 100 : FMath::RoundToInt(Scale * 100.0f)), false);
         PC->ConsoleCommand(FString::Printf(TEXT("sg.EffectsQuality %d"), Profile), false);
         // Forward MSAA: 4x costs ~1.6 ms of the VR frame in the guesthouse (RTX 3060, 2 x 2572^2 at 85 %),
-        // so Low and Medium use 2x and High keeps 4x for stronger GPUs.
-        PC->ConsoleCommand(FString::Printf(TEXT("r.MSAACount %d"), Profile == 2 ? 4 : 2), false);
+        // so Low and Medium use 2x and High keeps 4x for stronger GPUs. -GratiaMSAA=N overrides it for measurements.
+        int32 Samples = Profile == 2 ? 4 : 2;
+        FParse::Value(FCommandLine::Get(), TEXT("GratiaMSAA="), Samples);
+        PC->ConsoleCommand(FString::Printf(TEXT("r.MSAACount %d"), Samples), false);
     }
-    if (GEngine && GEngine->XRSystem.IsValid())
-        if (IHeadMountedDisplay* HMD = GEngine->XRSystem->GetHMDDevice()) HMD->SetPixelDensity(Profile == 0 ? 0.70f : Profile == 1 ? 0.85f : 1.0f);
-    UE_LOG(LogGratiaMenu, Display, TEXT("Quality=%s; hardware performance acceptance pending"), *QualityLabel());
+    const FIntPoint Target = HMD ? HMD->GetIdealRenderTargetSize() : FIntPoint::ZeroValue;
+    UE_LOG(LogGratiaMenu, Display, TEXT("Quality=%s scale=%.2f via=%s target=%dx%d; hardware performance acceptance pending"), *QualityLabel(), Scale,
+        HMD ? TEXT("pixel_density") : TEXT("screen_percentage"), Target.X, Target.Y);
 }
 FString UGratiaMenu::QualityLabel() const
 {
@@ -354,7 +475,14 @@ bool UGratiaMenu::IsActionAvailable(EGratiaMenuAction Action, int32 Param) const
     case EGratiaMenuAction::Mood: case EGratiaMenuAction::Reset: return I && CharacterScene;
     case EGratiaMenuAction::Pause: case EGratiaMenuAction::Restart: case EGratiaMenuAction::PrevPart: case EGratiaMenuAction::NextPart: case EGratiaMenuAction::SpeedDown: case EGratiaMenuAction::SpeedUp: return Director && Director->IsPerformanceScene();
     case EGratiaMenuAction::PartnerView: { FTransform Eye; return Character.IsValid() && Character->PerformanceStage && Character->PerformanceStage->GetViewpoint(Eye); }
-    case EGratiaMenuAction::MusicDown: case EGratiaMenuAction::MusicUp: case EGratiaMenuAction::HapticsDown: case EGratiaMenuAction::HapticsUp: return Director && Director->GetUserSettings();
+    case EGratiaMenuAction::MusicDown: case EGratiaMenuAction::MusicUp: case EGratiaMenuAction::HapticsDown: case EGratiaMenuAction::HapticsUp:
+    case EGratiaMenuAction::VoiceDown: case EGratiaMenuAction::VoiceUp: case EGratiaMenuAction::Captions: case EGratiaMenuAction::ResetSettings:
+        return Director && Director->GetUserSettings();
+    case EGratiaMenuAction::TurnMode: case EGratiaMenuAction::WalkSpeed:
+    {
+        const auto* Runtime = Cast<AGratiaStage1Runtime>(GetOwner());
+        return Runtime && Runtime->Locomotion && Director && Director->GetUserSettings();
+    }
     case EGratiaMenuAction::HeightDown: case EGratiaMenuAction::HeightUp: case EGratiaMenuAction::Recenter: return Cast<AGratiaStage1Runtime>(GetOwner()) != nullptr;
     case EGratiaMenuAction::Hair: case EGratiaMenuAction::Cloth: case EGratiaMenuAction::Body: case EGratiaMenuAction::Ears:
     {
@@ -399,8 +527,8 @@ void UGratiaMenu::Execute(EGratiaMenuAction Action, int32 Param)
     case EGratiaMenuAction::SpeedUp: Director->StepSpeed(1); break;
     case EGratiaMenuAction::PartnerView: if (Runtime) Runtime->SetPartnerView(!Runtime->IsPartnerView()); break;
     case EGratiaMenuAction::Pose:
-        if (Director && Director->IsActive())
-            Character->SetPreviewPose(Character->PreviewPose == EGratiaPreviewPose::Idle ? EGratiaPreviewPose::Arms : Character->PreviewPose == EGratiaPreviewPose::Arms ? EGratiaPreviewPose::Head : EGratiaPreviewPose::Idle);
+        // Free play switches between stances; the diagnostic poses and performances stay on F2 outside the scenes.
+        if (Director && Director->IsActive()) Character->CycleStance();
         else Character->CyclePreviewPose();
         break;
     case EGratiaMenuAction::Mood: I->Mood = FMath::Clamp(Param, 0, 2); break;
@@ -420,6 +548,11 @@ void UGratiaMenu::Execute(EGratiaMenuAction Action, int32 Param)
     case EGratiaMenuAction::Sound: I->bSound = !I->bSound; break;
     case EGratiaMenuAction::MusicDown: case EGratiaMenuAction::MusicUp: Director->SetMusicVolume(Director->GetUserSettings()->MusicVolume + (Action == EGratiaMenuAction::MusicUp ? 0.1f : -0.1f)); break;
     case EGratiaMenuAction::HapticsDown: case EGratiaMenuAction::HapticsUp: Director->SetHapticsScale(Director->GetUserSettings()->HapticsScale + (Action == EGratiaMenuAction::HapticsUp ? 0.1f : -0.1f)); break;
+    case EGratiaMenuAction::VoiceDown: case EGratiaMenuAction::VoiceUp: Director->SetVoiceVolume(Director->GetUserSettings()->VoiceVolume + (Action == EGratiaMenuAction::VoiceUp ? 0.1f : -0.1f)); break;
+    case EGratiaMenuAction::Captions: Director->SetCaptions(!Director->GetUserSettings()->bCaptions); break;
+    case EGratiaMenuAction::TurnMode: Director->SetComfort(Param, Director->GetUserSettings()->WalkSpeed); break;
+    case EGratiaMenuAction::WalkSpeed: Director->SetComfort(Director->GetUserSettings()->TurnMode, Param); break;
+    case EGratiaMenuAction::ResetSettings: Director->ResetUserSettings(); break;
     case EGratiaMenuAction::HeightDown: case EGratiaMenuAction::HeightUp: if (Runtime) Runtime->AdjustHeight(Action == EGratiaMenuAction::HeightUp ? Runtime->HeightStepCm : -Runtime->HeightStepCm); break;
     case EGratiaMenuAction::Recenter: if (Runtime) Runtime->Recenter(); break;
     case EGratiaMenuAction::TrackPrev: if (Director) Director->PreviousTrack(); break;
@@ -434,6 +567,13 @@ bool UGratiaMenu::IsSelected(EGratiaMenuAction Action, int32 Param) const
 {
     const auto* I = Character.IsValid() ? Character->Interaction.Get() : nullptr;
     const auto* Runtime = Cast<AGratiaStage1Runtime>(GetOwner());
+    const auto* Director = GetDirector();
+    if (const auto* Settings = Director ? Director->GetUserSettings() : nullptr)
+    {
+        if (Action == EGratiaMenuAction::Captions) return Settings->bCaptions;
+        if (Action == EGratiaMenuAction::TurnMode) return Settings->TurnMode == Param;
+        if (Action == EGratiaMenuAction::WalkSpeed) return Settings->WalkSpeed == Param;
+    }
     if (!I) return false;
     switch (Action)
     {
@@ -452,6 +592,26 @@ bool UGratiaMenu::IsSelected(EGratiaMenuAction Action, int32 Param) const
     default: return false;
     }
 }
+FString UGratiaMenu::ValueFor(EGratiaMenuAction Action) const
+{
+    const auto* Director = GetDirector();
+    const auto* Settings = Director ? Director->GetUserSettings() : nullptr;
+    const auto* Runtime = Cast<AGratiaStage1Runtime>(GetOwner());
+    auto Percent = [](float Value) { return FString::Printf(TEXT("%d %%"), FMath::RoundToInt(Value * 100.0f)); };
+    switch (Action)
+    {
+    case EGratiaMenuAction::MusicUp: return Settings ? Percent(Settings->MusicVolume) : TEXT("—");
+    case EGratiaMenuAction::VoiceUp: return Settings ? Percent(Settings->VoiceVolume) : TEXT("—");
+    case EGratiaMenuAction::HapticsUp: return Settings ? Percent(Settings->HapticsScale) : TEXT("—");
+    case EGratiaMenuAction::HeightUp: return Runtime ? FString::Printf(TEXT("%+.0f см"), Runtime->HeightOffsetCm) : TEXT("—");
+    case EGratiaMenuAction::SpeedUp: return Character.IsValid() && Director && Director->IsPerformanceScene()
+        ? FString::Printf(TEXT("%.2g×"), Character->GetPerformanceRate()) : TEXT("—");
+    case EGratiaMenuAction::Pose: return Character.IsValid() && IsActionAvailable(Action) ? Character->GetPoseMenuLabel() : TEXT("—");
+    case EGratiaMenuAction::PrimitiveSize: return Runtime && Runtime->IsPrimitiveShown() ? Runtime->GetPrimitiveLabel() : TEXT("—");
+    case EGratiaMenuAction::PartnerView: return ViewLabel();
+    default: return TEXT("");
+    }
+}
 FString UGratiaMenu::LabelFor(EGratiaMenuAction Action, int32 Param) const
 {
     const auto* I = Character.IsValid() ? Character->Interaction.Get() : nullptr;
@@ -461,7 +621,7 @@ FString UGratiaMenu::LabelFor(EGratiaMenuAction Action, int32 Param) const
     const TCHAR* Name = TEXT("");
     switch (Action)
     {
-    case EGratiaMenuAction::Pose: return TEXT("Поза: ") + (Character.IsValid() ? Character->GetPreviewPoseLabel() : TEXT("недоступна"));
+    case EGratiaMenuAction::Pose: return TEXT("Поза: ") + (Character.IsValid() ? Character->GetPoseMenuLabel() : TEXT("недоступна"));
     case EGratiaMenuAction::Pause: return Character.IsValid() && Character->IsPerformancePaused() ? TEXT("Продолжить") : TEXT("Пауза");
     case EGratiaMenuAction::PartnerView: return FString(TEXT("Вид: ")) + ViewLabel();
     case EGratiaMenuAction::MusicUp: return FString::Printf(TEXT("Музыка: %d%%   +"), FMath::RoundToInt((Settings ? Settings->MusicVolume : 0) * 100));
@@ -476,7 +636,8 @@ FString UGratiaMenu::LabelFor(EGratiaMenuAction Action, int32 Param) const
     case EGratiaMenuAction::Ears: Name = TEXT("Уши / хвост"); break;
     case EGratiaMenuAction::Physics: Name = TEXT("Вторичная физика"); break;
     case EGratiaMenuAction::Springs: Name = TEXT("Локальные пружины"); break;
-    case EGratiaMenuAction::Sound: Name = TEXT("Звук"); break;
+    case EGratiaMenuAction::Sound: Name = TEXT("Голос реакций"); break;
+    case EGratiaMenuAction::Captions: Name = TEXT("Реплики в облачке"); break;
     default: return TEXT("");
     }
     return FString::Printf(TEXT("%s: %s"), Name, IsActionAvailable(Action, Param) && I ? GratiaOnOff(IsSelected(Action, Param)) : TEXT("недоступно"));
@@ -505,6 +666,9 @@ void UGratiaMenu::TickComponent(float Delta, ELevelTick Type, FActorComponentTic
     Super::TickComponent(Delta, Type, Tick);
     auto* PC = UGameplayStatics::GetPlayerController(this, 0);
     BindInput(PC);
+    if (HapticSeconds > 0.0f && (HapticSeconds -= Delta) <= 0.0f && PC) PC->SetHapticsByValue(0.0f, 0.0f, EControllerHand::Right);
+    UpdateFollow(Delta);
+    if (ShotStep != INDEX_NONE) TickShots(Delta);
     const auto* Director = GetDirector();
     if (auto* Runtime = Cast<AGratiaStage1Runtime>(GetOwner()))
         if (Runtime->Locomotion) Runtime->Locomotion->bEnabled = !bOpen && (!Director || !Director->IsSceneInputBlocked());
@@ -542,7 +706,42 @@ bool UGratiaMenu::RunChecks()
     Pass &= bOpen && Widget && Runtime && Runtime->Locomotion && !Runtime->Locomotion->bEnabled;
     Toggle();
     Pass &= !bOpen && Panel && Panel->GetComponentLocation().Equals(Position, 0.001);
+    // Every page builds and offers something to click; the switcher follows the tabs.
+    int32 PagesWithItems = 0;
+    if (Widget)
+    {
+        for (int32 Page = 0; Page < UGratiaMenuWidget::PageCount; ++Page)
+        {
+            Widget->ShowPage(Page);
+            PagesWithItems += Widget->GetPage() == Page && Widget->CountVisibleItems() > 0;
+        }
+        Widget->ShowPage(UGratiaMenuWidget::Scenes);
+    }
+    Pass &= PagesWithItems == UGratiaMenuWidget::PageCount;
+    // Placement: with the head 40 cm above the floor the whole panel still opens above the floor, facing the eyes;
+    // standing, it opens just below eye level.
+    bool bPlacement = false;
+    UCameraComponent* View = Runtime ? Runtime->GetPlayerCamera() : nullptr;
+    if (View && Runtime->GetPlayerPawn())
+    {
+        const FVector Saved = View->GetComponentLocation();
+        const double Floor = Runtime->GetPlayerPawn()->GetActorLocation().Z;
+        const double HalfHeight = 0.5 * PanelResolution.Y * PanelScale;
+        View->SetWorldLocation(FVector(Saved.X, Saved.Y, Floor + 40.0));
+        const FTransform Low = ComputePanelTransform(View);
+        View->SetWorldLocation(FVector(Saved.X, Saved.Y, Floor + 165.0));
+        const FTransform High = ComputePanelTransform(View);
+        View->SetWorldLocation(Saved);
+        const FVector LowToEye = FVector(Saved.X, Saved.Y, Floor + 40.0) - Low.GetLocation();
+        bPlacement = Low.GetLocation().Z - HalfHeight >= Floor + PanelFloorClearanceCm - 0.5
+            && FVector::DotProduct(Low.GetRotation().GetForwardVector(), LowToEye.GetSafeNormal()) > 0.99
+            && FMath::IsNearlyEqual(High.GetLocation().Z, Floor + 165.0 - PanelBelowEyeCm, 1.0);
+        UE_LOG(LogGratiaMenu, Display, TEXT("MENU PLACEMENT: low head bottom=%.1fcm above floor, standing centre=%.1fcm below eyes"),
+            Low.GetLocation().Z - HalfHeight - Floor, Floor + 165.0 - High.GetLocation().Z);
+    }
+    Pass &= bPlacement;
     Selected = 0;
-    UE_LOG(LogGratiaMenu, Display, TEXT("MENU SELFTEST: pose/mood/reset/quality/world widget anchor=%s"), Pass ? TEXT("PASS") : TEXT("FAIL"));
+    UE_LOG(LogGratiaMenu, Display, TEXT("MENU SELFTEST: pose/mood/reset/quality/world widget anchor, %d/%d pages, placement=%s: %s"),
+        PagesWithItems, int32(UGratiaMenuWidget::PageCount), bPlacement ? TEXT("yes") : TEXT("no"), Pass ? TEXT("PASS") : TEXT("FAIL"));
     return Pass;
 }

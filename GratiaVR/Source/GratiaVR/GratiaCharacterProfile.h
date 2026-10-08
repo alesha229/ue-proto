@@ -396,6 +396,42 @@ struct GRATIAVR_API FGratiaPerformanceScene
     bool HasPartner() const { return PartnerMesh != nullptr && !PartnerPose.IsEmpty(); }
 };
 
+UENUM(BlueprintType)
+enum class EGratiaReactionForce : uint8
+{
+    Any,
+    /** Slower than ContactSettings.StrongReactionSpeedCmPerSecond. */
+    Gentle,
+    /** A fast touch: these lines win over every other match. */
+    Strong
+};
+
+/**
+ * What the character answers a reaction with: a speech-bubble Text and/or a voice Sound. The presenter picks at
+ * random among the most specific matches (strong touch, then zone or channel, then mood), never the same line
+ * twice in a row when another one matches.
+ */
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaReactionLine
+{
+    GENERATED_BODY()
+
+    /** Bubble text; empty shows no bubble. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Reaction Line")
+    FText Text;
+    /** Voice; empty falls back to ReactionSounds / DefaultReactionSound. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Reaction Line")
+    TObjectPtr<USoundBase> Sound;
+    /** Mood index (0 calm, 1 cheerful, 2 reserved) or -1 for any mood. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Reaction Line", meta = (ClampMin = "-1", ClampMax = "2"))
+    int32 Mood = -1;
+    /** Contact zones or penetration channels it answers; empty answers any. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Reaction Line")
+    TArray<FName> Zones;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Reaction Line")
+    EGratiaReactionForce Force = EGratiaReactionForce::Any;
+};
+
 USTRUCT(BlueprintType)
 struct GRATIAVR_API FGratiaPerformanceClip
 {
@@ -404,6 +440,9 @@ struct GRATIAVR_API FGratiaPerformanceClip
     /** Menu label; empty uses the clip asset name. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance")
     FName Name;
+    /** Shown to the player (Pose item); empty uses Name. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance")
+    FText Label;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance")
     TObjectPtr<UAnimSequence> Clip;
     /** A long take split for import: played after Clip in order, as one performance. */
@@ -763,6 +802,9 @@ public:
     /** Contact zone name -> sound. Optional Default key precedes DefaultReactionSound. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Presentation|Sound")
     TMap<FName, TObjectPtr<USoundBase>> ReactionSounds;
+    /** Speech bubble and voice per reaction (FGratiaReactionLine). Empty: zone sounds and no bubble. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Presentation|Lines", meta = (TitleProperty = "Text"))
+    TArray<FGratiaReactionLine> ReactionLines;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mapping")
     TMap<FName, FName> SemanticBones;

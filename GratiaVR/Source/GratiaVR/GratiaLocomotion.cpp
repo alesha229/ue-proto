@@ -180,7 +180,14 @@ void UGratiaLocomotion::TickComponent(float DeltaTime, ELevelTick TickType, FAct
     const auto* Runtime = Cast<AGratiaStage1Runtime>(GetOwner());
     if (IsReady() && bEnabled && (!Runtime || !Runtime->SceneDirector || !Runtime->SceneDirector->IsSceneInputBlocked()))
     {
-        if (FMath::Abs(Turn) < 0.25f) bTurnArmed = true;
+        if (bSmoothTurn)
+        {
+            // Continuous turn around the head, with the walking dead zone.
+            const float Axis = FilterStick(FVector2D(Turn, 0.0f), StickDeadZone).X;
+            if (Axis != 0.0f) SnapTurn(Axis * SmoothTurnDegreesPerSecond * FMath::Min(DeltaTime, 0.05f));
+            bTurnArmed = true;
+        }
+        else if (FMath::Abs(Turn) < 0.25f) bTurnArmed = true;
         else if (bTurnArmed && FMath::Abs(Turn) >= 0.7f)
         {
             SnapTurn(Turn > 0.0f ? SnapDegrees : -SnapDegrees);
@@ -200,6 +207,18 @@ FString UGratiaLocomotion::GetDiagnosticText() const
 {
     return FString::Printf(TEXT("Walk %s mapped %.2f/%.2f delta %.2fcm: %s"),
         bRawKeyChannelAvailable ? *FString::Printf(TEXT("raw keys %.2f/%.2f"),RawStick.X,RawStick.Y) : TEXT("OpenXR direct actions"), MappedStick.X, MappedStick.Y, LastPawnDelta.Size(), *MovementReason);
+}
+
+float UGratiaLocomotion::WalkSpeedFor(int32 WalkSpeed)
+{
+    return WalkSpeed <= 0 ? 80.0f : WalkSpeed >= 2 ? 180.0f : 120.0f;
+}
+
+void UGratiaLocomotion::SetComfort(int32 TurnMode, int32 WalkSpeed)
+{
+    bSmoothTurn = TurnMode >= 2;
+    SnapDegrees = TurnMode == 1 ? 45.0f : 30.0f;
+    SpeedCmPerSecond = WalkSpeedFor(WalkSpeed);
 }
 
 bool UGratiaLocomotion::RunChecks(FString& Failure)
@@ -228,9 +247,22 @@ bool UGratiaLocomotion::RunChecks(FString& Failure)
     const UInputAction* Teleport = LoadObject<UInputAction>(nullptr, TEXT("/Game/XRFramework/Input/Actions/IA_Move.IA_Move"));
     const bool Blocked = Subsystem && Teleport && Subsystem->QueryKeysMappedToAction(Teleport).IsEmpty();
     Passed &= Blocked;
+    // Comfort presets: snap angles, smooth turning and walking speeds.
+    const bool SmoothBefore = bSmoothTurn; const float SnapBefore = SnapDegrees, SpeedBefore = SpeedCmPerSecond;
+    SetComfort(1, 0);
+    bool Comfort = !bSmoothTurn && SnapDegrees == 45.0f && SpeedCmPerSecond == 80.0f;
+    SetComfort(2, 2);
+    Comfort &= bSmoothTurn && SpeedCmPerSecond == 180.0f;
+    const FVector SmoothPivot = Camera->GetComponentLocation();
+    const double YawBefore = Pawn->GetActorRotation().Yaw;
+    for (int32 Index = 0; Index < 10; ++Index) SnapTurn(SmoothTurnDegreesPerSecond / 90.0f);
+    Comfort &= Camera->GetComponentLocation().Equals(SmoothPivot, 0.01)
+        && FMath::IsNearlyEqual(FMath::Abs(FRotator::NormalizeAxis(Pawn->GetActorRotation().Yaw - YawBefore)), double(SmoothTurnDegreesPerSecond) / 9.0, 0.01);
+    bSmoothTurn = SmoothBefore; SnapDegrees = SnapBefore; SpeedCmPerSecond = SpeedBefore;
+    Passed &= Comfort;
     Pawn->SetActorTransform(Original, false, nullptr, ETeleportType::TeleportPhysics);
-    if (!Passed) Failure = TEXT("Walk distance, collision, pivot, dead zone or teleport suppression failed");
-    UE_LOG(LogGratiaMovement, Display, TEXT("Locomotion check: walk_distance=%.2fcm wall_stop<274cm teleport_blocked=%s result=%s"),
-        (End - Start).Size2D(), Blocked ? TEXT("yes") : TEXT("no"), Passed ? TEXT("PASS") : TEXT("FAIL"));
+    if (!Passed) Failure = TEXT("Walk distance, collision, pivot, dead zone, comfort presets or teleport suppression failed");
+    UE_LOG(LogGratiaMovement, Display, TEXT("Locomotion check: walk_distance=%.2fcm wall_stop<274cm teleport_blocked=%s comfort=%s result=%s"),
+        (End - Start).Size2D(), Blocked ? TEXT("yes") : TEXT("no"), Comfort ? TEXT("yes") : TEXT("no"), Passed ? TEXT("PASS") : TEXT("FAIL"));
     return Passed;
 }

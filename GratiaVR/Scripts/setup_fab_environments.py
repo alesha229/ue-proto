@@ -13,6 +13,7 @@ with it as FGratiaSceneEntry::Backdrops. Writes evidence/experience/fab_environm
 setup_scene_experience.py.
 """
 import json
+import math
 from pathlib import Path
 
 import unreal
@@ -153,22 +154,28 @@ for path in LIB.list_assets('/Game/Wabi_Sabi_Interior/Materials', recursive=True
         flagged += 1
 
 # Arch-viz density: the guesthouse meshes have no LODs and up to 880k triangles each (5.4 M in all), about
-# 5 ms of the VR frame on an RTX 3060. LOD 0 of every mesh is reduced to at most WABI_MAX_TRIANGLES (and
-# at least 5 % of its source); the art level is re-baked afterwards (its lightmaps match the old geometry).
+# 5 ms of the VR frame on an RTX 3060. LOD 0 of every mesh is reduced (at least 3 % of its source is kept):
+# furniture and props to WABI_MAX_PROP_TRIANGLES (a dining chair had 40k: 0.46 ms of the High VR frame in
+# draws of four chairs), the room itself (walls, ceiling, partitions) to WABI_MAX_TRIANGLES. The art level is
+# re-baked afterwards (its lightmaps match the old geometry).
 WABI_MAX_TRIANGLES = 40000
+WABI_MAX_PROP_TRIANGLES = 15000
+WABI_ROOM_MESHES = ('SM_Wall', 'SM_Ceiling', 'SM_Partition', 'SM_Floor', 'SM_Panel', 'SM_Column', 'SM_Baseboard', 'SM_Window',
+                    'SM_Door', 'SM_Stair', 'SM_Handrail', 'SM_Fireplace', 'SM_Beam')
 reduced_meshes, wabi_triangles = 0, 0
 for path in LIB.list_assets('/Game/Wabi_Sabi_Interior/Geometries', recursive=True, include_folder=False):
     mesh = unreal.load_asset(path)
     if not isinstance(mesh, unreal.StaticMesh):
         continue
-    if LIB.get_metadata_tag(mesh, 'GratiaMaxTriangles') != str(WABI_MAX_TRIANGLES):
+    cap = WABI_MAX_TRIANGLES if mesh.get_name().startswith(WABI_ROOM_MESHES) else WABI_MAX_PROP_TRIANGLES
+    if LIB.get_metadata_tag(mesh, 'GratiaMaxTriangles') != str(cap):
         source = int(LIB.get_metadata_tag(mesh, 'GratiaSourceTriangles') or mesh.get_num_triangles(0))
-        percent = 1.0 if source <= WABI_MAX_TRIANGLES else max(0.05, WABI_MAX_TRIANGLES / source)
+        percent = 1.0 if source <= cap else max(0.03, cap / source)
         if percent < 1.0 or LIB.get_metadata_tag(mesh, 'GratiaMaxTriangles'):
             assert unreal.GratiaExperienceToolsLibrary.reduce_static_mesh_lod0(mesh, percent) > 0, f'Reduction failed: {path}'
             reduced_meshes += 1
         LIB.set_metadata_tag(mesh, 'GratiaSourceTriangles', str(source))
-        LIB.set_metadata_tag(mesh, 'GratiaMaxTriangles', str(WABI_MAX_TRIANGLES))
+        LIB.set_metadata_tag(mesh, 'GratiaMaxTriangles', str(cap))
         assert LIB.save_loaded_asset(mesh, only_if_is_dirty=False)
     wabi_triangles += mesh.get_num_triangles(0)
 
@@ -229,6 +236,67 @@ if not LIB.does_asset_exist(WABI_ART):
     label(volume, 'LightmassVolume')
     assert LEVELS.save_current_level()
 
+# Props taken out of the art level (also from one made earlier). The drinking glass by her is the room's only
+# glass: translucent with 150k triangles, and with it gone the guesthouse renders no separate translucency.
+WABI_REMOVED_MESHES = ('SM_Glass_Drinking_01',)
+removed_props = 0
+assert LEVELS.load_level(WABI_ART)
+for actor in ACTORS.get_all_level_actors():
+    meshes = [c.get_editor_property('static_mesh') for c in actor.get_components_by_class(unreal.StaticMeshComponent)]
+    if any(m and m.get_name() in WABI_REMOVED_MESHES for m in meshes):
+        assert ACTORS.destroy_actor(actor)
+        removed_props += 1
+
+
+def set_baked_lights(level_path, lights, tag):
+    """Static, shadowless point lights (name, position, rgb, intensity, radius) in the loaded level, made or updated
+    when the list changes (its JSON in a metadata tag on the level); True when the level changed and needs a bake."""
+    world = unreal.load_asset(level_path)
+    signature = json.dumps(lights)
+    if LIB.get_metadata_tag(world, tag) == signature:
+        return False
+    present = {a.get_actor_label(): a for a in ACTORS.get_all_level_actors()}
+    for name, position, rgb, intensity, radius in lights:
+        actor = present.get('Experience_' + name) or ACTORS.spawn_actor_from_class(unreal.PointLight, vec(position))
+        actor.set_actor_location(vec(position), False, False)
+        component = actor.get_component_by_class(unreal.LocalLightComponent)
+        # A static light ignores SetLightColor (the first bake came out white): colour it while movable.
+        component.set_mobility(unreal.ComponentMobility.MOVABLE)
+        component.set_light_color(color(rgb))
+        props(component, intensity=float(intensity), cast_shadows=False, attenuation_radius=float(radius))
+        component.set_mobility(unreal.ComponentMobility.STATIC)
+        label(actor, name)
+    LIB.set_metadata_tag(world, tag, signature)
+    return True
+
+
+# The guesthouse's fill: until 8 October two room-wide music lights and a key light by the player, all movable
+# (2.6 ms of the High VR frame in forward shading). The same lights are baked now, shadowless like before; one
+# small movable light in the dining pendant still breathes with the bass (scene level).
+WABI_FILL = [('FillKey', (20, 185, 230), (1.0, 0.86, 0.75), 4.0, 400.0),
+             ('FillPendantA', (108, -39, 175), WARM, 6.0, 450.0),
+             ('FillPendantB', (-102, -17, 175), WARM, 6.0, 450.0)]
+fill_changed = set_baked_lights(WABI_ART, WABI_FILL, 'GratiaFillLights')
+# Faces seen from behind through two-sided materials (arch soffits, lamp shades): Lightmass lights the front
+# only, so they were black wherever the movable fill light used to reach them. Lit from both sides now.
+two_sided_lit = 0
+for actor in ACTORS.get_all_level_actors():
+    for component in actor.get_components_by_class(unreal.StaticMeshComponent):
+        materials = [component.get_material(i) for i in range(component.get_num_materials())]
+        if not any(m and m.get_base_material() and m.get_base_material().get_editor_property('two_sided') for m in materials):
+            continue
+        settings = component.get_editor_property('lightmass_settings')
+        if not settings.get_editor_property('use_two_sided_lighting'):
+            settings.set_editor_property('use_two_sided_lighting', True)
+            component.set_editor_property('lightmass_settings', settings)
+            two_sided_lit += 1
+if removed_props or fill_changed or two_sided_lit:
+    assert LEVELS.save_current_level()
+if fill_changed or two_sided_lit:
+    stamp = ROOT / 'GratiaVR/Saved/FabBake' / (WABI_ART.rsplit('/', 1)[-1] + '.stamp')
+    if stamp.is_file():
+        stamp.unlink()
+
 def scene_level(name, character, player, floor_z, lights, grade=None):
     """Gratia level of one scene: markers, speakers, music-reactive lights (and an optional grade)."""
     path = fresh_level(ENV + '/' + name)
@@ -242,13 +310,14 @@ def scene_level(name, character, player, floor_z, lights, grade=None):
 
 
 def wabi_grade():
-    # The pack's volume uses convolution (FFT) bloom: 4.4 ms of the VR frame on an RTX 3060. A light
-    # standard bloom keeps the window glow; fixed exposure like every scene.
+    # The pack's volume uses convolution (FFT) bloom: 4.4 ms of the VR frame on an RTX 3060; even a light
+    # standard bloom costs 1 ms of the High frame (both eyes), so the guesthouse has none, like the quarter.
+    # Fixed exposure like every scene.
     grade = ACTORS.spawn_actor_from_class(unreal.PostProcessVolume, vec((0, 0, 0)))
     props(grade, unbound=True, priority=10.0)
     pp = grade.get_editor_property('settings')
     props(pp, override_bloom_method=True, bloom_method=unreal.BloomMethod.BM_SOG,
-          override_bloom_intensity=True, bloom_intensity=0.15, override_bloom_threshold=True, bloom_threshold=1.0,
+          override_bloom_intensity=True, bloom_intensity=0.0,
           override_lens_flare_intensity=True, lens_flare_intensity=0.0,
           override_auto_exposure_method=True, auto_exposure_method=unreal.AutoExposureMethod.AEM_MANUAL,
           override_auto_exposure_apply_physical_camera_exposure=True, auto_exposure_apply_physical_camera_exposure=False,
@@ -259,10 +328,11 @@ def wabi_grade():
 
 # Free play: the clear strip between the dining area and the shelves (see docs/EXPERIENCE.md); she
 # stands by the shelves with the window behind, the player looks along +X from the hall.
+# Forward shading pays for every dynamic light in every pixel it reaches: two room-wide music lights and a fill
+# light cost 2.6 ms of the High VR frame. The room is lit by its bake and she is self-lit (unlit toon), so one
+# small light in the dining pendant keeps the lamp breathing with the bass.
 WABI = scene_level('L_WabiSabi', (130.0, 185.0), (-20.0, 185.0), 0.0, [
-    ('PendantA', (108, -39, 175), WARM, 6.0, 450, ('GratiaAudioLight',)),
-    ('PendantB', (-102, -17, 175), WARM, 6.0, 450, ('GratiaAudioLight', 'GratiaAudioMid')),
-    ('Key', (20, 185, 230), (1.0, 0.86, 0.75), 4.0, 400)], wabi_grade)
+    ('PendantA', (106, -38, 160), WARM, 6.0, 160, ('GratiaAudioLight',))], wabi_grade)
 
 # ------------------------------------------------------------------------------- Soul: City
 # The night was lit for UE 4.19 eye adaptation (several EV of automatic brightening). GratiaVR keeps a
@@ -281,6 +351,23 @@ if LIB.get_metadata_tag(soul_world, 'GratiaLightScale') != str(SOUL_LIGHT_SCALE)
     stamp = ROOT / 'GratiaVR/Saved/FabBake' / (SOUL_MAP.rsplit('/', 1)[-1] + '.stamp')
     if stamp.is_file():
         stamp.unlink()
+# Lit steam beside the plaza (6 m from her): lit translucent sprites across the view cost 0.8 ms of the High
+# VR frame. The chimneys, vents and sparks further out keep the quarter alive.
+SOUL_PLAZA = (1875.0, -950.0)
+SOUL_REMOVED_EMITTERS = ('P_Steam_Jet_Emissive_lit',)
+if LIB.get_metadata_tag(soul_world, 'GratiaPlazaClear') != ','.join(SOUL_REMOVED_EMITTERS):
+    steam = [actor for actor in ACTORS.get_all_level_actors()
+             if any(c.get_editor_property('template') and c.get_editor_property('template').get_name() in SOUL_REMOVED_EMITTERS
+                    for c in actor.get_components_by_class(unreal.ParticleSystemComponent))
+             and math.dist((actor.get_actor_location().x, actor.get_actor_location().y), SOUL_PLAZA) < 1500.0]
+    for actor in steam:
+        assert ACTORS.destroy_actor(actor)
+    LIB.set_metadata_tag(soul_world, 'GratiaPlazaClear', ','.join(SOUL_REMOVED_EMITTERS))
+    assert LEVELS.save_current_level()
+# The pink and cyan neon by the plaza, baked (shadowless, 7 m like the movable lights they replace); the music
+# pulse is a smaller movable light at the same spot (scene levels).
+SOUL_PLAZA_CHARACTER, SOUL_NEON_HEIGHT = (1950.0, -950.0), 320.0
+SOUL_NEON_SPOTS = [(SOUL_PLAZA_CHARACTER[0] + 120.0, SOUL_PLAZA_CHARACTER[1] + side * 260.0) for side in (-1.0, 1.0)]
 # Ground heights come from the pack's own collision: trace before building the scene level.
 world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
 SOUL_EXPOSURE_EV = 0.0
@@ -291,6 +378,15 @@ SOUL_CHARACTER, SOUL_PLAYER = (1950.0, -950.0), (1800.0, -950.0)
 heights = [ground(world, *SOUL_CHARACTER, 400.0), ground(world, *SOUL_PLAYER, 400.0)]
 assert all(h is not None and 150.0 < h < 220.0 for h in heights), f'Unexpected ground under the Soul: City markers: {heights}'
 soul_floor = max(heights)
+
+
+SOUL_BAKED_NEON = [('BakedNeonPink', (SOUL_NEON_SPOTS[0][0], SOUL_NEON_SPOTS[0][1], soul_floor + SOUL_NEON_HEIGHT), PINK, 6.0, 700.0),
+                   ('BakedNeonCyan', (SOUL_NEON_SPOTS[1][0], SOUL_NEON_SPOTS[1][1], soul_floor + SOUL_NEON_HEIGHT), CYAN, 6.0, 700.0)]
+if set_baked_lights(SOUL_MAP, SOUL_BAKED_NEON, 'GratiaBakedNeon'):
+    assert LEVELS.save_current_level()
+    stamp = ROOT / 'GratiaVR/Saved/FabBake' / (SOUL_MAP.rsplit('/', 1)[-1] + '.stamp')
+    if stamp.is_file():
+        stamp.unlink()
 
 
 def soul_grade():
@@ -311,22 +407,75 @@ def soul_grade():
 
 
 def soul_neon(character, floor_z):
-    # Pink and cyan neon on the walls around her follow the music (the character is self-lit, unaffected).
-    return [('NeonPink', (character[0] + 120, character[1] - 260, floor_z + 320), PINK, 6.0, 700, ('GratiaAudioLight',)),
-            ('NeonCyan', (character[0] + 120, character[1] + 260, floor_z + 320), CYAN, 6.0, 700, ('GratiaAudioLight', 'GratiaAudioHigh'))]
+    # The music pulse on top of the baked neon (the character is self-lit, unaffected): 3.5 m instead of 7 m keeps
+    # the movable lights off most of the plaza the player looks across (forward shading pays per lit pixel).
+    return [('NeonPink', (SOUL_NEON_SPOTS[0][0], SOUL_NEON_SPOTS[0][1], floor_z + SOUL_NEON_HEIGHT), PINK, 6.0, 350.0, ('GratiaAudioLight',)),
+            ('NeonCyan', (SOUL_NEON_SPOTS[1][0], SOUL_NEON_SPOTS[1][1], floor_z + SOUL_NEON_HEIGHT), CYAN, 6.0, 350.0, ('GratiaAudioLight', 'GratiaAudioHigh'))]
 
 
 SOUL = scene_level('L_SoulCity', SOUL_CHARACTER, SOUL_PLAYER, soul_floor, soul_neon(SOUL_CHARACTER, soul_floor), soul_grade)
 
 
+RAIN_FALL = 750.0
+
+
+def rain_streak_material():
+    """Unlit additive rain streaks that fall in the vertex shader: UV1 of SM_RainStreaks holds each streak's
+    phase and brightness. Streaks fade out at the eyes (pixel depth under ~1 m) instead of crossing the lenses."""
+    path = ENV + '/Fab/M_RainStreak'
+    if LIB.does_asset_exist(path):
+        material = unreal.load_asset(path)
+        EDIT.delete_all_material_expressions(material)
+    else:
+        material = TOOLS.create_asset('M_RainStreak', ENV + '/Fab', unreal.Material, unreal.MaterialFactoryNew())
+    props(material, shading_model=unreal.MaterialShadingModel.MSM_UNLIT, blend_mode=unreal.BlendMode.BLEND_ADDITIVE, two_sided=True)
+
+    def node(cls, x, y, **values):
+        return props(EDIT.create_material_expression(material, cls, x, y), **values)
+
+    def custom(code, output, inputs, x, y):
+        expression = node(unreal.MaterialExpressionCustom, x, y, code=code, output_type=output,
+                          inputs=[props(unreal.CustomInput(), input_name=name) for name, _ in inputs])
+        for name, (source, pin) in inputs:
+            assert EDIT.connect_material_expressions(source, pin, expression, name), name
+        return expression
+
+    uv = node(unreal.MaterialExpressionTextureCoordinate, -900, 0)
+    seeds = node(unreal.MaterialExpressionTextureCoordinate, -900, 150, coordinate_index=1)
+    depth = node(unreal.MaterialExpressionPixelDepth, -900, 300)
+    time = node(unreal.MaterialExpressionTime, -900, 450)
+    tint = node(unreal.MaterialExpressionVectorParameter, -900, 600, parameter_name='Color', default_value=unreal.LinearColor(0.55, 0.62, 0.78, 1.0))
+    intensity = node(unreal.MaterialExpressionScalarParameter, -900, 750, parameter_name='Intensity', default_value=0.6)
+    speed = node(unreal.MaterialExpressionScalarParameter, -900, 900, parameter_name='Speed', default_value=900.0)
+    fall = node(unreal.MaterialExpressionScalarParameter, -900, 1050, parameter_name='Fall', default_value=RAIN_FALL)
+    wind = node(unreal.MaterialExpressionVectorParameter, -900, 1200, parameter_name='Wind', default_value=unreal.LinearColor(0.06, 0.025, 0.0, 0.0))
+    emissive = custom(
+        'float across = 1.0 - abs(UV.x * 2.0 - 1.0); '
+        'float along = sin(saturate(UV.y) * 3.14159265); '
+        'float nearFade = saturate((Depth - 40.0) / 80.0); '
+        'return Color.rgb * (Intensity * across * across * along * Seeds.y * nearFade);',
+        unreal.CustomMaterialOutputType.CMOT_FLOAT3,
+        [('UV', (uv, '')), ('Seeds', (seeds, '')), ('Depth', (depth, '')), ('Color', (tint, 'RGBA')), ('Intensity', (intensity, ''))], -400, 0)
+    offset = custom(
+        'float lift = Fall * (1.0 - frac(Time * Speed / Fall + Seeds.x)); '
+        'return float3(Wind.x * lift, Wind.y * lift, lift);',
+        unreal.CustomMaterialOutputType.CMOT_FLOAT3,
+        [('Seeds', (seeds, '')), ('Time', (time, '')), ('Speed', (speed, '')), ('Fall', (fall, '')), ('Wind', (wind, 'RGBA'))], -400, 600)
+    assert EDIT.connect_material_property(emissive, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    assert EDIT.connect_material_property(offset, '', unreal.MaterialProperty.MP_WORLD_POSITION_OFFSET)
+    EDIT.recompile_material(material)
+    assert LIB.save_loaded_asset(material, only_if_is_dirty=False)
+    return material
+
+
 def soul_rain():
-    """Rain over the plaza as the pack's own desktop map places it (its mobile map has no rain and the
-    mobile storm emits nothing): storms ~7 m above the paving every ~8 m, splashes on the paving, the loop."""
+    """Rain over the plaza. The pack's storm (refracting, lit mesh particles) cost 4 ms of the High VR frame;
+    here 3000 streaks of one mesh fall in its material (one draw, no particles), over the plaza and a little
+    beyond it. Splashes on the paving and the rain loop are the pack's."""
     soul_grade()
-    rain = unreal.load_asset('/Game/SoulCity/Effects/Particles/Water/P_RainStorm')
     splash = unreal.load_asset('/Game/SoulCity/Effects/Particles/Water/P_RainGroundSplash')
     loop = unreal.load_asset('/Game/SoulCity/Sound/Cue/AmbientLooping/Rain_Heavy_Ext_Cue')
-    assert rain and splash and loop, 'Soul: City rain assets are missing'
+    assert splash and loop, 'Soul: City rain assets are missing'
     cx, cy = (SOUL_CHARACTER[0] + SOUL_PLAYER[0]) / 2, (SOUL_CHARACTER[1] + SOUL_PLAYER[1]) / 2
 
     def emitter(name, system, position):
@@ -336,8 +485,19 @@ def soul_rain():
         component.set_editor_property('auto_activate', True)
         label(actor, name)
 
-    for i, (dx, dy) in enumerate(((-400, -400), (-400, 400), (400, -400), (400, 400))):
-        emitter(f'Rain{i}', rain, (cx + dx, cy + dy, soul_floor + 700))
+    # Dry around the player's spot (streaks at the eyes are huge in a headset and the costliest) and through her.
+    clearings = [unreal.Vector(SOUL_PLAYER[0] - cx, SOUL_PLAYER[1] - cy, 130.0), unreal.Vector(SOUL_CHARACTER[0] - cx, SOUL_CHARACTER[1] - cy, 70.0)]
+    streaks = unreal.GratiaExperienceToolsLibrary.create_rain_streak_mesh(ENV + '/Fab/SM_RainStreaks', 3000, 800.0, 45.0, 0.7, RAIN_FALL, 466, clearings)
+    assert streaks, 'Rain streak mesh failed'
+    streaks.set_material(0, rain_streak_material())
+    assert LIB.save_loaded_asset(streaks, only_if_is_dirty=False)
+    rain = ACTORS.spawn_actor_from_class(unreal.StaticMeshActor, vec((cx, cy, soul_floor)))
+    component = rain.static_mesh_component
+    component.set_mobility(unreal.ComponentMobility.MOVABLE)
+    component.set_static_mesh(streaks)
+    props(component, cast_shadow=False)
+    component.set_collision_profile_name('NoCollision')
+    label(rain, 'Rain')
     # The pack's own splash spots on this plaza, then around her and the player.
     spots = [(1870, -780), (2230, -770), (2610, -740), (1830, -1060), (1720, -1550)]
     spots += [(SOUL_CHARACTER[0] + dx, SOUL_CHARACTER[1] + dy) for dx, dy in ((0, -250), (0, 250), (250, 0))]
@@ -371,7 +531,7 @@ report = dict(
         'SoulCity': dict(environment=SOUL, backdrops=[SOUL_MAP, SOUL_COLLISION]),
         'SoulCityRain': dict(environment=SOUL_RAIN, backdrops=[SOUL_MAP, SOUL_COLLISION]),
     },
-    wabi_art=dict(removed_showcase_actors=removed, static_lights=baked_lights, materials_flagged_static_lighting=flagged,
+    wabi_art=dict(removed_showcase_actors=removed, removed_props=removed_props, two_sided_lit=two_sided_lit, static_lights=baked_lights, materials_flagged_static_lighting=flagged,
                   meshes_reduced=reduced_meshes, lod0_triangles=wabi_triangles, textures_capped=capped_textures),
     # Lightmass quality per map: the small guesthouse at Production, the large city at Medium (~35 min).
     soul_floor_z=soul_floor, bake=[dict(map=path, quality=quality) for path, quality in ((WABI_ART, 'Production'), (SOUL_MAP, 'Medium'))

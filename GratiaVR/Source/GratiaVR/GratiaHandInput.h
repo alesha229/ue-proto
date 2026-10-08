@@ -21,6 +21,8 @@ public:
     /** Grip squeeze (IA_GripLeft/Right in IMC_GratiaLocomotion; desktop C/V). */
     float GetGrip(bool bLeft) const;
     float GetIndexCurl(bool bLeft) const;
+    /** Either stick clicked (IA_Recenter in IMC_GratiaLocomotion). */
+    bool IsRecenterPressed() const;
     FString GetDiagnostics() const;
 protected:
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
@@ -33,6 +35,7 @@ private:
     UPROPERTY() TObjectPtr<UInputAction> GraspRight;
     UPROPERTY() TObjectPtr<UInputAction> IndexLeft;
     UPROPERTY() TObjectPtr<UInputAction> IndexRight;
+    UPROPERTY() TObjectPtr<UInputAction> RecenterAction;
     float ReadAction(UInputAction* Action, bool bLeft) const;
     UPROPERTY() TObjectPtr<UInputMappingContext> Mapping;
     UPROPERTY() TObjectPtr<UEnhancedInputComponent> Input;

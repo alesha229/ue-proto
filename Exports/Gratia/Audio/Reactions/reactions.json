@@ -1,0 +1,128 @@
+[
+  {
+    "name": "Soft_1",
+    "kind": "soft",
+    "variant": 1,
+    "seconds": 0.52
+  },
+  {
+    "name": "Soft_2",
+    "kind": "soft",
+    "variant": 2,
+    "seconds": 0.562
+  },
+  {
+    "name": "Soft_3",
+    "kind": "soft",
+    "variant": 3,
+    "seconds": 0.478
+  },
+  {
+    "name": "Hum_1",
+    "kind": "hum",
+    "variant": 1,
+    "seconds": 0.55
+  },
+  {
+    "name": "Hum_2",
+    "kind": "hum",
+    "variant": 2,
+    "seconds": 0.594
+  },
+  {
+    "name": "Hum_3",
+    "kind": "hum",
+    "variant": 3,
+    "seconds": 0.506
+  },
+  {
+    "name": "Ask_1",
+    "kind": "ask",
+    "variant": 1,
+    "seconds": 0.42
+  },
+  {
+    "name": "Ask_2",
+    "kind": "ask",
+    "variant": 2,
+    "seconds": 0.454
+  },
+  {
+    "name": "Ask_3",
+    "kind": "ask",
+    "variant": 3,
+    "seconds": 0.386
+  },
+  {
+    "name": "Startle_1",
+    "kind": "startle",
+    "variant": 1,
+    "seconds": 0.42
+  },
+  {
+    "name": "Startle_2",
+    "kind": "startle",
+    "variant": 2,
+    "seconds": 0.439
+  },
+  {
+    "name": "Startle_3",
+    "kind": "startle",
+    "variant": 3,
+    "seconds": 0.401
+  },
+  {
+    "name": "Giggle_1",
+    "kind": "giggle",
+    "variant": 1,
+    "seconds": 0.45
+  },
+  {
+    "name": "Giggle_2",
+    "kind": "giggle",
+    "variant": 2,
+    "seconds": 0.29
+  },
+  {
+    "name": "Giggle_3",
+    "kind": "giggle",
+    "variant": 3,
+    "seconds": 0.45
+  },
+  {
+    "name": "Sigh_1",
+    "kind": "sigh",
+    "variant": 1,
+    "seconds": 0.75
+  },
+  {
+    "name": "Sigh_2",
+    "kind": "sigh",
+    "variant": 2,
+    "seconds": 0.81
+  },
+  {
+    "name": "Sigh_3",
+    "kind": "sigh",
+    "variant": 3,
+    "seconds": 0.69
+  },
+  {
+    "name": "Moan_1",
+    "kind": "moan",
+    "variant": 1,
+    "seconds": 0.9
+  },
+  {
+    "name": "Moan_2",
+    "kind": "moan",
+    "variant": 2,
+    "seconds": 0.972
+  },
+  {
+    "name": "Moan_3",
+    "kind": "moan",
+    "variant": 3,
+    "seconds": 0.828
+  }
+]

@@ -75,6 +75,14 @@ public:
     void SaveUserSettings();
     void SetMusicVolume(float Volume);
     void SetHapticsScale(float Scale);
+    /** Reaction voice volume 0..1 (the character's voice lines). */
+    void SetVoiceVolume(float Volume);
+    /** Reaction lines in a speech bubble by the head. */
+    void SetCaptions(bool bShow);
+    /** Turning (0 snap 30, 1 snap 45, 2 smooth) and walking speed (0 slow, 1 normal, 2 fast). */
+    void SetComfort(int32 TurnMode, int32 WalkSpeed);
+    /** Every player setting back to its default (the playlist position is kept), applied and saved. */
+    void ResetUserSettings();
     /** Playlist: mixes into the next/previous track on a beat (a performance's own music mutes). */
     void NextTrack();
     void PreviousTrack();
@@ -134,7 +142,7 @@ private:
     EGratiaFlowState State = EGratiaFlowState::Off;
     int32 Current = INDEX_NONE, Pending = INDEX_NONE;
     float StateSeconds = 0.0f;
-    bool bPendingStart = false, bTestMode = false, bFlowQA = false;
+    bool bPendingStart = false, bTestMode = false, bFlowQA = false, bMenuShots = false;
     /** -GratiaScene=<Id>: start straight in this scene (performance and soak runs in a real environment). */
     FName PinnedScene;
     bool bVisibilityRequested = false;

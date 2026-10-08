@@ -1,85 +1,85 @@
 {
-  "FileVersion": 3,
-  "EngineAssociation": "5.8",
-  "Category": "",
-  "Description": "Gratia PC VR prototype - stage 1",
-  "Plugins": [
-    {
-      "Name": "KawaiiPhysics",
-      "Enabled": true,
-      "MarketplaceURL": "com.epicgames.launcher://ue/Fab/product/f870c07e-0a02-4a78-a888-e52a22794572"
-    },
-    {
-      "Name": "AndroidFileServer",
-      "Enabled": false
-    },
-    {
-      "Name": "OpenXR",
-      "Enabled": true
-    },
-    {
-      "Name": "OpenXREyeTracker",
-      "Enabled": false
-    },
-    {
-      "Name": "OpenXRHandTracking",
-      "Enabled": false
-    },
-    {
-      "Name": "PICOController",
-      "Enabled": false,
-      "SupportedTargetPlatforms": [
-        "Win64",
-        "Linux",
-        "Android"
-      ]
-    },
-    {
-      "Name": "PythonScriptPlugin",
-      "Enabled": true,
-      "TargetAllowList": [
-        "Editor"
-      ]
-    },
-    {
-      "Name": "EditorScriptingUtilities",
-      "Enabled": true,
-      "TargetAllowList": [
-        "Editor"
-      ]
-    },
-    {
-      "Name": "XRBase",
-      "Enabled": true
-    },
-    {
-      "Name": "ModelContextProtocol",
-      "Enabled": true,
-      "TargetAllowList": [
-        "Editor"
-      ]
-    },
-    {
-      "Name": "EditorToolset",
-      "Enabled": true,
-      "TargetAllowList": [
-        "Editor"
-      ]
-    }
-  ],
-  "TargetPlatforms": [
-    "Windows"
-  ],
-  "Modules": [
-    {
-      "Name": "GratiaVR",
-      "Type": "Runtime",
-      "LoadingPhase": "Default"
-    },
-    {
-      "Name": "GratiaVREditorTools",
-      "Type": "Editor",
-      "LoadingPhase": "Default"
-    }
-  ]
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"Category": "",
+	"Description": "Gratia PC VR prototype - stage 1",
+	"Modules": [
+		{
+			"Name": "GratiaVR",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "GratiaVREditorTools",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "KawaiiPhysics",
+			"Enabled": true,
+			"MarketplaceURL": "com.epicgames.launcher://ue/Fab/product/f870c07e-0a02-4a78-a888-e52a22794572"
+		},
+		{
+			"Name": "AndroidFileServer",
+			"Enabled": false
+		},
+		{
+			"Name": "OpenXR",
+			"Enabled": true
+		},
+		{
+			"Name": "OpenXREyeTracker",
+			"Enabled": true
+		},
+		{
+			"Name": "OpenXRHandTracking",
+			"Enabled": true
+		},
+		{
+			"Name": "PICOController",
+			"Enabled": false,
+			"SupportedTargetPlatforms": [
+				"Win64",
+				"Linux",
+				"Android"
+			]
+		},
+		{
+			"Name": "PythonScriptPlugin",
+			"Enabled": true,
+			"TargetAllowList": [
+				"Editor"
+			]
+		},
+		{
+			"Name": "EditorScriptingUtilities",
+			"Enabled": true,
+			"TargetAllowList": [
+				"Editor"
+			]
+		},
+		{
+			"Name": "XRBase",
+			"Enabled": true
+		},
+		{
+			"Name": "ModelContextProtocol",
+			"Enabled": true,
+			"TargetAllowList": [
+				"Editor"
+			]
+		},
+		{
+			"Name": "EditorToolset",
+			"Enabled": true,
+			"TargetAllowList": [
+				"Editor"
+			]
+		}
+	],
+	"TargetPlatforms": [
+		"Windows"
+	]
 }
