@@ -495,6 +495,12 @@ bool UGratiaMenu::IsActionAvailable(EGratiaMenuAction Action, int32 Param) const
         const auto* Runtime = Cast<AGratiaStage1Runtime>(GetOwner());
         return Runtime && I && Profile && Profile->Penetration.bEnabled && CharacterScene;
     }
+    case EGratiaMenuAction::HandPenetration:
+    {
+        const auto* Runtime = Cast<AGratiaStage1Runtime>(GetOwner());
+        return Runtime && I && Profile && Profile->Penetration.bEnabled && CharacterScene;
+    }
+    case EGratiaMenuAction::Forearms: return Cast<AGratiaStage1Runtime>(GetOwner()) != nullptr;
     case EGratiaMenuAction::PrimitiveSize:
     {
         const auto* Runtime = Cast<AGratiaStage1Runtime>(GetOwner());
@@ -553,6 +559,14 @@ void UGratiaMenu::Execute(EGratiaMenuAction Action, int32 Param)
     case EGratiaMenuAction::TurnMode: Director->SetComfort(Param, Director->GetUserSettings()->WalkSpeed); break;
     case EGratiaMenuAction::WalkSpeed: Director->SetComfort(Director->GetUserSettings()->TurnMode, Param); break;
     case EGratiaMenuAction::ResetSettings: Director->ResetUserSettings(); break;
+    case EGratiaMenuAction::HandPenetration:
+        if (Runtime) Runtime->bHandPenetration = !Runtime->bHandPenetration;
+        if (Director) Director->SaveUserSettings();
+        break;
+    case EGratiaMenuAction::Forearms:
+        if (Runtime) Runtime->bShowForearms = !Runtime->bShowForearms;
+        if (Director) Director->SaveUserSettings();
+        break;
     case EGratiaMenuAction::HeightDown: case EGratiaMenuAction::HeightUp: if (Runtime) Runtime->AdjustHeight(Action == EGratiaMenuAction::HeightUp ? Runtime->HeightStepCm : -Runtime->HeightStepCm); break;
     case EGratiaMenuAction::Recenter: if (Runtime) Runtime->Recenter(); break;
     case EGratiaMenuAction::TrackPrev: if (Director) Director->PreviousTrack(); break;
@@ -589,6 +603,8 @@ bool UGratiaMenu::IsSelected(EGratiaMenuAction Action, int32 Param) const
     case EGratiaMenuAction::Sound: return I->bSound;
     case EGratiaMenuAction::PartnerView: return Runtime && Runtime->IsPartnerView();
     case EGratiaMenuAction::Primitive: return Runtime && Runtime->IsPrimitiveShown();
+    case EGratiaMenuAction::HandPenetration: return Runtime && Runtime->bHandPenetration;
+    case EGratiaMenuAction::Forearms: return Runtime && Runtime->bShowForearms;
     default: return false;
     }
 }

@@ -601,14 +601,13 @@ UPanelWidget* UGratiaMenuWidget::BuildCharacterPage()
     UVerticalBox* Behaviour = AddSection(Left, TEXT("ПОВЕДЕНИЕ"));
     AddCycle(Behaviour, TEXT("Поза"), TEXT("обычная или игривая стойка"), EGratiaMenuAction::Pose, Character);
     AddToggle(Behaviour, TEXT("Демо реакций"), TEXT("персонаж сам показывает реакции по зонам"), EGratiaMenuAction::Demo, Character);
-    UVerticalBox* Primitive = AddSection(Right, TEXT("ПРИМИТИВ"));
-    AddToggle(Primitive, TEXT("Показать"), TEXT("появится перед вами; grip у рукояти — взять"), EGratiaMenuAction::Primitive, Character);
+    UVerticalBox* Primitive = AddSection(Right, TEXT("ПРОНИКНОВЕНИЕ"));
+    AddToggle(Primitive, TEXT("Примитив"), TEXT("появится перед вами; grip у рукояти — взять"), EGratiaMenuAction::Primitive, Character);
     AddCycle(Primitive, TEXT("Размер"), TEXT("от S до XXL"), EGratiaMenuAction::PrimitiveSize, Character);
-    UVerticalBox* Reset = AddSection(Right, TEXT("СБРОС"));
-    UTextBlock* ResetHint = MakeText(TEXT("Вернуть спокойную стойку, отпустить контакты и примитив"), 17, MenuSoft, TEXT("Regular"));
-    ResetHint->SetAutoWrapText(true);
-    Reset->AddChildToVerticalBox(ResetHint)->SetPadding(FMargin(2, 0, 0, 8));
-    AddTextButton(Reset, TEXT("Сбросить позу и контакты"), EGratiaMenuAction::Reset, 0, Character, -1.0f);
+    AddToggle(Primitive, TEXT("Руки в каналы"), TEXT("grip — три пальца, большой на стике — ладонь, grip и курок — кулак"), EGratiaMenuAction::HandPenetration, Character);
+    // Reset sits under the behaviour on the left; the right column holds penetration.
+    UVerticalBox* Reset = AddSection(Left, TEXT("СБРОС"));
+    AddTextButton(Reset, TEXT("Сбросить позу и контакты"), EGratiaMenuAction::Reset, 0, Character, -1.0f, 58.0f, 21);
     UWidget* Empty = MakeEmptyState(TEXT("Персонажа нет рядом"),
         TEXT("Откройте сцену во вкладке «Сцены», чтобы менять настроение, позу и примитив."));
     UOverlaySlot* EmptySlot = Page->AddChildToOverlay(Empty);
@@ -679,6 +678,7 @@ UPanelWidget* UGratiaMenuWidget::BuildPlayerPage()
     AddSegments(Comfort, {TEXT("Медленно"), TEXT("Обычно"), TEXT("Быстро")}, EGratiaMenuAction::WalkSpeed, Player, -1.0f);
     UVerticalBox* Position = AddSection(Left, TEXT("ПОЛОЖЕНИЕ"));
     AddStepper(Position, TEXT("Высота глаз"), TEXT("если пол кажется выше или ниже"), EGratiaMenuAction::HeightDown, EGratiaMenuAction::HeightUp, Player);
+    AddToggle(Position, TEXT("Предплечья"), TEXT("руки продолжаются до локтя"), EGratiaMenuAction::Forearms, Player);
     AddTextButton(Position, TEXT("Центрировать взгляд"), EGratiaMenuAction::Recenter, 0, Player, -1.0f, 60.0f);
     UVerticalBox* Help = AddSection(Right, TEXT("УПРАВЛЕНИЕ"), true);
     const TCHAR* Lines[][2] = {
@@ -691,6 +691,9 @@ UPanelWidget* UGratiaMenuWidget::BuildPlayerPage()
         {TEXT("Курок у груди"), TEXT("обхватить и сжать")},
         {TEXT("Grip у тела"), TEXT("взять руку, ногу, талию")},
         {TEXT("Grip у рукояти"), TEXT("взять примитив")},
+        {TEXT("Grip у входа"), TEXT("три пальца внутрь")},
+        {TEXT("Большой на стике"), TEXT("ладонь, пальцы прямо")},
+        {TEXT("Grip и курок"), TEXT("кулак")},
     };
     for (const auto& Line : Lines)
     {

@@ -19,10 +19,14 @@
 #include "GratiaAnimInstance.h"
 #include "GratiaPenetration.h"
 #include "GratiaPenetrator.h"
+#include "GratiaChannelShots.h"
 
 #include "Camera/CameraComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SphereComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
+#include "Materials/MaterialInterface.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/TextRenderComponent.h"
 #include "GameFramework/Pawn.h"
@@ -107,6 +111,12 @@ void AGratiaStage1Runtime::BeginPlay()
     BindPlayer();
     SetTargetCharacter(TargetCharacter.Get());
     FocusTicker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &AGratiaStage1Runtime::TickFocus), 0.1f);
+    if (FParse::Param(FCommandLine::Get(), TEXT("GratiaChannelShots")))
+    {
+        UGratiaChannelShots* Shots = NewObject<UGratiaChannelShots>(this, TEXT("GratiaChannelShots"));
+        AddInstanceComponent(Shots);
+        Shots->RegisterComponent();
+    }
     UE_LOG(LogGratiaStage1, Display, TEXT("BUILD id=%s commit=%s"), TEXT(GRATIA_BUILD_ID), TEXT(GRATIA_BUILD_COMMIT));
     UE_LOG(LogGratiaStage1, Display, TEXT("Stage 1 runtime started. R=recenter, PgUp/PgDn=height, Home=reset height, F1=debug, F6=primitive on/off, F7=primitive size, F8/F9=toggle forced left/right tracking loss."));
 }
@@ -118,6 +128,8 @@ void AGratiaStage1Runtime::EndPlay(const EEndPlayReason::Type EndPlayReason)
     FlushScenePerformance();
     ReleasePrimitive(LeftHand, true, TEXT("end play"));
     ReleasePrimitive(RightHand, false, TEXT("end play"));
+    for (AGratiaPenetrator* Shaft : HandShafts) if (Shaft) Shaft->Destroy();
+    HandShafts.Reset();
     UpdateHaptics(LeftHand, true, 0.0f, 0.0f);
     UpdateHaptics(RightHand, false, 0.0f, 0.0f);
     RestoreHand(LeftHand);
@@ -255,6 +267,147 @@ void AGratiaStage1Runtime::UpdatePrimitiveGrab(FHandProxy& Hand, bool bLeft, con
     UE_LOG(LogGratiaStage1, Display, TEXT("PRIMITIVE_GRAB hand=%s size=%s"), bLeft ? TEXT("L") : TEXT("R"), *Primitive->GetSizeLabel());
 }
 
+void AGratiaStage1Runtime::UpdateHandShaft(FHandProxy& Hand, bool bLeft, const FTransform& Target)
+{
+    using namespace GratiaPenetration;
+    UGratiaPenetration* Penetration = TargetCharacter.IsValid() ? TargetCharacter->Penetration.Get() : nullptr;
+    const int32 Side = bLeft ? 0 : 1;
+    if (HandShafts.Num() < 2) HandShafts.SetNum(2);
+    FGratiaPalmFrame Palm;
+    const bool bReady = bHandPenetration && Penetration && Penetration->IsEnabled() && IsSceneInteractionAllowed() && GetWorld()
+        && Hand.Gate.State == EGratiaHandState::Tracked && !Hand.bHoldsPrimitive && Hand.GripBone.IsNone()
+        && Hand.HandAnim.IsValid() && Hand.HandAnim->GetPalmFrame(Palm);
+    EHandShape Shape = EHandShape::None;
+    if (bReady)
+    {
+        // Grip: three fingers. Grip and trigger: fist. Nothing pressed with the thumb resting on the stick: the whole
+        // hand, fingers straight. A relaxed hand (thumb up, nothing pressed) does not enter.
+        const float Grip = HandInput ? HandInput->GetGrip(bLeft) : 0.0f;
+        const float Trigger = HandInput ? HandInput->GetTrigger(bLeft) : 0.0f;
+        const bool bThumb = HandInput && HandInput->IsThumbDown(bLeft);
+        if (Grip >= 0.6f && Trigger >= 0.6f) Shape = EHandShape::Fist;
+        else if (Grip >= 0.6f && Trigger <= 0.35f) Shape = EHandShape::Fingers;
+        else if (Grip <= 0.35f && Trigger <= 0.35f && bThumb) Shape = EHandShape::Hand;
+    }
+    Hand.PenetrationShape = uint8(Shape);
+    TObjectPtr<AGratiaPenetrator>& Shaft = HandShafts[Side];
+    if (Shape == EHandShape::None)
+    {
+        if (Shaft) Shaft->SetHeld(INDEX_NONE);
+        return;
+    }
+    if (!Shaft)
+    {
+        FActorSpawnParameters Parameters;
+        Parameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+        Shaft = GetWorld()->SpawnActor<AGratiaPenetrator>(AGratiaPenetrator::StaticClass(), Target, Parameters);
+        if (!Shaft) return;
+        // The hand itself is what the player sees; its shaft only carries the shape to the channels.
+        Shaft->SetActorHiddenInGame(true);
+        Shaft->bAnchorWhenReleased = false;
+    }
+    const double Scale = Target.GetScale3D().GetAbsMax();
+    static const FName Labels[] = {NAME_None, TEXT("fingers"), TEXT("hand"), TEXT("fist")};
+    Shaft->SetShape(Labels[uint8(Shape)], HandShaft(Shape, Scale));
+    // +X along the fingers (palm frame of the hand mesh on the controller pose): the tip at the fingertips or the
+    // fist's knuckles, the base back along the forearm.
+    const FVector Finger = Target.TransformVectorNoScale(Palm.Finger).GetSafeNormal();
+    const FVector Normal = Target.TransformVectorNoScale(Palm.Normal).GetSafeNormal();
+    if (Finger.IsNearlyZero() || Normal.IsNearlyZero()) { Shaft->SetHeld(INDEX_NONE); return; }
+    const FVector Tip = Target.TransformPosition(Palm.Point) + Finger * HandTipFromPalmCm(Shape) * Scale;
+    Shaft->SetBase(FTransform(FRotationMatrix::MakeFromXZ(Finger, Normal).ToQuat(), Tip - Finger * Shaft->GetShaft().Length));
+    Shaft->SetHeld(Side);
+}
+
+void AGratiaStage1Runtime::ApplyHandInChannel(FHandProxy& Hand, bool bLeft)
+{
+    UGratiaPenetration* Penetration = TargetCharacter.IsValid() ? TargetCharacter->Penetration.Get() : nullptr;
+    AGratiaPenetrator* Shaft = HandShafts.IsValidIndex(bLeft ? 0 : 1) ? HandShafts[bLeft ? 0 : 1].Get() : nullptr;
+    FVector Entrance, Inward;
+    double Inserted = 0.0, Depth = 0.0;
+    const bool bInside = Penetration && Shaft && Penetration->GetEngagedFrame(Shaft, Entrance, Inward, Inserted, Depth);
+    if (bInside != Hand.bInChannel)
+        UE_LOG(LogGratiaStage1, Display, TEXT("HAND_CHANNEL hand=%s shape=%s %s"), bLeft ? TEXT("L") : TEXT("R"),
+            Shaft ? *Shaft->GetSizeLabel() : TEXT("-"), bInside ? TEXT("enter") : TEXT("exit"));
+    Hand.bInChannel = bInside;
+    FGratiaPalmFrame Palm;
+    if (!bInside || !Hand.Visual.IsValid() || !Hand.HandAnim.IsValid() || !Hand.HandAnim->GetPalmFrame(Palm)) return;
+    // The rigid hand turns onto the channel axis within the first 3 cm and its tip stops at the channel's depth
+    // (the controller may go further; the visible hand does not).
+    const FTransform Visual = Hand.Visual->GetComponentTransform();
+    const FVector TipLocal = Palm.Point + Palm.Finger * GratiaPenetration::HandTipFromPalmCm(GratiaPenetration::EHandShape(Hand.PenetrationShape));
+    const double Align = FMath::Clamp(Inserted / 3.0, 0.0, 1.0);
+    const FVector Finger = Visual.TransformVectorNoScale(Palm.Finger).GetSafeNormal();
+    const FQuat Rotation = FQuat::Slerp(FQuat::Identity, FQuat::FindBetweenNormals(Finger, Inward), Align) * Visual.GetRotation();
+    const FVector Tip = FMath::Lerp(Visual.TransformPosition(TipLocal), Entrance + Inward * FMath::Min(Inserted, Depth), Align);
+    const FTransform Placed(Rotation, Tip - Rotation.RotateVector(TipLocal * Visual.GetScale3D()), Visual.GetScale3D());
+    if (!IsFiniteTransform(Placed)) return;
+    Hand.Visual->SetWorldTransform(Placed, false, nullptr, ETeleportType::TeleportPhysics);
+    Hand.LastWorld = Placed;
+    Hand.Smoothed = Placed;
+    Hand.bSmoothedValid = true;
+}
+
+void AGratiaStage1Runtime::UpdateForearm(FHandProxy& Hand, bool bLeft)
+{
+    FGratiaPalmFrame Palm;
+    const bool bShown = bShowForearms && Hand.Visual.IsValid() && Hand.Visual->IsVisible() && Hand.HandAnim.IsValid()
+        && Hand.HandAnim->GetPalmFrame(Palm) && Camera.IsValid() && Hand.Gate.State != EGratiaHandState::Unavailable;
+    if (!Hand.Forearm.IsValid() && bShown)
+    {
+        UStaticMesh* Cylinder = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+        UStaticMesh* Sphere = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+        // The hand's own material, so the forearm reads as the same skin.
+        const UMeshComponent* HandMesh = Cast<UMeshComponent>(Hand.Visual.Get());
+        UMaterialInterface* Skin = HandMesh ? HandMesh->GetMaterial(0) : nullptr;
+        auto Make = [this, Skin](UStaticMesh* Shape, const TCHAR* Name)
+        {
+            UStaticMeshComponent* Part = NewObject<UStaticMeshComponent>(this, Name);
+            AddInstanceComponent(Part);
+            Part->SetupAttachment(GetRootComponent());
+            Part->SetStaticMesh(Shape);
+            if (Skin) Part->SetMaterial(0, Skin);
+            Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+            Part->SetCastShadow(false);
+            Part->SetAbsolute(true, true, true);
+            Part->RegisterComponent();
+            return Part;
+        };
+        Hand.Forearm = Make(Cylinder, bLeft ? TEXT("ForearmLeft") : TEXT("ForearmRight"));
+        Hand.WristJoint = Make(Sphere, bLeft ? TEXT("WristLeft") : TEXT("WristRight"));
+    }
+    if (!Hand.Forearm.IsValid() || !Hand.WristJoint.IsValid()) return;
+    Hand.Forearm->SetVisibility(bShown);
+    Hand.WristJoint->SetVisibility(bShown);
+    if (!bShown) return;
+    const FTransform Visual = Hand.Visual->GetComponentTransform();
+    const double Scale = FMath::Max(0.1, double(Visual.GetScale3D().GetAbsMax()));
+    const FVector Back = -Visual.TransformVectorNoScale(Palm.Finger).GetSafeNormal();
+    const FVector Wrist = Visual.TransformPosition(Palm.Point) + Back * GratiaPenetration::HandWristBackCm * Scale;
+    // Elbow: two bones from a shoulder estimated off the head (down, out to the side, a little back).
+    const FRotator Yaw(0.0, Camera->GetComponentRotation().Yaw, 0.0);
+    const FVector Ahead = Yaw.Vector(), Right = FRotationMatrix(Yaw).GetUnitAxis(EAxis::Y);
+    const FVector Shoulder = Camera->GetComponentLocation() - FVector::UpVector * 24.0 + Right * (bLeft ? -17.0 : 17.0) - Ahead * 6.0;
+    const double Upper = 30.0, Lower = ForearmLengthCm;
+    FVector ToWrist = Wrist - Shoulder;
+    const double Reach = FMath::Clamp(ToWrist.Size(), FMath::Abs(Upper - Lower) + 1.0, Upper + Lower - 0.5);
+    ToWrist = ToWrist.GetSafeNormal();
+    const double Along = (Upper * Upper + Reach * Reach - Lower * Lower) / (2.0 * Reach);
+    const FVector Pole = (-FVector::UpVector + Right * (bLeft ? -0.6 : 0.6) - Ahead * 0.2);
+    FVector Bend = Pole - ToWrist * FVector::DotProduct(Pole, ToWrist);
+    if (!Bend.Normalize()) Bend = -FVector::UpVector;
+    const FVector Elbow = Shoulder + ToWrist * Along + Bend * FMath::Sqrt(FMath::Max(0.0, Upper * Upper - Along * Along));
+    FVector Direction = (Elbow - Wrist).GetSafeNormal();
+    // The wrist bends at most 60 degrees; in a channel the forearm continues the hand along the channel.
+    const double Bent = FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(FVector::DotProduct(Direction, Back), -1.0, 1.0)));
+    if (Hand.bInChannel || Direction.IsNearlyZero()) Direction = Back;
+    else if (Bent > 60.0) Direction = FQuat::Slerp(FQuat::Identity, FQuat::FindBetweenNormals(Back, Direction), 60.0 / Bent).RotateVector(Back);
+    const double Radius = ForearmRadiusCm * Scale, Length = Lower * Scale;
+    Hand.Forearm->SetWorldTransform(FTransform(FRotationMatrix::MakeFromZ(Direction).ToQuat(), Wrist + Direction * (0.5 * Length),
+        FVector(Radius / 50.0, Radius / 50.0, Length / 100.0)));
+    Hand.WristJoint->SetWorldTransform(FTransform(FQuat::Identity, Wrist, FVector(Radius * 0.95 / 50.0)));
+}
+
 void AGratiaStage1Runtime::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
@@ -299,8 +452,19 @@ void AGratiaStage1Runtime::Tick(float DeltaSeconds)
     RightHandState = RightHand.Gate.State;
     // The primitive leaves with the character scene (lobby, loading).
     if (Primitive && SceneDirector && SceneDirector->IsSceneInputBlocked()) SetPrimitiveShown(false);
-    // The held primitive is laid into the body right after the hands moved (same frame).
-    if (TargetCharacter.IsValid() && TargetCharacter->Penetration) TargetCharacter->Penetration->Solve(DeltaSeconds);
+    // The held primitive or a hand is laid into the body right after the hands moved (same frame).
+    if (TargetCharacter.IsValid() && TargetCharacter->Penetration)
+    {
+        TArray<AGratiaPenetrator*> Candidates;
+        for (AGratiaPenetrator* Shaft : HandShafts) Candidates.Add(Shaft);
+        for (AGratiaPenetrator* Shaft : QAShafts) Candidates.Add(Shaft);
+        TargetCharacter->Penetration->SetCandidates(Candidates);
+        TargetCharacter->Penetration->Solve(DeltaSeconds);
+    }
+    ApplyHandInChannel(LeftHand, true);
+    ApplyHandInChannel(RightHand, false);
+    UpdateForearm(LeftHand, true);
+    UpdateForearm(RightHand, false);
 
     if (FMath::IsFinite(DeltaSeconds) && DeltaSeconds > UE_SMALL_NUMBER)
     {
@@ -637,7 +801,13 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
 
     FTransform VisualWorld = Hand.LastWorld;
     if ((Hand.Gate.State != EGratiaHandState::Tracked || !IsSceneInteractionAllowed()) && !Hand.GripBone.IsNone()) ReleaseBodyGrip(Hand, bLeft, TEXT("tracking / scene gate"));
-    if (Hand.Gate.State != EGratiaHandState::Tracked || !IsSceneInteractionAllowed()) ReleasePrimitive(Hand, bLeft, TEXT("tracking / scene gate"));
+    if (Hand.Gate.State != EGratiaHandState::Tracked || !IsSceneInteractionAllowed())
+    {
+        ReleasePrimitive(Hand, bLeft, TEXT("tracking / scene gate"));
+        // An untracked hand leaves the channel (its shaft is no longer held).
+        if (HandShafts.IsValidIndex(bLeft ? 0 : 1) && HandShafts[bLeft ? 0 : 1]) HandShafts[bLeft ? 0 : 1]->SetHeld(INDEX_NONE);
+        Hand.PenetrationShape = 0;
+    }
     if (Hand.Gate.State == EGratiaHandState::Tracked)
     {
         // The palm collides with the body surface (not a wide sphere around the wrist).
@@ -646,13 +816,19 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
         const FTransform Constrained = IsSceneInteractionAllowed() && TargetCharacter.IsValid() && TargetCharacter->Interaction
             ? TargetCharacter->Interaction->ConstrainHand(Hand.LastWorld, Target, bLeft, PalmLocal) : Target;
         if (IsSceneInteractionAllowed()) UpdatePrimitiveGrab(Hand, bLeft, Target);
+        UpdateHandShaft(Hand, bLeft, Target);
+        // A hand at or in a channel entrance is entering, not cupping or wrapping the body around it.
+        const UGratiaPenetration* Penetration = TargetCharacter.IsValid() ? TargetCharacter->Penetration.Get() : nullptr;
+        const AGratiaPenetrator* Shaft = HandShafts.IsValidIndex(bLeft ? 0 : 1) ? HandShafts[bLeft ? 0 : 1].Get() : nullptr;
+        const bool bAtChannel = Hand.bInChannel || (Hand.PenetrationShape != 0 && Shaft && Penetration
+            && Penetration->GetEntranceGap(Shaft->GetBase().GetLocation() + Shaft->GetBase().GetRotation().GetForwardVector() * Shaft->GetShaft().Length) < 8.0);
         // A hand holding the primitive neither wraps, cups nor leans onto the body.
-        if (Hand.bHoldsPrimitive)
+        if (Hand.bHoldsPrimitive || bAtChannel)
         {
-            ReleaseBodyGrip(Hand, bLeft, TEXT("holding the primitive"));
+            ReleaseBodyGrip(Hand, bLeft, Hand.bHoldsPrimitive ? TEXT("holding the primitive") : TEXT("at a channel"));
             Hand.CupBone = NAME_None; Hand.CupBlend = 0.0f; Hand.SurfaceWeight = 0.0f; Hand.LeanWeight = 0.0f;
         }
-        const FTransform ContactTarget = Hand.bHoldsPrimitive ? Constrained : ApplyBodySurface(Hand, bLeft, Target, Constrained, DeltaSeconds);
+        const FTransform ContactTarget = Hand.bHoldsPrimitive || bAtChannel ? Constrained : ApplyBodySurface(Hand, bLeft, Target, Constrained, DeltaSeconds);
         VisualWorld = ContactTarget;
         SetHandCollision(Hand, IsSceneInteractionAllowed());
     }
@@ -681,7 +857,8 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
     // hands must not keep resetting that scenario's correction-recovery timer.
     if (TargetCharacter.IsValid() && TargetCharacter->Interaction && !Verification->OwnsSyntheticContactSamples())
     {
-        TargetCharacter->Interaction->SetHandSample(bLeft, Target, VisualWorld, Hand.Gate.CanInteract() && IsSceneInteractionAllowed());
+        // Inside a channel the channel answers; the touch zones around it stay quiet.
+        TargetCharacter->Interaction->SetHandSample(bLeft, Target, VisualWorld, Hand.Gate.CanInteract() && IsSceneInteractionAllowed() && !Hand.bInChannel);
         if (TargetCharacter->SecondaryMotion && !Verification->IsHandPhysicsQAActive())
             TargetCharacter->SecondaryMotion->SubmitHand(bLeft, VisualWorld.GetLocation(),
                 TargetCharacter->Interaction->IsHandSampleReady(bLeft) && IsSceneInteractionAllowed(), DeltaSeconds,
@@ -699,7 +876,7 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
             }
             const FVector VisiblePalm = VisualWorld.TransformPositionNoScale(PalmLocal);
             const FVector RawPalm = Target.TransformPositionNoScale(PalmLocal);
-            const bool bAllowed = TargetCharacter->Interaction->IsHandSampleReady(bLeft) && IsSceneInteractionAllowed();
+            const bool bAllowed = TargetCharacter->Interaction->IsHandSampleReady(bLeft) && IsSceneInteractionAllowed() && !Hand.bInChannel;
             const float Grab = HandInput && !Hand.bHoldsPrimitive ? FMath::Max(HandInput->GetTrigger(bLeft), HandInput->GetGrip(bLeft)) : 0.0f;
             // Cupping/wrapping places the hand itself; the soft part then follows the controller.
             const bool bPoseOwned = !Hand.CupBone.IsNone() || !Hand.GripBone.IsNone();
@@ -715,6 +892,13 @@ void AGratiaStage1Runtime::UpdateHand(FHandProxy& Hand, bool bLeft, float DeltaS
         }
     }
     // The held primitive vibrates with its own insertion (computed by the previous solve).
+    // So does a hand inside a channel.
+    const AGratiaPenetrator* OwnShaft = HandShafts.IsValidIndex(bLeft ? 0 : 1) ? HandShafts[bLeft ? 0 : 1].Get() : nullptr;
+    if (Hand.bInChannel && OwnShaft && OwnShaft->HapticAmplitude > ContactHapticAmplitude)
+    {
+        ContactHapticAmplitude = OwnShaft->HapticAmplitude;
+        ContactHapticFrequency = OwnShaft->HapticFrequency;
+    }
     if (Hand.bHoldsPrimitive && Primitive && Primitive->HapticAmplitude > ContactHapticAmplitude)
     {
         ContactHapticAmplitude = Primitive->HapticAmplitude;
@@ -746,8 +930,20 @@ void AGratiaStage1Runtime::UpdateHandPose(FHandProxy& Hand, bool bLeft, const FV
     Anim->FingerInput[0] = Anim->ThumbOpenPose ? 1.0f : FMath::Max(Grasp, Rest);
     Anim->FingerInput[1] = FMath::Max(Index, Rest);
     Anim->FingerInput[2] = Anim->FingerInput[3] = Anim->FingerInput[4] = FMath::Max(Grasp, Rest);
+    // Penetrating shapes: three fingers (index, middle, ring) straight with the thumb and little finger folded;
+    // the flat hand keeps the four fingers straight (the thumb rests on the stick); the fist closes them (grip and
+    // trigger already do).
+    using GratiaPenetration::EHandShape;
+    if (Hand.PenetrationShape == uint8(EHandShape::Fingers))
+    {
+        Anim->FingerInput[1] = Anim->FingerInput[2] = Anim->FingerInput[3] = 0.0f;
+        Anim->FingerInput[4] = 1.0f;
+        if (!Anim->ThumbOpenPose) Anim->FingerInput[0] = 1.0f;
+    }
+    else if (Hand.PenetrationShape == uint8(EHandShape::Hand))
+        Anim->FingerInput[1] = Anim->FingerInput[2] = Anim->FingerInput[3] = Anim->FingerInput[4] = 0.0f;
     const auto* Profile = TargetCharacter.IsValid() ? TargetCharacter->CharacterProfile.Get() : nullptr;
-    Anim->bConform = Profile && Profile->SoftBody.bFingerConform && Hand.Gate.CanInteract();
+    Anim->bConform = Profile && Profile->SoftBody.bFingerConform && Hand.Gate.CanInteract() && !Hand.bInChannel;
     if (Profile) { Anim->FingerRadiusCm = Profile->SoftBody.FingerRadiusCm; Anim->ConformMarginCm = Profile->SoftBody.FingerConformMarginCm; }
     // Squeezing (grip) lets the fingers sink into soft zones; the press dent opens under them.
     Anim->ConformCapsules.Reset();

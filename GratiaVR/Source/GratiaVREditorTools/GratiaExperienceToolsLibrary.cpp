@@ -14,6 +14,10 @@
 #include "MeshDescription.h"
 #include "StaticMeshAttributes.h"
 #include "Math/RandomStream.h"
+#include "Engine/SkeletalMesh.h"
+#include "SkeletalMeshAttributes.h"
+#include "SkinnedAssetCompiler.h"
+#include "ReferenceSkeleton.h"
 
 bool UGratiaExperienceToolsLibrary::BuildCompositeFont(UFont* Font, const TArray<FName>& Names, const TArray<UFontFace*>& Faces)
 {
@@ -154,4 +158,80 @@ UFontFace* UGratiaExperienceToolsLibrary::ImportFontFace(const FString& Filename
     Face->CacheSubFaces();
     Face->MarkPackageDirty();
     return Face;
+}
+
+int32 UGratiaExperienceToolsLibrary::CreateChannelOpeningMorph(USkeletalMesh* Mesh, FName MorphName, const TArray<FName>& EntranceBones, FName InwardBone,
+    const TArray<FName>& LeftBones, const TArray<FName>& RightBones, float OpeningCm, float CoreRadiusCm, float FalloffCm,
+    float OutsideCm, float InsideCm, float AlongSlit)
+{
+    if (!Mesh || MorphName.IsNone() || EntranceBones.IsEmpty() || OpeningCm <= 0.0f || !Mesh->HasMeshDescription(0)) return -1;
+    const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
+    auto RefLocation = [&Ref](FName Bone, FVector& Out)
+    {
+        const int32 Index = Ref.FindBoneIndex(Bone);
+        if (Index == INDEX_NONE) return false;
+        FTransform Pose = Ref.GetRefBonePose()[Index];
+        for (int32 Parent = Ref.GetParentIndex(Index); Parent != INDEX_NONE; Parent = Ref.GetParentIndex(Parent)) Pose *= Ref.GetRefBonePose()[Parent];
+        Out = Pose.GetLocation();
+        return true;
+    };
+    auto Centre = [&RefLocation](const TArray<FName>& Bones, FVector& Out)
+    {
+        Out = FVector::ZeroVector;
+        int32 Found = 0;
+        for (const FName Bone : Bones) { FVector Point; if (RefLocation(Bone, Point)) { Out += Point; ++Found; } }
+        if (Found) Out /= Found;
+        return Found == Bones.Num() && Found > 0;
+    };
+    FVector Entrance, Target;
+    if (!Centre(EntranceBones, Entrance) || !RefLocation(InwardBone, Target)) return -1;
+    const FVector Inward = (Target - Entrance).GetSafeNormal();
+    if (Inward.IsNearlyZero()) return -1;
+    // Across a slit: from its right lip to its left one, square to the axis.
+    FVector Lateral = FVector::ZeroVector, Left, Right;
+    if (!LeftBones.IsEmpty() && !RightBones.IsEmpty() && Centre(LeftBones, Left) && Centre(RightBones, Right))
+    {
+        Lateral = Left - Right;
+        Lateral = (Lateral - Inward * FVector::DotProduct(Lateral, Inward)).GetSafeNormal();
+    }
+    // A falloff of at least 1.875x the opening keeps the radial mapping monotonic (smootherstep's steepest slope).
+    const double Opening = OpeningCm, Core = FMath::Max(0.0f, CoreRadiusCm), Falloff = FMath::Max(double(FalloffCm), 2.0 * Opening);
+    const double Outside = FMath::Max(0.0f, OutsideCm), Inside = FMath::Max(0.0f, InsideCm), Edge = 0.5 * Falloff;
+    auto Smoother = [](double T) { T = FMath::Clamp(T, 0.0, 1.0); return T * T * T * (T * (6.0 * T - 15.0) + 10.0); };
+    FMeshDescription* Description = Mesh->GetMeshDescription(0);
+    if (!Description) return -1;
+    FSkeletalMeshAttributes Attributes(*Description);
+    if (!Attributes.GetMorphTargetNames().Contains(MorphName) && !Attributes.RegisterMorphTargetAttribute(MorphName, false)) return -1;
+    TVertexAttributesRef<FVector3f> Deltas = Attributes.GetVertexMorphPositionDelta(MorphName);
+    const TVertexAttributesConstRef<FVector3f> Positions = Attributes.GetVertexPositions();
+    int32 Moved = 0;
+    for (const FVertexID Vertex : Description->Vertices().GetElementIDs())
+    {
+        const FVector Relative = FVector(Positions[Vertex]) - Entrance;
+        const double Along = FVector::DotProduct(Relative, Inward);
+        FVector Radial = Relative - Inward * Along;
+        const double Distance = Radial.Size();
+        FVector Delta = FVector::ZeroVector;
+        if (Distance > 0.02 && Distance < Core + Falloff && Along > -(Outside + Edge) && Along < Inside + Edge)
+        {
+            Radial /= Distance;
+            const double Across = 1.0 - Smoother((Distance - Core) / Falloff);
+            const double Depth = (1.0 - Smoother((-Along - Outside) / Edge)) * (1.0 - Smoother((Along - Inside) / Edge));
+            const double Shape = Lateral.IsZero() ? 1.0 : FMath::Lerp(double(AlongSlit), 1.0, FMath::Abs(FVector::DotProduct(Radial, Lateral)));
+            Delta = Radial * (Opening * Across * Depth * Shape);
+        }
+        Deltas[Vertex] = FVector3f(Delta);
+        if (Delta.SizeSquared() > 1.0e-6) ++Moved;
+    }
+    USkeletalMesh::FCommitMeshDescriptionParams Params;
+    Params.bMarkPackageDirty = true;
+    if (!Mesh->CommitMeshDescription(0, Params)) return -1;
+    Mesh->Build();
+    // Skeletal meshes build asynchronously; the morph exists for FindMorphTarget only once the build finished.
+    USkinnedAsset* const Built[] = {Mesh};
+    FSkinnedAssetCompilingManager::Get().FinishCompilation(Built);
+    Mesh->MarkPackageDirty();
+    UE_LOG(LogTemp, Display, TEXT("GRATIA_CHANNEL_MORPH %s moved=%d opening=%.1fcm falloff=%.1fcm slit=%s"), *MorphName.ToString(), Moved, Opening, Falloff,
+        Lateral.IsZero() ? TEXT("no") : TEXT("yes"));
+    return Moved;
 }

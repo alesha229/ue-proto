@@ -44,9 +44,16 @@ The profile owns model-specific references and names:
   to contact zones or penetration channels (`Zones`) and to a touch force (`Force`: Gentle, or
   Strong = faster than `StrongReactionSpeedCmPerSecond`). The presenter takes the most specific
   matches (strong touch, then zone, then mood) and picks one at random, never the same line twice in
-  a row. Without lines a profile keeps ReactionSounds/DefaultReactionSound (or a short chime) and
-  shows no bubble. Gratia: 33 Russian lines and 21 synthesized non-verbal voice clips
-  (`generate_reaction_voice.py`, `setup_character_presentation.py`).
+  a row. `Variants` are more takes of the line's voice: each answer plays one of `Sound` and them, never
+  the take that played last. Without lines a profile keeps ReactionSounds/DefaultReactionSound (or a
+  short chime) and shows no bubble. Gratia: 33 Russian lines over 42 recorded non-verbal takes, 6 per kind
+  (`prepare_reaction_voice_pack.py` from the VoxAfterHours pack, or the synthesized fallback of
+  `generate_reaction_voice.py`; `setup_character_presentation.py`).
+- Penetration channels (`Penetration.Channels`): wall bones move only as far as the shaft surface reaches past
+  their rest distance from the axis; `OpeningMorph` (driven at 1 by `MorphFullOpeningCm`) opens the channel over a
+  wide smooth area and, when set, the bones keep a quarter of their offset for the lips' shape. Gratia's morphs
+  `Gratia_OpenVaginal`/`Gratia_OpenAnal` are generated on the mesh by `setup_penetration.py`. The player's hands
+  enter as three fingers, a flat hand or a fist; a channel takes up to two shafts side by side.
 - Free-play stances: in a scene the Pose item switches between idle and every PerformanceClip that is
   a looping single clip without music, partner or viewpoint; `Label` is what the menu shows
   (Gratia: `Idle ZZZ` is «игривая»). Diagnostic Arms/Head and full performances stay on F2 in the studio.

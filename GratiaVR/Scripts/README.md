@@ -6,14 +6,25 @@
 
 Ответ персонажа на касание (`DA_Gratia.ReactionLines`, см. [CHARACTER_PROFILE.md](../../docs/CHARACTER_PROFILE.md)):
 
-1. `generate_reaction_voice.py` — системный Python (numpy/scipy): формантный синтез 21 короткого невербального
-   звука (мягкое «ах», «мм», «хм?», вдох-испуг, смешок, вздох, протяжное «а-ах»; по 3 варианта) в
-   `Exports/Gratia/Audio/Reactions/` (WAV не в git, `reactions.json` — в git). `--plot out.png` — спектрограммы.
-2. `setup_character_presentation.py` — коммандлет: импорт звуков в `/Game/Gratia/Audio/Reactions`, реплики
-   (текст облачка, голос, настроение, зоны или каналы, сила касания) и подписи поз свободной игры в `DA_Gratia`.
+1. Голос — один из двух источников в `Exports/Gratia/Audio/Reactions/` (WAV не в git, `reactions.json` — в git):
+   - `prepare_reaction_voice_pack.py "<пак>/Processed"` — основной: нарезка записанного пака VoxAfterHours
+     (демо WHSFX, автор — https://x.com/VoxAfterHours; лицензии в архиве нет, поэтому ни пак, ни нарезка, ни
+     импортированные звуки в git не попадают) на одиночные звуки по паузам, 6 дублей на вид (вдох-испуг, мягкое
+     «ах», «мм», вздох, смешок, «ara ara» на вопросы, стон), одинаковая громкость; `--plot sheet.png` — формы волн;
+   - `generate_reaction_voice.py` — запасной: формантный синтез, если пака нет.
+2. `setup_character_presentation.py` — коммандлет: импорт звуков в `/Game/Gratia/Audio/Reactions` (лишние удаляются),
+   реплики (текст облачка, голос и остальные дубли вида как варианты, настроение, зоны или каналы, сила касания)
+   и подписи поз свободной игры в `DA_Gratia`.
 
-Ввод контроллеров — `setup_gratia_locomotion.py` (коммандлет): ходьба, поворот, хват, grip, меню и
-`IA_Recenter` (клик любым стиком — центровка).
+Каналы проникновения — `setup_penetration.py` (коммандлет): каналы `DA_Gratia` (кости стенок, глубина) и морфы
+раскрытия `Gratia_OpenVaginal` / `Gratia_OpenAnal` на `SK_Gratia_Game` (`GratiaExperienceToolsLibrary::
+CreateChannelOpeningMorph`: кожа вокруг входа расходится от оси до 4 см и плавно затухает на 8,5 см — меш не рвётся).
+`-GratiaChannelShots` — снимки входов (пусто, три пальца, ладонь, кулак, две руки, примитив XXL) в
+`GratiaVR/Saved/Screenshots/ChannelShots`.
+
+Ввод контроллеров — `setup_gratia_locomotion.py` (коммандлет): ходьба, поворот, хват, grip, меню,
+`IA_Recenter` (клик любым стиком — центровка) и `IA_ThumbLeft/Right` (большой палец на стике или кнопке —
+ладонь с прямыми пальцами для каналов; на клавиатуре B/N).
 
 Звуки меню — `setup_menu_sounds.py` (коммандлет): копии штатных VR-звуков интерфейса движка
 (клик, открытие, закрытие) в `/Game/Gratia/Audio/UI`, чтобы они попадали в сборку; отчёт

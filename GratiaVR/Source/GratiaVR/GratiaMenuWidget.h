@@ -26,7 +26,8 @@ enum class EGratiaMenuAction : uint8
     Quality, Sound, MusicDown, MusicUp, HapticsDown, HapticsUp, HeightDown, HeightUp, Recenter,
     TrackPrev, TrackNext,
     Primitive, PrimitiveSize,
-    Captions, VoiceDown, VoiceUp, TurnMode, WalkSpeed, ResetSettings
+    Captions, VoiceDown, VoiceUp, TurnMode, WalkSpeed, ResetSettings,
+    HandPenetration, Forearms
 };
 
 /** Click/hover target of one button (dynamic delegates need a UFUNCTION). */

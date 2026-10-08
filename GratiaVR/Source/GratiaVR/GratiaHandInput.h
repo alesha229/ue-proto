@@ -23,6 +23,8 @@ public:
     float GetIndexCurl(bool bLeft) const;
     /** Either stick clicked (IA_Recenter in IMC_GratiaLocomotion). */
     bool IsRecenterPressed() const;
+    /** Thumb resting on the stick or a face button (IA_ThumbLeft/Right, touch; desktop B/N). */
+    bool IsThumbDown(bool bLeft) const;
     FString GetDiagnostics() const;
 protected:
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
@@ -36,6 +38,8 @@ private:
     UPROPERTY() TObjectPtr<UInputAction> IndexLeft;
     UPROPERTY() TObjectPtr<UInputAction> IndexRight;
     UPROPERTY() TObjectPtr<UInputAction> RecenterAction;
+    UPROPERTY() TObjectPtr<UInputAction> ThumbLeft;
+    UPROPERTY() TObjectPtr<UInputAction> ThumbRight;
     float ReadAction(UInputAction* Action, bool bLeft) const;
     UPROPERTY() TObjectPtr<UInputMappingContext> Mapping;
     UPROPERTY() TObjectPtr<UEnhancedInputComponent> Input;

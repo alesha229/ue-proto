@@ -67,6 +67,11 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Primitive|Mesh")
     TArray<FName> ChainBones;
 
+    /** Let go inside a channel, the shaft stays on the body (a primitive); false lets it go (the player's hand). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Primitive")
+    bool bAnchorWhenReleased = true;
+    /** One fixed shape under Label (a hand's fingers, flat hand or fist); the solver re-shapes the joints. */
+    void SetShape(FName Label, const GratiaPenetration::FShaft& Shape);
     UFUNCTION(BlueprintCallable, Category = "Primitive")
     void SetSize(int32 Index);
     UFUNCTION(BlueprintCallable, Category = "Primitive")

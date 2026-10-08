@@ -13,6 +13,7 @@ class UCameraComponent;
 class UMotionControllerComponent;
 class UPrimitiveComponent;
 class USphereComponent;
+class UStaticMeshComponent;
 class UTextRenderComponent;
 class UGratiaLocomotion;
 class UGratiaMenu;
@@ -157,6 +158,22 @@ public:
     TObjectPtr<AGratiaPenetrator> Primitive;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Primitive")
     TSubclassOf<AGratiaPenetrator> PrimitiveClass;
+    /** The hands' own invisible shafts (left, right): fingers, flat hand or fist entering the character's channels. */
+    UPROPERTY(Transient, VisibleInstanceOnly, Category = "Primitive")
+    TArray<TObjectPtr<AGratiaPenetrator>> HandShafts;
+    /** Stand-in shafts of a desktop check (-GratiaChannelShots), offered to the channels like the hands. */
+    UPROPERTY(Transient)
+    TArray<TObjectPtr<AGratiaPenetrator>> QAShafts;
+    /** Hands may enter the channels as fingers, a flat hand or a fist (menu "Руки в каналы"). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Primitive")
+    bool bHandPenetration = true;
+    /** Forearms continue the hands toward the elbows (menu "Предплечья"). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hands")
+    bool bShowForearms = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hands", meta = (ClampMin = "10", ClampMax = "40", Units = "cm"))
+    float ForearmLengthCm = 26.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hands", meta = (ClampMin = "1", ClampMax = "6", Units = "cm"))
+    float ForearmRadiusCm = 3.0f;
     /** Shows the primitive in front of the player (spawned on demand) or removes it. */
     UFUNCTION(BlueprintCallable, Category = "Primitive")
     bool SetPrimitiveShown(bool bShown);
@@ -334,9 +351,24 @@ private:
         bool bHoldsPrimitive = false;
         bool bPrimitiveArmed = true;
         FTransform PrimitiveRelative = FTransform::Identity;
+        /** The hand as a penetrating shape (GratiaPenetration::EHandShape: fingers, flat hand, fist) and whether it is inside. */
+        uint8 PenetrationShape = 0;
+        bool bInChannel = false;
+        /** The forearm continuing the hand toward an estimated elbow, and the ball rounding the wrist. */
+        TWeakObjectPtr<UStaticMeshComponent> Forearm;
+        TWeakObjectPtr<UStaticMeshComponent> WristJoint;
     };
+    /** Places the forearm of a visible hand: from the wrist to an elbow solved off the head; straight on in a channel. */
+    void UpdateForearm(FHandProxy& Hand, bool bLeft);
     /** Grip near the primitive's handle picks it up, release lets go; the held primitive follows the controller. */
     void UpdatePrimitiveGrab(FHandProxy& Hand, bool bLeft, const FTransform& Target);
+    /**
+     * The hand's own shaft for the character's channels: grip alone extends two fingers, nothing pressed is the flat
+     * hand with straight fingers, grip and trigger make a fist. It rides the controller from the wrist along the fingers.
+     */
+    void UpdateHandShaft(FHandProxy& Hand, bool bLeft, const FTransform& Target);
+    /** A hand inside a channel: the visible hand lines up with the channel axis and stops at its depth. */
+    void ApplyHandInChannel(FHandProxy& Hand, bool bLeft);
     void ReleasePrimitive(FHandProxy& Hand, bool bLeft, const TCHAR* Reason);
     /** Body-surface hand pose for a tracked hand: wrap grip, hold, release, or lean onto the body. */
     FTransform ApplyBodySurface(FHandProxy& Hand, bool bLeft, const FTransform& Target, const FTransform& Constrained, float DeltaSeconds);

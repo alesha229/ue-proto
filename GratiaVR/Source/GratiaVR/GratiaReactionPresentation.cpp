@@ -224,7 +224,17 @@ void UGratiaReactionPresentation::HandleContactReaction(FName ZoneName, int32 Ha
     const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
     if (!bPresentSound || !Source->bSound || !Profile->Capabilities.bSound
         || Now - LastVoiceTime <= NonnegativePresentation(Settings.CooldownSeconds)) return;
-    USoundBase* Sound = Line && IsValid(Line->Sound.Get()) ? Line->Sound.Get() : SelectSound(ZoneName, *Profile);
+    USoundBase* Sound = nullptr;
+    if (Line)
+    {
+        TArray<USoundBase*> Takes;
+        if (IsValid(Line->Sound.Get())) Takes.Add(Line->Sound.Get());
+        for (USoundBase* Take : Line->Variants) if (IsValid(Take)) Takes.AddUnique(Take);
+        if (Takes.Num() > 1) Takes.Remove(LastVoice.Get());
+        if (!Takes.IsEmpty()) Sound = Takes[FMath::RandRange(0, Takes.Num() - 1)];
+    }
+    if (!Sound) Sound = SelectSound(ZoneName, *Profile);
+    LastVoice = Sound;
     if (!Sound && Profile->ReactionLines.IsEmpty())
     {
         // A profile without lines keeps the short local acknowledgement.

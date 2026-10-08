@@ -6,6 +6,7 @@
 class UFont;
 class UFontFace;
 class UStaticMesh;
+class USkeletalMesh;
 
 /** Editor helpers for setup_scene_experience.py that Python cannot reach (private engine fields). */
 UCLASS()
@@ -47,4 +48,17 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
     static UStaticMesh* CreateRainStreakMesh(const FString& PackageName, int32 Streaks, float Radius, float Length, float Width,
         float FallHeight, int32 Seed, const TArray<FVector>& Clearings);
+    /**
+     * Adds or replaces MorphName on LOD 0 of Mesh (in its mesh description, so rebuilds keep it): the opening of a
+     * channel whose entrance is the centre of EntranceBones and whose axis points to InwardBone (reference pose).
+     * Every vertex near the axis moves away from it by OpeningCm within CoreRadiusCm, fading smoothly to nothing over
+     * FalloffCm (kept at least twice OpeningCm so neighbouring vertices never cross: the skin stretches over a wide
+     * area instead of tearing), and along the axis from OutsideCm before the entrance to InsideCm in. With Left/Right
+     * bones (a slit) the opening is mostly across it: along the slit it is AlongSlit of the full amount. Skin and
+     * clothing in the area move together. Returns the number of moved vertices, -1 on bad input.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
+    static int32 CreateChannelOpeningMorph(USkeletalMesh* Mesh, FName MorphName, const TArray<FName>& EntranceBones, FName InwardBone,
+        const TArray<FName>& LeftBones, const TArray<FName>& RightBones, float OpeningCm, float CoreRadiusCm, float FalloffCm,
+        float OutsideCm, float InsideCm, float AlongSlit);
 };

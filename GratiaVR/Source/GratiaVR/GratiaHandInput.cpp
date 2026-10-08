@@ -25,6 +25,9 @@ UGratiaHandInput::UGratiaHandInput()
     GripLeft = PL.Object; GripRight = PR.Object;
     static ConstructorHelpers::FObjectFinder<UInputAction> RC(TEXT("/Game/Gratia/Input/IA_Recenter.IA_Recenter"));
     RecenterAction = RC.Object;
+    static ConstructorHelpers::FObjectFinder<UInputAction> TL(TEXT("/Game/Gratia/Input/IA_ThumbLeft.IA_ThumbLeft"));
+    static ConstructorHelpers::FObjectFinder<UInputAction> TR(TEXT("/Game/Gratia/Input/IA_ThumbRight.IA_ThumbRight"));
+    ThumbLeft = TL.Object; ThumbRight = TR.Object;
 }
 void UGratiaHandInput::UpdateInput()
 {
@@ -39,7 +42,8 @@ void UGratiaHandInput::UpdateInput()
             Input = NewObject<UEnhancedInputComponent>(PC, TEXT("GratiaHandActions"));
             Input->Priority = 70; Input->bBlockInput = false;
             Input->BindActionValue(LeftAction); Input->BindActionValue(RightAction);
-            for (UInputAction* Action : {GripLeft.Get(), GripRight.Get(), GraspLeft.Get(), GraspRight.Get(), IndexLeft.Get(), IndexRight.Get(), RecenterAction.Get()})
+            for (UInputAction* Action : {GripLeft.Get(), GripRight.Get(), GraspLeft.Get(), GraspRight.Get(), IndexLeft.Get(), IndexRight.Get(), RecenterAction.Get(),
+                ThumbLeft.Get(), ThumbRight.Get()})
                 if (Action) Input->BindActionValue(Action);
             Input->RegisterComponent(); PC->PushInputComponent(Input);
         }
@@ -68,6 +72,11 @@ float UGratiaHandInput::GetGrip(bool bLeft) const
     const FInputActionValue Value = Input->GetBoundActionValue(Action);
     const float Scalar = Value.GetValueType() == EInputActionValueType::Boolean ? (Value.Get<bool>() ? 1.0f : 0.0f) : Value.Get<float>();
     return FMath::IsFinite(Scalar) ? FMath::Clamp(Scalar, 0.0f, 1.0f) : 0.0f;
+}
+bool UGratiaHandInput::IsThumbDown(bool bLeft) const
+{
+    UInputAction* Action = bLeft ? ThumbLeft.Get() : ThumbRight.Get();
+    return bReady && Action && Input && Input->GetBoundActionValue(Action).Get<bool>();
 }
 bool UGratiaHandInput::IsRecenterPressed() const
 {

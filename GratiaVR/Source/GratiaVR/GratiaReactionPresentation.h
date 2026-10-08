@@ -87,6 +87,8 @@ private:
     float CaptionSeconds = 0.0f, CaptionAge = 0.0f;
     double LastVoiceTime = -10.0;
     int32 LastLineIndex = INDEX_NONE;
+    /** The take that played last (a line with several takes does not repeat it). */
+    TWeakObjectPtr<USoundBase> LastVoice;
     const FGratiaReactionLine* SelectLine(FName ZoneName, int32 Mood, bool bStrong, const UGratiaCharacterProfile& Profile);
     USoundBase* SelectSound(FName ZoneName, const UGratiaCharacterProfile& Profile) const;
     bool EnsureBubble();

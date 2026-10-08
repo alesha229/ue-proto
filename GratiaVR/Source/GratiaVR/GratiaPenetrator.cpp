@@ -67,6 +67,20 @@ GratiaPenetration::FShaft AGratiaPenetrator::GetShaft() const
     return Shaft;
 }
 
+void AGratiaPenetrator::SetShape(FName Label, const GratiaPenetration::FShaft& Shape)
+{
+    FGratiaShaftSize Size;
+    Size.Name = Label;
+    Size.LengthCm = float(Shape.Length);
+    Size.RadiusCm = float(Shape.Radius);
+    if (Sizes.Num() != 1) Sizes.SetNum(1);
+    Sizes[0] = Size;
+    SizeIndex = 0;
+    TipTaperCm = float(Shape.TipCm);
+    BaseRadiusScale = float(Shape.BaseScale);
+    JointCount = Shape.Joints;
+}
+
 void AGratiaPenetrator::SetSize(int32 Index)
 {
     if (Sizes.IsEmpty()) return;

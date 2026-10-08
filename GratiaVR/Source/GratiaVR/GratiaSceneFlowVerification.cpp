@@ -135,6 +135,8 @@ void UGratiaSceneFlowVerification::CheckSettings()
     Toggle(EGratiaMenuAction::Body, Interaction->bBodyMotion, TEXT("Body"));
     Toggle(EGratiaMenuAction::Ears, Interaction->bEarMotion, TEXT("Ears"));
     Toggle(EGratiaMenuAction::Physics, Interaction->bPhysicalMotion, TEXT("Physics"));
+    if (Host->Menu->IsActionAvailable(EGratiaMenuAction::HandPenetration))
+        Toggle(EGratiaMenuAction::HandPenetration, Host->bHandPenetration, TEXT("Hands in channels"));
     Flow->SetMusicVolume(1.0f);
     Host->Menu->Execute(EGratiaMenuAction::MusicDown);
     Check(Settings->MusicVolume < 1.0f, TEXT("Music volume down changes transient settings"));

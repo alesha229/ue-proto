@@ -422,6 +422,9 @@ struct GRATIAVR_API FGratiaReactionLine
     /** Voice; empty falls back to ReactionSounds / DefaultReactionSound. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Reaction Line")
     TObjectPtr<USoundBase> Sound;
+    /** More takes of the same voice: each answer picks one of Sound and these, never the take that played last. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Reaction Line")
+    TArray<TObjectPtr<USoundBase>> Variants;
     /** Mood index (0 calm, 1 cheerful, 2 reserved) or -1 for any mood. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Reaction Line", meta = (ClampMin = "-1", ClampMax = "2"))
     int32 Mood = -1;

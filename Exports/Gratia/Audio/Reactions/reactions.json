@@ -1,128 +1,464 @@
 [
   {
-    "name": "Soft_1",
-    "kind": "soft",
-    "variant": 1,
-    "seconds": 0.52
-  },
-  {
-    "name": "Soft_2",
-    "kind": "soft",
-    "variant": 2,
-    "seconds": 0.562
-  },
-  {
-    "name": "Soft_3",
-    "kind": "soft",
-    "variant": 3,
-    "seconds": 0.478
-  },
-  {
-    "name": "Hum_1",
-    "kind": "hum",
-    "variant": 1,
-    "seconds": 0.55
-  },
-  {
-    "name": "Hum_2",
-    "kind": "hum",
-    "variant": 2,
-    "seconds": 0.594
-  },
-  {
-    "name": "Hum_3",
-    "kind": "hum",
-    "variant": 3,
-    "seconds": 0.506
-  },
-  {
-    "name": "Ask_1",
-    "kind": "ask",
-    "variant": 1,
-    "seconds": 0.42
-  },
-  {
-    "name": "Ask_2",
-    "kind": "ask",
-    "variant": 2,
-    "seconds": 0.454
-  },
-  {
-    "name": "Ask_3",
-    "kind": "ask",
-    "variant": 3,
-    "seconds": 0.386
-  },
-  {
     "name": "Startle_1",
     "kind": "startle",
     "variant": 1,
-    "seconds": 0.42
+    "seconds": 0.45,
+    "source": "Pack 1/Moans High/Medium High Pitched Soft Gasp Sounds 4.mp3",
+    "start": 2.97,
+    "pitch": 320.0,
+    "bursts": 1,
+    "score": -0.1
   },
   {
     "name": "Startle_2",
     "kind": "startle",
     "variant": 2,
-    "seconds": 0.439
+    "seconds": 0.28,
+    "source": "Pack 1/Moans High/Medium High Pitched Soft Gasp Sounds 4.mp3",
+    "start": 0.09,
+    "pitch": 266.7,
+    "bursts": 1,
+    "score": -0.3
   },
   {
     "name": "Startle_3",
     "kind": "startle",
     "variant": 3,
-    "seconds": 0.401
+    "seconds": 0.44,
+    "source": "Pack 1/Moans High/Medium High Pitched Soft Gasp Sounds 4.mp3",
+    "start": 13.73,
+    "pitch": 366.4,
+    "bursts": 2,
+    "score": -0.32
   },
   {
-    "name": "Giggle_1",
-    "kind": "giggle",
+    "name": "Startle_4",
+    "kind": "startle",
+    "variant": 4,
+    "seconds": 0.29,
+    "source": "Pack 1/Moans High/Medium High Pitched Soft Gasp Sounds 4.mp3",
+    "start": 1.41,
+    "pitch": 500.0,
+    "bursts": 1,
+    "score": -0.44
+  },
+  {
+    "name": "Startle_5",
+    "kind": "startle",
+    "variant": 5,
+    "seconds": 0.17,
+    "source": "Pack 1/Moans High/Medium High Pitched Soft Gasp Sounds 4.mp3",
+    "start": 7.2,
+    "pitch": 436.4,
+    "bursts": 1,
+    "score": -0.92
+  },
+  {
+    "name": "Startle_6",
+    "kind": "startle",
+    "variant": 6,
+    "seconds": 0.25,
+    "source": "Pack 1/Moans High/Medium High Pitched Soft Gasp Sounds 4.mp3",
+    "start": 2.02,
+    "pitch": 320.0,
+    "bursts": 1,
+    "score": -1.14
+  },
+  {
+    "name": "Soft_1",
+    "kind": "soft",
     "variant": 1,
-    "seconds": 0.45
+    "seconds": 0.8,
+    "source": "Pack 1/Moans High/Medium-High Pitched Soft_Timid Moans 4.mp3",
+    "start": 2.28,
+    "pitch": 432.4,
+    "bursts": 2,
+    "score": 1.283
   },
   {
-    "name": "Giggle_2",
-    "kind": "giggle",
+    "name": "Soft_2",
+    "kind": "soft",
     "variant": 2,
-    "seconds": 0.29
+    "seconds": 0.9,
+    "source": "Pack 1/Moans High/Medium-High Pitched Soft_Timid Moans 4.mp3",
+    "start": 5.01,
+    "pitch": 287.4,
+    "bursts": 2,
+    "score": 1.199
   },
   {
-    "name": "Giggle_3",
-    "kind": "giggle",
+    "name": "Soft_3",
+    "kind": "soft",
     "variant": 3,
-    "seconds": 0.45
+    "seconds": 0.99,
+    "source": "Pack 2/Moans (Mid)/Soft Moans.mp3",
+    "start": 7.99,
+    "pitch": 240.0,
+    "bursts": 1,
+    "score": 1.003
+  },
+  {
+    "name": "Soft_4",
+    "kind": "soft",
+    "variant": 4,
+    "seconds": 0.48,
+    "source": "Pack 1/Moans High/Medium-High Pitched Soft_Timid Moans 4.mp3",
+    "start": 0.23,
+    "pitch": 372.1,
+    "bursts": 1,
+    "score": 0.975
+  },
+  {
+    "name": "Soft_5",
+    "kind": "soft",
+    "variant": 5,
+    "seconds": 0.98,
+    "source": "Pack 2/Moans (Mid)/Soft Moans.mp3",
+    "start": 14.19,
+    "pitch": 292.7,
+    "bursts": 2,
+    "score": 0.501
+  },
+  {
+    "name": "Soft_6",
+    "kind": "soft",
+    "variant": 6,
+    "seconds": 0.96,
+    "source": "Pack 1/Moans High/Medium-High Pitched Soft_Timid Moans 4.mp3",
+    "start": 1.11,
+    "pitch": 403.4,
+    "bursts": 3,
+    "score": 0.114
+  },
+  {
+    "name": "Hum_1",
+    "kind": "hum",
+    "variant": 1,
+    "seconds": 0.86,
+    "source": "Pack 1/Moans Mid/Soft Moans and Breaths 1.mp3",
+    "start": 15.66,
+    "pitch": 194.3,
+    "bursts": 3,
+    "score": -0.168
+  },
+  {
+    "name": "Hum_2",
+    "kind": "hum",
+    "variant": 2,
+    "seconds": 1.35,
+    "source": "Pack 1/Moans Low/Deep-Voiced Sultry Teasing Moans 4.mp3",
+    "start": 11.44,
+    "pitch": 170.8,
+    "bursts": 2,
+    "score": -0.294
+  },
+  {
+    "name": "Hum_3",
+    "kind": "hum",
+    "variant": 3,
+    "seconds": 0.99,
+    "source": "Pack 1/Moans Low/Deep-Voiced Sultry Teasing Moans 4.mp3",
+    "start": 10.28,
+    "pitch": 275.9,
+    "bursts": 2,
+    "score": -0.454
+  },
+  {
+    "name": "Hum_4",
+    "kind": "hum",
+    "variant": 4,
+    "seconds": 0.72,
+    "source": "Pack 1/Moans Mid/Medium-Low Sultry Moans 10.mp3",
+    "start": 9.53,
+    "pitch": 184.6,
+    "bursts": 1,
+    "score": -0.748
+  },
+  {
+    "name": "Hum_5",
+    "kind": "hum",
+    "variant": 5,
+    "seconds": 0.77,
+    "source": "Pack 1/Moans Mid/Soft Moans and Breaths 1.mp3",
+    "start": 8.17,
+    "pitch": 206.0,
+    "bursts": 1,
+    "score": -0.819
+  },
+  {
+    "name": "Hum_6",
+    "kind": "hum",
+    "variant": 6,
+    "seconds": 0.93,
+    "source": "Pack 1/Moans Mid/Soft Moans and Breaths 1.mp3",
+    "start": 24.74,
+    "pitch": 219.2,
+    "bursts": 2,
+    "score": -0.823
   },
   {
     "name": "Sigh_1",
     "kind": "sigh",
     "variant": 1,
-    "seconds": 0.75
+    "seconds": 1.0,
+    "source": "Pack 1/Moans Mid/Additional Moans 12 Soft Breathing.mp3",
+    "start": 24.9,
+    "pitch": 298.1,
+    "bursts": 2,
+    "score": 4.68
   },
   {
     "name": "Sigh_2",
     "kind": "sigh",
     "variant": 2,
-    "seconds": 0.81
+    "seconds": 0.98,
+    "source": "Pack 1/Moans Mid/Additional Moans 12 Soft Breathing.mp3",
+    "start": 10.85,
+    "pitch": 277.5,
+    "bursts": 2,
+    "score": 4.244
   },
   {
     "name": "Sigh_3",
     "kind": "sigh",
     "variant": 3,
-    "seconds": 0.69
+    "seconds": 1.04,
+    "source": "Pack 1/Moans Mid/Additional Moans 12 Soft Breathing.mp3",
+    "start": 39.58,
+    "pitch": 340.4,
+    "bursts": 2,
+    "score": 3.864
+  },
+  {
+    "name": "Sigh_4",
+    "kind": "sigh",
+    "variant": 4,
+    "seconds": 1.14,
+    "source": "Pack 1/Moans Mid/Additional Moans 12 Soft Breathing.mp3",
+    "start": 23.67,
+    "pitch": 265.2,
+    "bursts": 2,
+    "score": 3.74
+  },
+  {
+    "name": "Sigh_5",
+    "kind": "sigh",
+    "variant": 5,
+    "seconds": 1.11,
+    "source": "Pack 1/Moans Mid/Additional Moans 12 Soft Breathing.mp3",
+    "start": 33.62,
+    "pitch": 129.4,
+    "bursts": 2,
+    "score": 3.722
+  },
+  {
+    "name": "Sigh_6",
+    "kind": "sigh",
+    "variant": 6,
+    "seconds": 1.13,
+    "source": "Pack 1/Moans Mid/Additional Moans 12 Soft Breathing.mp3",
+    "start": 32.4,
+    "pitch": 228.6,
+    "bursts": 2,
+    "score": 3.718
+  },
+  {
+    "name": "Giggle_1",
+    "kind": "giggle",
+    "variant": 1,
+    "seconds": 1.5,
+    "source": "Pack 1/Moans High/High-Pitched Teasing Moans and Giggles 1.mp3",
+    "start": 14.25,
+    "pitch": 274.3,
+    "bursts": 7,
+    "score": 4.4
+  },
+  {
+    "name": "Giggle_2",
+    "kind": "giggle",
+    "variant": 2,
+    "seconds": 1.25,
+    "source": "Pack 1/Moans High/High-Pitched Teasing Moans and Giggles 1.mp3",
+    "start": 15.87,
+    "pitch": 207.8,
+    "bursts": 4,
+    "score": 4.05
+  },
+  {
+    "name": "Giggle_3",
+    "kind": "giggle",
+    "variant": 3,
+    "seconds": 0.95,
+    "source": "Pack 1/Moans Mid/Additional Moans 24 playful soft with giggles.mp3",
+    "start": 0.28,
+    "pitch": 248.7,
+    "bursts": 4,
+    "score": 4.05
+  },
+  {
+    "name": "Giggle_4",
+    "kind": "giggle",
+    "variant": 4,
+    "seconds": 0.81,
+    "source": "Pack 1/Moans High/High-Pitched Teasing Moans and Giggles 1.mp3",
+    "start": 0.15,
+    "pitch": 440.4,
+    "bursts": 4,
+    "score": 3.91
+  },
+  {
+    "name": "Giggle_5",
+    "kind": "giggle",
+    "variant": 5,
+    "seconds": 2.07,
+    "source": "Pack 1/Moans High/High-Pitched Teasing Moans and Giggles 1.mp3",
+    "start": 28.18,
+    "pitch": 294.5,
+    "bursts": 6,
+    "score": 3.83
+  },
+  {
+    "name": "Giggle_6",
+    "kind": "giggle",
+    "variant": 6,
+    "seconds": 1.01,
+    "source": "Pack 1/Moans Mid/Additional Moans 24 playful soft with giggles.mp3",
+    "start": 14.11,
+    "pitch": 212.4,
+    "bursts": 3,
+    "score": 3.81
+  },
+  {
+    "name": "Ask_1",
+    "kind": "ask",
+    "variant": 1,
+    "seconds": 1.31,
+    "source": "Pack 2/Unique Sounds - Breathing - Efforts/_Ara Ara_ Sounds (Muffled).mp3",
+    "start": 3.08,
+    "pitch": 247.4,
+    "bursts": 4,
+    "score": 0.517
+  },
+  {
+    "name": "Ask_2",
+    "kind": "ask",
+    "variant": 2,
+    "seconds": 1.32,
+    "source": "Pack 2/Unique Sounds - Breathing - Efforts/_Ara Ara_ Sounds (Muffled).mp3",
+    "start": 19.04,
+    "pitch": 213.3,
+    "bursts": 6,
+    "score": 0.487
+  },
+  {
+    "name": "Ask_3",
+    "kind": "ask",
+    "variant": 3,
+    "seconds": 1.28,
+    "source": "Pack 2/Unique Sounds - Breathing - Efforts/_Ara Ara_ Sounds (Muffled).mp3",
+    "start": 16.97,
+    "pitch": 177.8,
+    "bursts": 3,
+    "score": 0.464
+  },
+  {
+    "name": "Ask_4",
+    "kind": "ask",
+    "variant": 4,
+    "seconds": 1.35,
+    "source": "Pack 2/Unique Sounds - Breathing - Efforts/_Ara Ara_ Sounds (Muffled).mp3",
+    "start": 7.76,
+    "pitch": 180.5,
+    "bursts": 3,
+    "score": 0.414
+  },
+  {
+    "name": "Ask_5",
+    "kind": "ask",
+    "variant": 5,
+    "seconds": 1.32,
+    "source": "Pack 2/Unique Sounds - Breathing - Efforts/_Ara Ara_ Sounds (Muffled).mp3",
+    "start": 9.99,
+    "pitch": 175.8,
+    "bursts": 5,
+    "score": 0.376
+  },
+  {
+    "name": "Ask_6",
+    "kind": "ask",
+    "variant": 6,
+    "seconds": 1.39,
+    "source": "Pack 2/Unique Sounds - Breathing - Efforts/_Ara Ara_ Sounds (Muffled).mp3",
+    "start": 12.23,
+    "pitch": 219.2,
+    "bursts": 4,
+    "score": 0.368
   },
   {
     "name": "Moan_1",
     "kind": "moan",
     "variant": 1,
-    "seconds": 0.9
+    "seconds": 1.13,
+    "source": "Pack 1/Moans High/Additional Moans 10.mp3",
+    "start": 6.02,
+    "pitch": 360.9,
+    "bursts": 4,
+    "score": 2.088
   },
   {
     "name": "Moan_2",
     "kind": "moan",
     "variant": 2,
-    "seconds": 0.972
+    "seconds": 1.06,
+    "source": "Pack 2/Moans (High)/Flirtatious-Energetic Soft to Intense Moans 3.mp3",
+    "start": 2.71,
+    "pitch": 494.8,
+    "bursts": 2,
+    "score": 2.058
   },
   {
     "name": "Moan_3",
     "kind": "moan",
     "variant": 3,
-    "seconds": 0.828
+    "seconds": 1.01,
+    "source": "Pack 2/Moans (High)/Medium to Intense Moans 3.mp3",
+    "start": 6.55,
+    "pitch": 396.7,
+    "bursts": 3,
+    "score": 2.002
+  },
+  {
+    "name": "Moan_4",
+    "kind": "moan",
+    "variant": 4,
+    "seconds": 0.77,
+    "source": "Pack 1/Moans High/Additional Moans 10.mp3",
+    "start": 5.02,
+    "pitch": 324.3,
+    "bursts": 1,
+    "score": 1.834
+  },
+  {
+    "name": "Moan_5",
+    "kind": "moan",
+    "variant": 5,
+    "seconds": 0.82,
+    "source": "Pack 1/Moans High/Additional Moans 10.mp3",
+    "start": 23.45,
+    "pitch": 338.0,
+    "bursts": 1,
+    "score": 1.832
+  },
+  {
+    "name": "Moan_6",
+    "kind": "moan",
+    "variant": 6,
+    "seconds": 0.9,
+    "source": "Pack 1/Moans High/Additional Moans 10.mp3",
+    "start": 19.23,
+    "pitch": 309.7,
+    "bursts": 2,
+    "score": 1.788
   }
 ]

@@ -2,10 +2,12 @@
 
 Reaction lines: speech-bubble text and voice per mood, zone and touch force.
 
-Imports the synthesized voice (generate_reaction_voice.py -> Exports/Gratia/Audio/Reactions/*.wav) as
-/Game/Gratia/Audio/Reactions/S_<Kind>_<n> and writes DA_Gratia.ReactionLines (FGratiaReactionLine). The presenter
-picks the most specific match: a fast touch, then the touched zone or penetration channel, then the mood.
-Moods: 0 calm, 1 cheerful, 2 reserved. Every line has one of the kind's voice variants (rotating).
+Imports the voice takes in Exports/Gratia/Audio/Reactions (reactions.json + *.wav: the recorded pack cut by
+prepare_reaction_voice_pack.py, or the synthesized fallback of generate_reaction_voice.py) as
+/Game/Gratia/Audio/Reactions/S_<Kind>_<n> (stale takes there are deleted) and writes DA_Gratia.ReactionLines
+(FGratiaReactionLine). The presenter picks the most specific match: a fast touch, then the touched zone or
+penetration channel, then the mood. Moods: 0 calm, 1 cheerful, 2 reserved. Every line starts on one of the kind's
+takes (rotating) and has the others as Variants, so a repeated line does not repeat its voice.
 
 Stances: free-play Pose switches between idle and looping clips without partner or music; their Label is
 what the menu shows.
@@ -72,6 +74,10 @@ LINES = [
 FORCE = {'any': unreal.GratiaReactionForce.ANY, 'gentle': unreal.GratiaReactionForce.GENTLE, 'strong': unreal.GratiaReactionForce.STRONG}
 
 manifest = json.loads((SOURCE / 'reactions.json').read_text(encoding='utf-8'))
+wanted = {'S_' + entry['name'] for entry in manifest}
+for path in LIB.list_assets(FOLDER, recursive=False):
+    if path.split('.')[0].rsplit('/', 1)[-1] not in wanted:
+        LIB.delete_asset(path.split('.')[0])
 voices = {}
 for entry in manifest:
     name = 'S_' + entry['name']
@@ -91,11 +97,13 @@ lines, turn = [], {}
 for text, kind, mood, targets, force in LINES:
     unknown = [t for t in targets if t not in zones | channels]
     assert not unknown, f'Unknown zones or channels for "{text}": {unknown}'
-    sound = voices[kind][turn.get(kind, 0) % len(voices[kind])]
+    takes = voices[kind]
+    sound = takes[turn.get(kind, 0) % len(takes)]
     turn[kind] = turn.get(kind, 0) + 1
     line = unreal.GratiaReactionLine()
     line.set_editor_property('text', unreal.Text(text))
     line.set_editor_property('sound', sound)
+    line.set_editor_property('variants', [take for take in takes if take != sound])
     line.set_editor_property('mood', mood)
     line.set_editor_property('zones', [unreal.Name(t) for t in targets])
     line.set_editor_property('force', FORCE[force])

@@ -225,6 +225,8 @@ void UGratiaSceneDirector::ApplyUserSettings()
     SetVoiceVolume(Settings->VoiceVolume);
     SetCaptions(Settings->bCaptions);
     SetComfort(Settings->TurnMode, Settings->WalkSpeed);
+    Runtime->bHandPenetration = Settings->bHandPenetration;
+    Runtime->bShowForearms = Settings->bForearms;
 }
 
 void UGratiaSceneDirector::SaveUserSettings()
@@ -243,6 +245,7 @@ void UGratiaSceneDirector::SaveUserSettings()
     Settings->bSound = Interaction->bSound;
     Settings->Mood = Interaction->Mood;
     if (Runtime && !Runtime->IsPartnerView()) Settings->HeightOffsetCm = Runtime->HeightOffsetCm;
+    if (Runtime) { Settings->bHandPenetration = Runtime->bHandPenetration; Settings->bForearms = Runtime->bShowForearms; }
     Settings->Sanitize();
     if (!bTestMode && !bFlowQA && !bMenuShots && PinnedScene.IsNone() && !Settings->Save()) UE_LOG(LogGratiaScenes, Warning, TEXT("SCENE_SETTINGS failed to save player settings"));
 }

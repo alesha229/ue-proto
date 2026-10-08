@@ -62,6 +62,33 @@ struct FShaft
     double Spacing() const { return Length / FMath::Max(1, Joints - 1); }
 };
 
+/** The player's hand as a shaft: three straight fingers, the whole hand with straight fingers, a fist. */
+enum class EHandShape : uint8 { None, Fingers, Hand, Fist };
+
+/** Leading tip back to mid-forearm (the base), cm at hand scale 1: the fingers and the flat hand reach the
+ *  fingertips and widen through the knuckles and the palm into the forearm; the fist leads with its knuckles and
+ *  narrows to the wrist and the forearm. The forearm is part of the shaft so a deep hand still opens the walls. */
+inline FShaft HandShaft(EHandShape Shape, double Scale = 1.0)
+{
+    FShaft Shaft;
+    switch (Shape)
+    {
+    case EHandShape::Fingers: Shaft.Length = 30.0; Shaft.Radius = 1.6; Shaft.TipCm = 1.3; Shaft.BaseScale = 2.0; break;
+    case EHandShape::Hand: Shaft.Length = 30.0; Shaft.Radius = 1.8; Shaft.TipCm = 2.0; Shaft.BaseScale = 2.0; break;
+    case EHandShape::Fist: Shaft.Length = 26.0; Shaft.Radius = 4.2; Shaft.TipCm = 3.0; Shaft.BaseScale = 0.75; break;
+    default: break;
+    }
+    const double Safe = FMath::IsFinite(Scale) && Scale > 0.1 ? Scale : 1.0;
+    Shaft.Length *= Safe; Shaft.Radius *= Safe; Shaft.TipCm *= Safe;
+    return Shaft;
+}
+
+/** Palm centre to the shape's leading tip (fingertips, or the fist's knuckles), cm at hand scale 1. */
+inline double HandTipFromPalmCm(EHandShape Shape) { return Shape == EHandShape::Fist ? 6.0 : 13.0; }
+
+/** Palm centre back to the wrist, cm at hand scale 1. */
+constexpr double HandWristBackCm = 5.0;
+
 /** Straight free shaft from Base along Direction (joint 0 is the base, the last joint is the tip). */
 inline void StraightJoints(const FShaft& Shaft, const FVector& Base, const FVector& Direction, TArray<FVector>& Out)
 {

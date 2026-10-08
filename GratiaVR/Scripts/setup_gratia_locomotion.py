@@ -34,6 +34,13 @@ for action in (grab_left, grab_right, grip_left, grip_right):
 recenter = asset('IA_Recenter', unreal.InputAction)
 recenter.set_editor_property('value_type', unreal.InputActionValueType.BOOLEAN)
 recenter.set_editor_property('consume_input', True)
+# Thumb resting on the stick or a face button (touch): with grip and trigger released the hand goes flat,
+# all fingers straight, for the character's channels (GratiaStage1Runtime::UpdateHandShaft).
+thumb_left = asset('IA_ThumbLeft', unreal.InputAction)
+thumb_right = asset('IA_ThumbRight', unreal.InputAction)
+for action in (thumb_left, thumb_right):
+    action.set_editor_property('value_type', unreal.InputActionValueType.BOOLEAN)
+    action.set_editor_property('consume_input', False)
 bindings = []
 
 def mapping(action, key, y=False, negative=False):
@@ -78,6 +85,13 @@ for prefix, stick in xr_sticks:
             if unreal.InputLibrary.key_is_valid(probe):
                 mapping(action, key)
                 break
+    for side, action in (('Left', thumb_left), ('Right', thumb_right)):
+        for name in (f'{stick}_Touch', 'Trackpad_Touch', 'X_Touch', 'Y_Touch', 'A_Touch', 'B_Touch'):
+            key = f'{prefix}_{side}_{name}'
+            probe = unreal.Key()
+            probe.set_editor_property('key_name', key)
+            if unreal.InputLibrary.key_is_valid(probe) and not any(b['key'] == key for b in bindings):
+                mapping(action, key)
     # Sticks only: a Vive trackpad is pressed while walking.
     for side in ('Left', 'Right') if stick == 'Thumbstick' else ():
         mapping(recenter, f'{prefix}_{side}_{stick}_Click')
@@ -85,6 +99,8 @@ mapping(grab_left, 'Z')
 mapping(grab_right, 'X')
 mapping(grip_left, 'C')
 mapping(grip_right, 'V')
+mapping(thumb_left, 'B')
+mapping(thumb_right, 'N')
 mapping(walk, 'Gamepad_LeftX')
 mapping(walk, 'Gamepad_LeftY', y=True)
 mapping(turn, 'Gamepad_RightX')
@@ -142,7 +158,7 @@ for prefix, left_previous in [('OculusTouch', 'X'), ('ValveIndex', 'A')]:
 mapping(next_action, 'Down')
 mapping(next_action, 'Up', negative=True)
 mapping(apply_action, 'Enter')
-for item in [walk, turn, block, grab_left, grab_right, grip_left, grip_right, recenter, toggle, next_action, apply_action, movement_context, context]:
+for item in [walk, turn, block, grab_left, grab_right, grip_left, grip_right, recenter, thumb_left, thumb_right, toggle, next_action, apply_action, movement_context, context]:
     description = 'action_description' if isinstance(item, unreal.InputAction) else 'context_description'
     item.set_editor_property(description, item.get_name())
     assert library.save_loaded_asset(item, only_if_is_dirty=False)

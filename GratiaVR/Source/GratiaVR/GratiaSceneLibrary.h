@@ -193,6 +193,10 @@ public:
     UPROPERTY() int32 TurnMode = 0;
     /** Stick walking speed: 0 slow, 1 normal, 2 fast. */
     UPROPERTY() int32 WalkSpeed = 1;
+    /** The player's hands may enter the character's channels (fingers, flat hand, fist). */
+    UPROPERTY() bool bHandPenetration = true;
+    /** Forearms continue the hands toward the elbows. */
+    UPROPERTY() bool bForearms = true;
     UPROPERTY() FName LastScene;
     /** Playlist entry (analysis asset name) playing when the game was closed. */
     UPROPERTY() FName LastTrack;
