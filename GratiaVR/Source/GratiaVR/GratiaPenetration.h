@@ -109,6 +109,8 @@ private:
         float MorphWeight = 0.0f;
         /** Morph weight at the widest opening (the gape keeps a share of it). */
         float MorphHeld = 0.0f;
+        /** Weight the morph shows: all of MorphWeight, or with shape-fitting materials only the gape beyond the shaft. */
+        float MorphShown = 0.0f;
         /** Last value sent to the stretch material parameter. */
         float StretchSent = 0.0f;
         int32 Inside = 0;

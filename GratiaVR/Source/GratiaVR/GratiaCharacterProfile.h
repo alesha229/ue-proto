@@ -797,10 +797,11 @@ struct GRATIAVR_API FGratiaPenetrationSettings
     /**
      * Shape-fitting deformation: the solver writes every engaged shaft (its path from the tip, profile form, size and
      * depth; slots S0..S3) to this collection each frame, and the character's skin and clothing materials push the
-     * surface out of it (MF_GratiaShaftPress): on top of the opening morphs and wall bones, wherever the shaft is wider
-     * than what they opened (a head, a knot, a bead, deeper in the channel) the walls take its exact cross-section and
+     * surface out of it (MF_GratiaShaftPress): the walls take the shaft's exact cross-section (a head, a knot, a bead),
      * surrounding tissue moves less the further it is, and skin the shaft would pass through (lips outside the entrance,
-     * a thigh) is pushed out to its surface. None: the opening morphs, bones and bulges alone.
+     * a thigh) is pushed out to its surface. The opening morphs then show only the gape that lingers after the shaft
+     * narrows or leaves; the wall bones (and the outer ring) and the bulge morphs work as without it. None: the opening
+     * morphs, bones and bulges alone.
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Shape")
     TObjectPtr<UMaterialParameterCollection> ShaftCollection;

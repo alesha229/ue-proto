@@ -163,7 +163,7 @@ void UGratiaPenetration::ResetPenetration()
     {
         for (FWallBone& Bone : Channel.Bones) Bone.Offset = Bone.Target = Bone.Held = FVector::ZeroVector;
         Channel.Peak = Channel.OpenSeconds = Channel.SinceWidest = Channel.Clench = Channel.NextClench = 0.0;
-        Channel.MorphWeight = Channel.MorphHeld = 0.0f;
+        Channel.MorphWeight = Channel.MorphHeld = Channel.MorphShown = 0.0f;
         Channel.Inside = 0;
         for (int32 Bulge = 0; Bulge < Channel.BulgeMorphs.Num(); ++Bulge)
         {
@@ -452,15 +452,18 @@ void UGratiaPenetration::UpdateWalls(float Delta)
         if (!Channel.Morph.IsNone() && Source)
         {
             if (bWidest) Channel.MorphHeld = Channel.MorphWeight;
-            const float Target = FMath::Max(float(FMath::Clamp(Opening / FMath::Max(0.1, double(Source->MorphFullOpeningCm) * Channel.Scale), 0.0, 1.0) * Squeeze),
-                Channel.MorphHeld * float(Gape));
+            const float Instant = float(FMath::Clamp(Opening / FMath::Max(0.1, double(Source->MorphFullOpeningCm) * Channel.Scale), 0.0, 1.0) * Squeeze);
+            const float Target = FMath::Max(Instant, Channel.MorphHeld * float(Gape));
             const bool bOpening = Target >= Channel.MorphWeight;
             Channel.MorphWeight = FMath::Lerp(Channel.MorphWeight, Target, float(bOpening || Channel.Clench > 0.0 ? OpenAlpha : CloseAlpha));
             if (Channel.MorphWeight < 1.0e-3 && Target <= 0.0f) Channel.MorphWeight = 0.0f;
-            if (Channel.MorphWeight > 0.0f || Channel.bMorphSet)
+            // With shape-fitting materials the shaft itself shapes the opening while it is inside (the material fits the
+            // skin to it); the morph shows only the gape that lingers beyond it after the shaft narrows or leaves.
+            Channel.MorphShown = Settings.ShaftCollection ? FMath::Max(0.0f, Channel.MorphWeight - Instant) : Channel.MorphWeight;
+            if (Channel.MorphShown > 0.0f || Channel.bMorphSet)
             {
-                Character->CharacterMesh->SetMorphTarget(Channel.Morph, Channel.MorphWeight, false);
-                Channel.bMorphSet = Channel.MorphWeight > 0.0f;
+                Character->CharacterMesh->SetMorphTarget(Channel.Morph, Channel.MorphShown, false);
+                Channel.bMorphSet = Channel.MorphShown > 0.0f;
             }
             // The skin material shades the stretched skin with the opening.
             if (!Source->StretchParameter.IsNone() && FMath::Abs(Channel.MorphWeight - Channel.StretchSent) > 0.002f)
@@ -790,9 +793,9 @@ void UGratiaPenetration::PushShaftsToMaterials()
             FMath::Max(0.0, Engagement.Inserted)));
         const double Rest = Source ? Source->RestRadiusCm * Channel.Scale : 0.4;
         Instance->SetVectorParameterValue(StateNames[Slot], FLinearColor(Geometry.TipCm, Geometry.BaseScale, Rest, 1.0f));
-        // How far the opening morph has opened the walls at the entrance, and how deep it reaches: the material adds
-        // only what the shaft needs beyond it.
-        const double Opened = Rest + (Source ? Channel.MorphWeight * Source->MorphFullOpeningCm * Channel.Scale : 0.0);
+        // How far the opening morph has opened the walls at the entrance (the lingering gape), and how deep it reaches:
+        // the material adds only what the shaft needs beyond it.
+        const double Opened = Rest + (Source ? Channel.MorphShown * Source->MorphFullOpeningCm * Channel.Scale : 0.0);
         Instance->SetVectorParameterValue(OpenNames[Slot], FLinearColor(Opened, Source ? Source->MorphDepthCm * Channel.Scale : 8.0, 0.0f, 0.0f));
         FLinearColor Tip, Shape;
         Instance->GetVectorParameterValue(PointNames[Slot * Points], Tip);
