@@ -52,7 +52,10 @@ The profile owns model-specific references and names:
 - Penetration channels (`Penetration.Channels`): wall bones move only as far as the shaft surface reaches past
   their rest distance from the axis; `OpeningMorph` (driven at 1 by `MorphFullOpeningCm`) opens the channel over a
   wide smooth area and, when set, the bones keep a quarter of their offset for the lips' shape. Gratia's morphs
-  `Gratia_OpenVaginal`/`Gratia_OpenAnal` are generated on the mesh by `setup_penetration.py`. The player's hands
+  `Gratia_OpenVaginal`/`Gratia_OpenAnal` are generated on the mesh by `setup_penetration.py`, after it subdivides
+  the skin around the entrances (`SubdivideMeshAroundBones`). `Bulges` (morph + depth) swell the belly with the
+  radius of the shaft passing each depth: full at `BulgeFullRadiusCm`, up to `BulgeMaxWeight` for the largest sizes.
+  `Resistance` (depth, tightness 0..1) makes the shaft lag behind the hand where it is tight. The player's hands
   enter as three fingers, a flat hand or a fist; a channel takes up to two shafts side by side.
 - Free-play stances: in a scene the Pose item switches between idle and every PerformanceClip that is
   a looping single clip without music, partner or viewpoint; `Label` is what the menu shows

@@ -62,13 +62,25 @@ public:
         const TArray<FName>& LeftBones, const TArray<FName>& RightBones, float OpeningCm, float CoreRadiusCm, float FalloffCm,
         float OutsideCm, float InsideCm, float AlongSlit);
     /**
-     * Adds or replaces MorphName on LOD 0 of Mesh: a swelling around the point DepthCm along the channel (entrance at
-     * the centre of EntranceBones, axis toward InwardBone, reference pose). Vertices within RadiusCm of that point
-     * move away from it by up to AmountCm, smoothly fading out (RadiusCm is kept at least twice AmountCm, so the skin
-     * never folds), and mostly toward the front: the side the centre of FrontBones lies on from BackBones, horizontally.
+     * Splits the triangles of Mesh (LOD 0, mesh description) whose centre lies within RadiusCm of any of Bones
+     * (reference pose) into four, and their neighbours along the split edges into two or three, so there are no
+     * T-junctions. New vertices take the average position, blended skin weights (every profile) and the average of
+     * every morph delta; seam vertex instances stay separate. Runs once per Marker (a vertex attribute left on the
+     * description), so a setup script can call it every time. Returns the number of split edges, 0 when already done,
+     * -1 on bad input.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
+    static int32 SubdivideMeshAroundBones(USkeletalMesh* Mesh, const TArray<FName>& Bones, float RadiusCm, FName Marker);
+    /**
+     * Adds or replaces MorphName on LOD 0 of Mesh: a belly swelling in front of the point DepthCm along the channel
+     * (entrance at the centre of EntranceBones, axis toward InwardBone, reference pose). Everything in front of that
+     * point (the front: the side the centre of FrontBones lies on from BackBones, horizontally) moves forward by up to
+     * AmountCm, whatever its depth, fading out across the belly over RadiusCm (kept at least twice AmountCm, so the
+     * skin never folds); nothing behind the point moves, nor anything up to FloorCm above the centre of FrontBones (the
+     * entrance, the pubic area and the thighs stay; the swelling fades in over 5 cm above that).
      * Returns the number of moved vertices, -1 on bad input.
      */
     UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
     static int32 CreateChannelBulgeMorph(USkeletalMesh* Mesh, FName MorphName, const TArray<FName>& EntranceBones, FName InwardBone,
-        float DepthCm, const TArray<FName>& FrontBones, const TArray<FName>& BackBones, float RadiusCm, float AmountCm);
+        float DepthCm, const TArray<FName>& FrontBones, const TArray<FName>& BackBones, float RadiusCm, float AmountCm, float FloorCm);
 };

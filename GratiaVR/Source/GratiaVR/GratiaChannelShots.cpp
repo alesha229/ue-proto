@@ -102,8 +102,27 @@ void UGratiaChannelShots::TickComponent(float Delta, ELevelTick Type, FActorComp
     FVector Entrance, Inward;
     double Depth = 0.0;
     if (!Penetration->GetChannelFrame(Channel, Name, Entrance, Inward, Depth)) { ++Step; Seconds = 0.0f; return; }
-    if (ViewIndex == 0 && Seconds <= Delta + UE_SMALL_NUMBER) Arrange(Channel, Case);
-    // Tip 1 cm before the entrance for the capture, then in to its depth (two hands side by side).
+    // Tip 1 cm before the entrance until every shaft is captured (or 3 s passed), then in at 25 cm/s to its depth
+    // (two hands side by side). The deep case first shows the belly with the shaft held at the entrance, then goes in.
+    const bool bFirstFrame = Seconds <= Delta + UE_SMALL_NUMBER;
+    const bool bBaseline = Case == 6 && ViewIndex == 0;
+    if (ViewIndex == 0 && bFirstFrame) { Arrange(Channel, Case); Inserting = -1.0f; }
+    if (Case == 6 && ViewIndex == 1 && bFirstFrame) Inserting = 0.0f;
+    const double Target = Case == 3 ? 4.0 : Case == 5 ? 8.0 : Case == 6 ? Depth * 0.85 : 6.0;
+    constexpr double Speed = 25.0;
+    if (ViewIndex == 0 && Inserting < 0.0f)
+    {
+        // Engagements of the previous case's shafts are dropped by the next solve.
+        if (Seconds > 0.1f && Penetration->GetEngagementCount() >= Shafts.Num()) Inserting = 0.0f;
+        else if (Seconds > 3.0f)
+        {
+            UE_LOG(LogGratiaChannelShots, Warning, TEXT("CHANNEL_SHOT not captured channel=%s case=%s engaged=%d of %d"), *Name.ToString(),
+                *CaseName(Case), Penetration->GetEngagementCount(), Shafts.Num());
+            Inserting = 0.0f;
+        }
+    }
+    else Inserting += Delta;
+    const double TipDepth = Inserting < 0.0f || bBaseline ? -1.0 : FMath::Min(Target, -1.0 + Inserting * Speed);
     const AActor* Body = Runtime->TargetCharacter.Get();
     const FVector Side = Body->GetActorRightVector();
     for (int32 Index = 0; Index < Shafts.Num(); ++Index)
@@ -111,7 +130,6 @@ void UGratiaChannelShots::TickComponent(float Delta, ELevelTick Type, FActorComp
         AGratiaPenetrator* Shaft = Shafts[Index];
         if (!Shaft) continue;
         const double Length = Shaft->GetShaft().Length;
-        const double TipDepth = ViewIndex == 0 && Seconds < 0.2f ? -1.0 : Case == 3 ? 4.0 : Case == 5 ? 8.0 : Case == 6 ? Depth * 0.85 : 6.0;
         const FVector Offset = Shafts.Num() > 1 ? Side * (Index == 0 ? -1.6 : 1.6) : FVector::ZeroVector;
         Shaft->SetBase(FTransform(FRotationMatrix::MakeFromX(Inward).ToQuat(), Entrance + Offset - Inward * (Length - TipDepth)));
     }
@@ -124,12 +142,15 @@ void UGratiaChannelShots::TickComponent(float Delta, ELevelTick Type, FActorComp
     FVector Look = Entrance + Inward * 2.0;
     if (Case == 6)
     {
-        // The belly in front of the deep shaft, from the front and from the side (the character's own forward axis).
+        // The belly in front of the deep shaft, before and after, three-quarter from the side (a hanging arm hides it
+        // from straight beside it; the character's own forward axis).
         const UGratiaCharacterProfile* Profile = Runtime->TargetCharacter->CharacterProfile.Get();
-        const FVector Forward = Body->GetActorTransform().TransformVectorNoScale(Profile ? Profile->ForwardAxis : FVector::RightVector).GetSafeNormal2D();
+        const USceneComponent* Mesh = Runtime->TargetCharacter->CharacterMesh.Get();
+        const FTransform Frame = Mesh ? Mesh->GetComponentTransform() : Body->GetActorTransform();
+        const FVector Forward = Frame.TransformVectorNoScale(Profile ? Profile->ForwardAxis : FVector::RightVector).GetSafeNormal2D();
         const FVector Across = FVector::CrossProduct(FVector::UpVector, Forward);
         Look = Entrance + Inward * (Depth * 0.5);
-        Eye = ViewIndex == 0 ? Look + Forward * 70.0 : Look + Across * 70.0 + Forward * 15.0;
+        Eye = Look + Across * 50.0 + Forward * 50.0;
     }
     if (!View)
     {
@@ -141,10 +162,12 @@ void UGratiaChannelShots::TickComponent(float Delta, ELevelTick Type, FActorComp
         View->SetActorLocationAndRotation(Eye, (Look - Eye).Rotation());
         if (Player->GetViewTarget() != View) Player->SetViewTarget(View);
     }
-    const float Wait = ViewIndex == 0 ? 1.4f : 0.5f;
-    if (Seconds < Wait) return;
+    // Walls and morphs settle 1.2 s after the shafts reached their depth.
+    const bool bInsertView = Case == 6 ? ViewIndex == 1 : ViewIndex == 0;
+    if (Inserting < 0.0f || (bBaseline ? Inserting < 0.5f : bInsertView ? Inserting < (Target + 1.0) / Speed + 1.2 : Seconds < 0.5f)) return;
     const FString File = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Screenshots/ChannelShots"),
-        FString::Printf(TEXT("Channel_%s_%s_%s.png"), *Name.ToString(), *CaseName(Case), ViewIndex == 0 ? TEXT("Axis") : TEXT("Side")));
+        FString::Printf(TEXT("Channel_%s_%s_%s.png"), *Name.ToString(), *CaseName(Case),
+        Case == 6 ? (ViewIndex == 0 ? TEXT("BellyBefore") : TEXT("Belly")) : ViewIndex == 0 ? TEXT("Axis") : TEXT("Side")));
     FScreenshotRequest::RequestScreenshot(File, false, false);
     UE_LOG(LogGratiaChannelShots, Display, TEXT("CHANNEL_SHOT %s %s"), *File, *Penetration->GetDiagnostics());
     ++Step;

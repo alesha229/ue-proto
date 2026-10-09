@@ -257,7 +257,7 @@ bool GratiaRefCentre(const FReferenceSkeleton& Ref, const TArray<FName>& Bones, 
 }
 
 int32 UGratiaExperienceToolsLibrary::CreateChannelBulgeMorph(USkeletalMesh* Mesh, FName MorphName, const TArray<FName>& EntranceBones, FName InwardBone,
-    float DepthCm, const TArray<FName>& FrontBones, const TArray<FName>& BackBones, float RadiusCm, float AmountCm)
+    float DepthCm, const TArray<FName>& FrontBones, const TArray<FName>& BackBones, float RadiusCm, float AmountCm, float FloorCm)
 {
     if (!Mesh || MorphName.IsNone() || AmountCm <= 0.0f || !Mesh->HasMeshDescription(0)) return -1;
     const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
@@ -280,15 +280,22 @@ int32 UGratiaExperienceToolsLibrary::CreateChannelBulgeMorph(USkeletalMesh* Mesh
     int32 Moved = 0;
     for (const FVertexID Vertex : Description->Vertices().GetElementIDs())
     {
-        const FVector Away = FVector(Positions[Vertex]) - Centre;
-        const double Distance = Away.Size();
+        // The skin in front of the path moves forward by the full amount however deep the path lies under it, fading
+        // out across the belly (and a little outward, so the swelling is round); nothing behind the path moves, nor
+        // the entrance, the pubic area and the thighs below the floor (fading in over 5 cm above it).
+        const FVector Point(Positions[Vertex]);
+        const double Above = Smoother((Point.Z - Front.Z - FloorCm) / 5.0);
+        const FVector Away = Point - Centre;
+        const double Ahead = FVector::DotProduct(Away, Forward);
+        const FVector Across = Away - Forward * Ahead;
+        const double Spread = Across.Size();
         FVector Delta = FVector::ZeroVector;
-        if (Distance > 0.05 && Distance < Radius)
+        if (Ahead > -2.0 && Ahead < 25.0 && Spread < Radius && Above > 0.0)
         {
-            const FVector Direction = Away / Distance;
-            // The belly in front swells; the sides a little, the back not at all.
-            const double Facing = Smoother((FVector::DotProduct(Direction, Forward) + 0.2) / 0.8);
-            Delta = Direction * (Amount * (1.0 - Smoother(Distance / Radius)) * Facing);
+            const double InFront = Smoother((Ahead + 2.0) / 4.0);
+            const double Fade = 1.0 - Smoother(Spread / Radius);
+            const FVector Direction = (Forward + Across.GetSafeNormal() * (0.35 * Spread / Radius)).GetSafeNormal();
+            Delta = Direction * (Amount * Fade * InFront * Above);
         }
         Deltas[Vertex] = FVector3f(Delta);
         if (Delta.SizeSquared() > 1.0e-6) ++Moved;
@@ -300,6 +307,164 @@ int32 UGratiaExperienceToolsLibrary::CreateChannelBulgeMorph(USkeletalMesh* Mesh
     USkinnedAsset* const Built[] = {Mesh};
     FSkinnedAssetCompilingManager::Get().FinishCompilation(Built);
     Mesh->MarkPackageDirty();
-    UE_LOG(LogTemp, Display, TEXT("GRATIA_BULGE_MORPH %s depth=%.1fcm moved=%d amount=%.1fcm radius=%.1fcm"), *MorphName.ToString(), DepthCm, Moved, Amount, Radius);
+    UE_LOG(LogTemp, Display, TEXT("GRATIA_BULGE_MORPH %s depth=%.1fcm moved=%d amount=%.1fcm radius=%.1fcm floor=%.1fcm"), *MorphName.ToString(), DepthCm,
+        Moved, Amount, Radius, FloorCm);
     return Moved;
+}
+
+int32 UGratiaExperienceToolsLibrary::SubdivideMeshAroundBones(USkeletalMesh* Mesh, const TArray<FName>& Bones, float RadiusCm, FName Marker)
+{
+    if (!Mesh || Bones.IsEmpty() || RadiusCm <= 0.0f || Marker.IsNone() || !Mesh->HasMeshDescription(0)) return -1;
+    FMeshDescription* Description = Mesh->GetMeshDescription(0);
+    if (!Description) return -1;
+    if (Description->VertexAttributes().HasAttribute(Marker)) return 0;
+    const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
+    TArray<FVector> Centres;
+    for (const FName Bone : Bones)
+    {
+        FVector Point;
+        if (!GratiaRefCentre(Ref, {Bone}, Point)) return -1;
+        Centres.Add(Point);
+    }
+    FSkeletalMeshAttributes Attributes(*Description);
+    TVertexAttributesRef<FVector3f> Positions = Attributes.GetVertexPositions();
+    auto Near = [&Centres, RadiusCm](const FVector& Point)
+    {
+        for (const FVector& Centre : Centres) if (FVector::DistSquared(Point, Centre) < FMath::Square(double(RadiusCm))) return true;
+        return false;
+    };
+    // Every edge of a triangle near a bone is split.
+    TSet<FEdgeID> Split;
+    for (const FTriangleID Triangle : Description->Triangles().GetElementIDs())
+    {
+        FVector Centre = FVector::ZeroVector;
+        for (const FVertexInstanceID Instance : Description->GetTriangleVertexInstances(Triangle))
+            Centre += FVector(Positions[Description->GetVertexInstanceVertex(Instance)]) / 3.0;
+        if (Near(Centre)) for (const FEdgeID Edge : Description->GetTriangleEdges(Triangle)) Split.Add(Edge);
+    }
+    if (Split.IsEmpty()) { Description->VertexAttributes().RegisterAttribute<int32>(Marker, 1, 0); return 0; }
+    // The triangles to replace are recorded and removed first; new elements are created afterwards (the mesh
+    // description's indexers do not take removals mixed with fresh elements).
+    struct FOld { FVertexInstanceID I[3]; FVertexID V[3]; FEdgeID E[3]; bool S[3]; FPolygonGroupID Group; };
+    TArray<FOld> Replaced;
+    for (const FTriangleID Triangle : Description->Triangles().GetElementIDs())
+    {
+        const TArrayView<const FVertexInstanceID> View = Description->GetTriangleVertexInstances(Triangle);
+        FOld Old;
+        bool bAny = false;
+        for (int32 Corner = 0; Corner < 3; ++Corner)
+        {
+            Old.I[Corner] = View[Corner];
+            Old.V[Corner] = Description->GetVertexInstanceVertex(View[Corner]);
+        }
+        for (int32 Side = 0; Side < 3; ++Side)
+        {
+            Old.E[Side] = Description->GetVertexPairEdge(Old.V[Side], Old.V[(Side + 1) % 3]);
+            Old.S[Side] = Split.Contains(Old.E[Side]);
+            bAny |= Old.S[Side];
+        }
+        if (!bAny) continue;
+        Old.Group = Description->GetTrianglePolygonGroup(Triangle);
+        Replaced.Add(Old);
+    }
+    TArray<FTriangleID> Remove;
+    for (const FTriangleID Triangle : Description->Triangles().GetElementIDs())
+        for (const FEdgeID Edge : Description->GetTriangleEdges(Triangle))
+            if (Split.Contains(Edge)) { Remove.Add(Triangle); break; }
+    TArray<FEdgeID> Orphans;
+    // Imported skeletal meshes carry no UV elements on their triangles (UVs live on the vertex instances); the UV
+    // indexer would trip over the empty references, so it stays suspended while triangles are replaced.
+    Description->SuspendUVIndexing();
+    for (const FTriangleID Triangle : Remove) Description->DeleteTriangle(Triangle, &Orphans);
+    // Midpoint vertices: average position and morph deltas, blended skin weights in every profile.
+    TArray<FName> Profiles = Attributes.GetSkinWeightProfileNames();
+    if (Profiles.IsEmpty()) Profiles.Add(NAME_None);
+    const TArray<FName> Morphs = Attributes.GetMorphTargetNames();
+    TMap<FEdgeID, FVertexID> Middle;
+    for (const FEdgeID Edge : Split)
+    {
+        const FVertexID A = Description->GetEdgeVertex(Edge, 0), B = Description->GetEdgeVertex(Edge, 1);
+        const FVertexID Mid = Description->CreateVertex();
+        Positions = Attributes.GetVertexPositions();
+        Positions[Mid] = (Positions[A] + Positions[B]) * 0.5f;
+        for (const FName Profile : Profiles)
+        {
+            FSkinWeightsVertexAttributesRef Weights = Attributes.GetVertexSkinWeights(Profile);
+            const UE::AnimationCore::FBoneWeights WeightsA = UE::AnimationCore::FBoneWeights::Create(Weights.Get(A));
+            const UE::AnimationCore::FBoneWeights WeightsB = UE::AnimationCore::FBoneWeights::Create(Weights.Get(B));
+            Weights.Set(Mid, UE::AnimationCore::FBoneWeights::Blend(WeightsA, WeightsB, 0.5f));
+        }
+        for (const FName Morph : Morphs)
+        {
+            TVertexAttributesRef<FVector3f> Deltas = Attributes.GetVertexMorphPositionDelta(Morph);
+            Deltas[Mid] = (Deltas[A] + Deltas[B]) * 0.5f;
+        }
+        Middle.Add(Edge, Mid);
+    }
+    // Midpoint vertex instances, shared by both triangles of an edge unless a seam separates their instances.
+    TMap<TPair<FVertexInstanceID, FVertexInstanceID>, FVertexInstanceID> MiddleInstance;
+    auto MidInstance = [&](FVertexInstanceID A, FVertexInstanceID B, FVertexID Vertex)
+    {
+        const TPair<FVertexInstanceID, FVertexInstanceID> Key = A.GetValue() < B.GetValue() ? MakeTuple(A, B) : MakeTuple(B, A);
+        if (const FVertexInstanceID* Found = MiddleInstance.Find(Key)) return *Found;
+        const FVertexInstanceID Instance = Description->CreateVertexInstance(Vertex);
+        TVertexInstanceAttributesRef<FVector2f> UVs = Attributes.GetVertexInstanceUVs();
+        TVertexInstanceAttributesRef<FVector3f> Normals = Attributes.GetVertexInstanceNormals();
+        TVertexInstanceAttributesRef<FVector3f> Tangents = Attributes.GetVertexInstanceTangents();
+        TVertexInstanceAttributesRef<float> Signs = Attributes.GetVertexInstanceBinormalSigns();
+        TVertexInstanceAttributesRef<FVector4f> Colors = Attributes.GetVertexInstanceColors();
+        for (int32 Channel = 0; Channel < UVs.GetNumChannels(); ++Channel) UVs.Set(Instance, Channel, (UVs.Get(A, Channel) + UVs.Get(B, Channel)) * 0.5f);
+        if (Normals.IsValid()) Normals[Instance] = (Normals[A] + Normals[B]).GetSafeNormal();
+        if (Tangents.IsValid()) Tangents[Instance] = (Tangents[A] + Tangents[B]).GetSafeNormal();
+        if (Signs.IsValid()) Signs[Instance] = Signs[A];
+        if (Colors.IsValid()) Colors[Instance] = (Colors[A] + Colors[B]) * 0.5f;
+        MiddleInstance.Add(Key, Instance);
+        return Instance;
+    };
+    // Retriangulate: three split edges make four triangles, two make three, one makes two (no T-junctions).
+    for (const FOld& Old : Replaced)
+    {
+        const FPolygonGroupID Group = Old.Group;
+        auto Make = [Description, Group](FVertexInstanceID A, FVertexInstanceID B, FVertexInstanceID C)
+        {
+            const FVertexInstanceID Corners[3] = {A, B, C};
+            Description->CreateTriangle(Group, Corners);
+        };
+        FVertexInstanceID M[3];
+        for (int32 Side = 0; Side < 3; ++Side)
+            M[Side] = Old.S[Side] ? MidInstance(Old.I[Side], Old.I[(Side + 1) % 3], Middle[Old.E[Side]]) : FVertexInstanceID();
+        const FVertexInstanceID* I = Old.I;
+        const bool* S = Old.S;
+        const int32 Count = int32(S[0]) + int32(S[1]) + int32(S[2]);
+        if (Count == 3)
+        {
+            Make(I[0], M[0], M[2]); Make(M[0], I[1], M[1]); Make(M[2], M[1], I[2]); Make(M[0], M[1], M[2]);
+        }
+        else
+        {
+            // Rotate so the first split side starts the triangle (winding kept).
+            int32 R = 0;
+            while (!S[R]) ++R;
+            const FVertexInstanceID A = I[R], B = I[(R + 1) % 3], C = I[(R + 2) % 3];
+            const FVertexInstanceID AB = M[R], BC = M[(R + 1) % 3], CA = M[(R + 2) % 3];
+            if (Count == 1) { Make(A, AB, C); Make(AB, B, C); }
+            else if (S[(R + 1) % 3]) { Make(AB, B, BC); Make(A, AB, BC); Make(A, BC, C); }
+            else { Make(A, AB, CA); Make(AB, B, C); Make(AB, C, CA); }
+        }
+    }
+    // Split edges left without triangles go (edges reused by the new triangles stay).
+    for (const FEdgeID Edge : Orphans)
+        if (Description->IsEdgeValid(Edge) && Description->GetNumEdgeConnectedTriangles(Edge) == 0) Description->DeleteEdge(Edge);
+    Description->ResumeUVIndexing();
+    Description->VertexAttributes().RegisterAttribute<int32>(Marker, 1, 0);
+    USkeletalMesh::FCommitMeshDescriptionParams Params;
+    Params.bMarkPackageDirty = true;
+    if (!Mesh->CommitMeshDescription(0, Params)) return -1;
+    Mesh->Build();
+    USkinnedAsset* const Built[] = {Mesh};
+    FSkinnedAssetCompilingManager::Get().FinishCompilation(Built);
+    Mesh->MarkPackageDirty();
+    UE_LOG(LogTemp, Display, TEXT("GRATIA_SUBDIVIDE %s radius=%.1fcm split_edges=%d triangles=%d vertices=%d"), *Marker.ToString(), RadiusCm,
+        Split.Num(), Description->Triangles().Num(), Description->Vertices().Num());
+    return Split.Num();
 }

@@ -423,7 +423,11 @@ void UGratiaPenetration::UpdateWalls(float Delta)
             double Radius = 0.0;
             for (const FEngagement* Engagement : Inside)
                 Radius = FMath::Max(Radius, Engagement->Shaft->GetShaft().RadiusAt(Engagement->Inserted - Channel.BulgeDepths[Bulge] * Channel.Scale));
-            const float Target = float(FMath::Clamp(Radius / FMath::Max(0.5, double(Source ? Source->BulgeFullRadiusCm : 4.5f) * Channel.Scale), 0.0, 1.0));
+            // Below 40 % of the full radius (fingers) nothing shows; from there it grows to full (a fist, XXL) and on
+            // for the largest sizes up to BulgeMaxWeight.
+            const double Full = FMath::Max(0.5, double(Source ? Source->BulgeFullRadiusCm : 4.5f) * Channel.Scale);
+            const double MaxWeight = FMath::Max(1.0, double(Source ? Source->BulgeMaxWeight : 1.0f));
+            const float Target = float(FMath::Clamp((Radius - 0.4 * Full) / (0.6 * Full), 0.0, MaxWeight));
             float& Weight = Channel.BulgeWeights[Bulge];
             Weight = FMath::Lerp(Weight, Target, float(Target >= Weight ? OpenAlpha : CloseAlpha));
             if (Weight < 1.0e-3 && Target <= 0.0f) Weight = 0.0f;
@@ -670,9 +674,17 @@ FString UGratiaPenetration::GetDiagnostics() const
             Channels.IsValidIndex(Engagement.Channel) ? *Channels[Engagement.Channel].Name.ToString() : TEXT("?"),
             Engagement.Shaft.IsValid() ? *Engagement.Shaft->GetSizeLabel() : TEXT("-"), FMath::Max(0.0, Engagement.Inserted), Engagement.Opening,
             Engagement.bAnchored ? TEXT(":anchored") : TEXT(""));
-    return FString::Printf(TEXT("channels=%d primitive=%s held=%d inside=[%s] wall_max=%.2fcm applied=%d state=%s"),
+    FString Bulges;
+    for (const FChannel& Channel : Channels)
+    {
+        if (Channel.BulgeWeights.IsEmpty()) continue;
+        Bulges += FString::Printf(TEXT("%s%s:"), Bulges.IsEmpty() ? TEXT("") : TEXT(","), *Channel.Name.ToString());
+        for (int32 Bulge = 0; Bulge < Channel.BulgeWeights.Num(); ++Bulge)
+            Bulges += FString::Printf(TEXT("%s%.2f"), Bulge ? TEXT("/") : TEXT(""), Channel.BulgeWeights[Bulge]);
+    }
+    return FString::Printf(TEXT("channels=%d primitive=%s held=%d inside=[%s] wall_max=%.2fcm bulge=[%s] applied=%d state=%s"),
         Channels.Num(), Shaft ? *Shaft->GetSizeLabel() : TEXT("none"), Shaft ? Shaft->GetHeldHand() : INDEX_NONE, *Inside,
-        GetMaxWallOffsetCm(), Anim ? Anim->GetAppliedPenetrationBones() : -1, IsEnabled() ? TEXT("running") : TEXT("disabled"));
+        GetMaxWallOffsetCm(), *Bulges, Anim ? Anim->GetAppliedPenetrationBones() : -1, IsEnabled() ? TEXT("running") : TEXT("disabled"));
 }
 
 bool UGratiaPenetration::RunChecks(FString& Failure)

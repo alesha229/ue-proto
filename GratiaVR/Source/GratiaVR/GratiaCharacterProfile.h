@@ -719,6 +719,9 @@ struct GRATIAVR_API FGratiaPenetrationChannel
     TArray<FGratiaChannelBulge> Bulges;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Bulge", meta = (ClampMin = "0.5", ClampMax = "20", Units = "cm"))
     float BulgeFullRadiusCm = 4.5f;
+    /** Shafts thicker than BulgeFullRadiusCm keep growing the swelling (the morph past 1), up to this weight. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Bulge", meta = (ClampMin = "1", ClampMax = "3"))
+    float BulgeMaxWeight = 1.25f;
     /** Tightness along the channel (X depth cm, Y 0..1, linear between points): where it is tight the shaft lags
      *  behind the hand (up to MaxLagCm at 1) and slips in once pushed far enough; empty: no resistance. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Resistance")

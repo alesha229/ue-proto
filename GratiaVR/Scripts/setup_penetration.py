@@ -41,7 +41,7 @@ def channel(name, entrance, depth, bones, capture=3.0, rest=0.4, falloff=2.5, mo
                           inward_target_bone='None', depth_cm=depth, capture_radius_cm=capture,
                           capture_angle_degrees=50.0, release_angle_degrees=115.0, rest_radius_cm=rest,
                           wall_falloff_cm=falloff, bones=bones, opening_morph=morph, morph_full_opening_cm=morph_full,
-                          bulges=swell, bulge_full_radius_cm=4.5,
+                          bulges=swell, bulge_full_radius_cm=4.5, bulge_max_weight=1.25,
                           resistance=[unreal.Vector2D(d, t) for d, t in resistance]).items():
         value.set_editor_property(key, item)
     return value
@@ -59,6 +59,13 @@ clit = ['DEF-ero_clit', 'DEF-ero_clit_001', 'DEF-ero_clit_002']
 # opens mostly across (40 % along it), the anus evenly. A fist drives them to about 0.6.
 mesh = profile.get_editor_property('mesh')
 pelvis = 'DEF-spine'
+# Denser skin around the entrances so a wide opening bends smoothly instead of stretching a few large triangles:
+# triangles within 9 cm of the entrance bones split into four, within 5 cm into sixteen (neighbours along split edges
+# into two or three, no cracks). Each pass runs once per mesh (a marker attribute in the mesh description).
+lib_tools = unreal.GratiaExperienceToolsLibrary
+for marker, radius in (('GratiaChannelDetail_9cm', 9.0), ('GratiaChannelDetail_5cm', 5.0)):
+    split = lib_tools.subdivide_mesh_around_bones(mesh, vag + anal + clit, radius, marker)
+    assert split >= 0, f'Subdivision {marker} failed'
 OPENING_CM = 6.2
 morphs = {}
 for morph, entrance, depth, left, right, core, outside, along in (
@@ -72,16 +79,20 @@ for morph, entrance, depth, left, right, core, outside, along in (
 # 15-18 cm, the second sphincter at 15-20 cm - and moderate beyond. A thicker shaft feels it more, a thinner less.
 VAG_TIGHT = [(0.0, 0.75), (2.0, 0.55), (4.0, 0.25), (12.0, 0.3), (15.0, 0.7), (18.0, 0.85), (26.0, 0.6)]
 ANAL_TIGHT = [(0.0, 0.95), (2.5, 0.8), (4.0, 0.35), (14.0, 0.4), (17.0, 0.75), (20.0, 0.45), (36.0, 0.5)]
-# Belly bulges along each channel: a deep, thick shaft swells the body in front of where it passes (2.2-2.5 cm at
-# full, fading over 11-12 cm, never on the back). Front = from the anus toward the vaginal entrance.
+# Belly bulges along each channel: a deep, thick shaft pushes the belly in front of where it passes forward by
+# 5-5.5 cm at weight 1 (a fist, XXL; 3XL and 4XL drive up to 1.25; neighbouring swellings overlap, so a deep 4XL
+# shows about 10 cm), the whole front however deep the path is, fading across the belly over 12 cm, never on the back, nor up to 5 cm above the vaginal entrance (the vulva, the
+# pubic area and the thighs stay where they are; the swelling fades in over the next 5 cm).
+BULGE_FLOOR_CM = 5.0
+# Front = from the anus toward the vaginal entrance.
 VAG_DEPTH, ANAL_DEPTH = 26.0, 36.0
 bulges = {'Vaginal': [], 'Anal': []}
-for name, entrance, depths, amount, radius in (('Vaginal', vag, (12.0, 17.0, 22.0), 2.2, 11.0),
-                                               ('Anal', anal, (14.0, 20.0, 26.0, 32.0), 2.5, 12.0)):
+for name, entrance, depths, amount, radius in (('Vaginal', vag, (12.0, 17.0, 22.0), 5.0, 12.0),
+                                               ('Anal', anal, (14.0, 20.0, 26.0, 32.0), 5.5, 12.0)):
     for index, depth in enumerate(depths, 1):
         morph = f'Gratia_Bulge{name}_{index}'
         moved = unreal.GratiaExperienceToolsLibrary.create_channel_bulge_morph(
-            mesh, morph, entrance, pelvis, depth, vag, anal, radius, amount)
+            mesh, morph, entrance, pelvis, depth, vag, anal, radius, amount, BULGE_FLOOR_CM)
         assert moved > 0, f'Bulge morph {morph} moved no vertices'
         morphs[morph] = moved
         bulges[name].append((morph, depth))
