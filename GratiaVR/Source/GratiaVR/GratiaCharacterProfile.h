@@ -713,6 +713,10 @@ struct GRATIAVR_API FGratiaPenetrationChannel
     FName OpeningMorph;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0.1", ClampMax = "20", Units = "cm"))
     float MorphFullOpeningCm = 4.0f;
+    /** How deep into the channel the opening morph opens the walls (the shape-fitting materials add only what the
+     *  shaft needs beyond it). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0.5", ClampMax = "40", Units = "cm"))
+    float MorphDepthCm = 8.0f;
     /** Material scalar parameter on the character mesh that receives the opening morph's weight (a skin material
      *  shading the stretched skin by a baked mask); none: not sent. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration")
@@ -744,17 +748,19 @@ struct GRATIAVR_API FGratiaPenetrationSettings
     /** Wall bones approach their offsets at this rate (1/s): soft, without popping. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "1", ClampMax = "100"))
     float WallFollowSpeed = 22.0f;
-    /** After the shaft narrows or leaves, the walls stay open this long before they start closing; a wider
-     *  opening waits longer (CloseDelayPerCm per cm of the widest opening). */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Closing", meta = (ClampMin = "0", ClampMax = "5", Units = "s"))
-    float CloseDelaySeconds = 0.35f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Closing", meta = (ClampMin = "0", ClampMax = "5", Units = "s"))
-    float CloseDelayPerCm = 0.2f;
-    /** Closing time constant; a wider and longer opening closes slower (a lasting gape after a large size). */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Closing", meta = (ClampMin = "0.05", ClampMax = "20", Units = "s"))
-    float CloseSeconds = 0.9f;
+    /** After the shaft narrows or leaves, the walls recoil to GapeShare of the widest opening and hold there this long
+     *  before they start closing; a wider opening holds longer (CloseDelayPerCm per cm of the widest opening). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Closing", meta = (ClampMin = "0", ClampMax = "1"))
+    float GapeShare = 0.85f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Closing", meta = (ClampMin = "0", ClampMax = "30", Units = "s"))
+    float CloseDelaySeconds = 2.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Closing", meta = (ClampMin = "0", ClampMax = "10", Units = "s"))
-    float CloseSecondsPerCm = 0.6f;
+    float CloseDelayPerCm = 1.0f;
+    /** Then the gape shrinks slowly with this time constant; a wider and longer opening closes slower. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Closing", meta = (ClampMin = "0.05", ClampMax = "120", Units = "s"))
+    float CloseSeconds = 4.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Closing", meta = (ClampMin = "0", ClampMax = "30", Units = "s"))
+    float CloseSecondsPerCm = 2.5f;
     /** Seconds of being held open that double the closing time (a long stretch relaxes the walls). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Closing", meta = (ClampMin = "1", ClampMax = "600", Units = "s"))
     float RelaxSeconds = 40.0f;
@@ -791,10 +797,10 @@ struct GRATIAVR_API FGratiaPenetrationSettings
     /**
      * Shape-fitting deformation: the solver writes every engaged shaft (its path from the tip, profile form, size and
      * depth; slots S0..S3) to this collection each frame, and the character's skin and clothing materials push the
-     * surface out of it (MF_GratiaShaftPress: the walls take the shaft's exact cross-section, surrounding tissue moves
-     * less the further it is, the belly in front of the path swells with the shaft's thickness there). With it the
-     * opening morphs only keep the lingering gape after the shaft narrows or leaves, and the bulge morphs rest. None:
-     * the opening morphs and bulges alone.
+     * surface out of it (MF_GratiaShaftPress): on top of the opening morphs and wall bones, wherever the shaft is wider
+     * than what they opened (a head, a knot, a bead, deeper in the channel) the walls take its exact cross-section and
+     * surrounding tissue moves less the further it is, and skin the shaft would pass through (lips outside the entrance,
+     * a thigh) is pushed out to its surface. None: the opening morphs, bones and bulges alone.
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Shape")
     TObjectPtr<UMaterialParameterCollection> ShaftCollection;
@@ -802,9 +808,10 @@ struct GRATIAVR_API FGratiaPenetrationSettings
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Shape", meta = (ClampMin = "2", ClampMax = "40", Units = "cm"))
     float ShaftDeformRangeCm = 14.0f;
     /** The skin in front of the inserted part of a shaft (the belly) moves forward by up to this much, fully where the
-     *  shaft passing behind it is BellyFullRadiusCm thick (40 % of that shows nothing), following the path. */
+     *  shaft passing behind it is BellyFullRadiusCm thick (40 % of that shows nothing), following the path; the bulge
+     *  morphs rest then. 0: the channels' bulge morphs swell the belly. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Shape", meta = (ClampMin = "0", ClampMax = "15", Units = "cm"))
-    float BellyAmountCm = 4.5f;
+    float BellyAmountCm = 0.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Shape", meta = (ClampMin = "0.5", ClampMax = "15", Units = "cm"))
     float BellyFullRadiusCm = 4.5f;
     /** The swelling fades out across the belly over this distance. */

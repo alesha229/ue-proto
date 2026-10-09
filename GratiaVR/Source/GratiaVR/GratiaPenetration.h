@@ -79,6 +79,8 @@ private:
         FGratiaChannelBone Settings;
         FVector Offset = FVector::ZeroVector;
         FVector Target = FVector::ZeroVector;
+        /** Offset at the channel's widest opening: the gape keeps a share of it after the shaft narrows or leaves. */
+        FVector Held = FVector::ZeroVector;
     };
     struct FChannel
     {
@@ -105,6 +107,8 @@ private:
         double Clench = 0.0;
         double NextClench = 0.0;
         float MorphWeight = 0.0f;
+        /** Morph weight at the widest opening (the gape keeps a share of it). */
+        float MorphHeld = 0.0f;
         /** Last value sent to the stretch material parameter. */
         float StretchSent = 0.0f;
         int32 Inside = 0;

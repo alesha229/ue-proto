@@ -2,15 +2,18 @@
 
 Editor commandlet, run after the C++ editor build and setup_soft_press_material.py. Creates
 - /Game/Gratia/Physics/MPC_GratiaShafts: four shaft slots S0..S3, each 12 points along the shaft from its tip
-  (S<n>P00..P11: world xyz, distance from the tip in w), S<n>A (form, radius, length, inserted depth) and S<n>B (tip
-  length, base scale, the channel's closed radius, 1 when the slot is in use); Config (the character's front xyz, belly
+  (S<n>P00..P11: world xyz, distance from the tip in w), S<n>A (form, radius, length, inserted depth), S<n>B (tip
+  length, base scale, the channel's closed radius, 1 when the slot is in use) and S<n>C (the radius the opening morph
+  has opened the entrance to, how deep it reaches); Config (the character's front xyz, belly
   swelling cm), Config2 (reach cm, -, -, strength), Config3 (belly radius cm, shaft radius of the full swelling, floor
   height, -). UGratiaPenetration writes it every frame.
-- /Game/Gratia/CharacterMaterials/MF_GratiaShaftPress: a world position offset that moves every vertex near the inserted
-  part of a shaft away from its axis so the area between them is conserved - r' = sqrt(r^2 + R^2 - R0^2), R the shaft's
-  radius from its form's profile at that point (the same profile as GratiaPenetration::FShaft::RadiusAt), R0 the
-  channel's closed radius: the walls take the shaft's exact cross-section, surrounding tissue moves less the further it
-  is, fading out over the reach; the skin in front of the inserted part (the belly, above the floor) moves forward by up
+- /Game/Gratia/CharacterMaterials/MF_GratiaShaftPress: a world position offset on top of the opening morph and wall
+  bones. Where the inserted part of a shaft is wider than what they opened (R0: the closed radius, or the morph's
+  opening near the entrance), every vertex near it moves away from its axis so the area between them is conserved -
+  r' = sqrt(r^2 + R^2 - R0^2), R the shaft's radius from its form's profile at that point (the same profile as
+  GratiaPenetration::FShaft::RadiusAt): the walls take the shaft's exact cross-section (a head, a knot, a bead),
+  surrounding tissue moves less the further it is, fading out over the reach; skin the shaft would pass through anywhere
+  along it (lips outside the entrance, a thigh) is pushed out to its surface; the skin in front of the inserted part (the belly, above the floor) moves forward by up
   to Config.w with the shaft's radius where it passes, fading across the belly; and the turn of the surface normal for the toon
   light (the inverse transpose of the field's Jacobian per vertex, interpolated to the pixels).
 and wires it into the skin and both clothing materials after the soft press (offsets add, the normal is bent further),
@@ -26,7 +29,7 @@ lib = unreal.EditorAssetLibrary
 mel = unreal.MaterialEditingLibrary
 tools = unreal.AssetToolsHelpers.get_asset_tools()
 SLOTS, POINTS = 4, 12
-NAMES = [f'S{s}P{p:02d}' for s in range(SLOTS) for p in range(POINTS)] + [f'S{s}{k}' for s in range(SLOTS) for k in 'AB']
+NAMES = [f'S{s}P{p:02d}' for s in range(SLOTS) for p in range(POINTS)] + [f'S{s}{k}' for s in range(SLOTS) for k in 'ABC']
 NAMES += ['Config', 'Config2', 'Config3']
 TARGETS = ['/Game/Gratia/CharacterMaterials/M_Gratia_Body_skin', '/Game/Gratia/CharacterMaterials/M_Gratia_Default_cloth_1',
            '/Game/Gratia/CharacterMaterials/M_Gratia_Default_cloth_2']
@@ -45,7 +48,7 @@ for name in NAMES:
         continue
     parameter = unreal.CollectionVectorParameter()
     parameter.set_editor_property('parameter_name', name)
-    default = {'Config': unreal.LinearColor(1, 0, 0, 4.5), 'Config2': unreal.LinearColor(14, 0, 0, 0),
+    default = {'Config': unreal.LinearColor(1, 0, 0, 0), 'Config2': unreal.LinearColor(14, 0, 0, 0),
                'Config3': unreal.LinearColor(11, 4.5, 0, 0)}.get(name, unreal.LinearColor(0, 0, 0, 0))
     parameter.set_editor_property('default_value', default)
     vectors.append(parameter)
@@ -138,21 +141,23 @@ struct FGratiaShaftField
         T = T - Dir * dot(T, Dir);
         T = dot(T, T) > 1e-8 ? normalize(T) : float3(0, 0, 1);
     }
-    // How far tissue at distance r from the path, U from the tip, moves away from it: the area between is kept,
-    // r' = sqrt(r^2 + R^2 - R0^2); only the part inside the body (fading over 1.5 cm outside the entrance) moves
-    // tissue; beyond the walls the front (the belly, Front = facing it) gives more; all fades out over the reach.
-    float Field(float r, float U, float Front, float4 A, float4 B, float4 Cfg, float4 Cfg2)
+    // How far tissue at distance r from the path, U from the tip, moves away from it. Inside the body (fading over
+    // 1.5 cm outside the entrance), beyond what the opening morph opened (C.x at the entrance, fading back to the closed
+    // radius B.z over C.y into the channel), the area between is kept: r' = sqrt(r^2 + R^2 - Open^2), fading out over
+    // the reach. Anywhere along the shaft, skin it would pass through goes out to its surface.
+    float Field(float r, float U, float4 A, float4 B, float4 C, float4 Cfg2)
     {
         float Range = max(Cfg2.x, 1.0);
         if (r > Range) return 0.0;
-        float Inside = saturate((A.w + 1.5 - U) / 1.5);
-        if (Inside <= 0.0) return 0.0;
         float Rs = RadiusAt(U, A, B);
-        float Area = Rs * Rs - B.z * B.z;
-        if (Area <= 0.0) return 0.0;
-        float Out = sqrt(r * r + Area) - r;
-        float Fade = 1.0 - Smooth((r - Rs) / max(Range - Rs, 1.0));
-        return Out * Fade * Inside;
+        if (Rs <= 0.0) return 0.0;
+        float Contact = U < A.w + 3.5 ? max(0.0, Rs + 0.15 - r) : 0.0;
+        float Inside = saturate((A.w + 1.5 - U) / 1.5);
+        float Open = lerp(B.z, max(C.x, B.z), 1.0 - Smooth((A.w - U) / max(C.y, 0.5)));
+        float Area = Rs * Rs - Open * Open;
+        float Out = 0.0;
+        if (Area > 0.0 && Inside > 0.0) Out = (sqrt(r * r + Area) - r) * (1.0 - Smooth((r - Rs) / max(Range - Rs, 1.0))) * Inside;
+        return max(Out, Contact);
     }
     // Point of the path at distance U from the tip.
     float3 PathAt(float4 Pts[12], float U)
@@ -193,7 +198,7 @@ struct FGratiaShaftField
         return normalize(F + Dir * (0.35 * a / Rb)) * (Amount * Fade);
     }
     // Offset of P by every shaft in use, one after the other.
-    float3 All(float3 P, float4 Pts[4][12], float4 SA[4], float4 SB[4], float4 Cfg, float4 Cfg2, float4 Cfg3)
+    float3 All(float3 P, float4 Pts[4][12], float4 SA[4], float4 SB[4], float4 SC[4], float4 Cfg, float4 Cfg2, float4 Cfg3)
     {
         float3 Offset = float3(0, 0, 0);
         [loop] for (int s = 0; s < 4; ++s)
@@ -205,16 +210,16 @@ struct FGratiaShaftField
             float3 Across;
             float Slope;
             float3 Swell = Belly(P, Pts[s], SA[s], SB[s], Cfg, Cfg3, Across, Slope);
-            if (r >= 1e-3) Offset += Dir * Field(r, U, saturate(dot(Dir, Cfg.xyz)), SA[s], SB[s], Cfg, Cfg2);
+            if (r >= 1e-3) Offset += Dir * Field(r, U, SA[s], SB[s], SC[s], Cfg2);
             Offset += Swell;
         }
         return Offset * Cfg2.w;
     }
     // Turn of the normal N0 by the strongest shaft at P: the moved surface's normal is the inverse transpose of the
     // field's Jacobian J = I + Dir (dg/dr Dir + dg/dU T)^T + g/r (I - Dir Dir^T - T T^T) applied to N0.
-    float3 Turn(float3 P, float3 N0, float4 Pts[4][12], float4 SA[4], float4 SB[4], float4 Cfg, float4 Cfg2, float4 Cfg3)
+    float3 Turn(float3 P, float3 N0, float4 Pts[4][12], float4 SA[4], float4 SB[4], float4 SC[4], float4 Cfg, float4 Cfg2, float4 Cfg3)
     {
-        float G = 0.0, Br = 1.0, BU = 0.0, BFront = 0.0;
+        float G = 0.0, Br = 1.0, BU = 0.0;
         float3 BDir = float3(0, 0, 0), BT = float3(0, 0, 1), Tilt = float3(0, 0, 0);
         int Bs = -1;
         [loop] for (int s = 0; s < 4; ++s)
@@ -229,15 +234,14 @@ struct FGratiaShaftField
             float3 Dir, T;
             Nearest(P, Pts[s], r, Dir, U, T);
             if (r < 1e-3) continue;
-            float Front = saturate(dot(Dir, Cfg.xyz));
-            float g = Field(r, U, Front, SA[s], SB[s], Cfg, Cfg2);
-            if (g > G) { G = g; Br = r; BU = U; BDir = Dir; BT = T; BFront = Front; Bs = s; }
+            float g = Field(r, U, SA[s], SB[s], SC[s], Cfg2);
+            if (g > G) { G = g; Br = r; BU = U; BDir = Dir; BT = T; Bs = s; }
         }
         Tilt *= Cfg2.w;
         if (Bs < 0 || G < 1e-4) return dot(Tilt, Tilt) > 1e-10 ? normalize(N0 + Tilt) - N0 : float3(0, 0, 0);
         const float E = 0.25;
-        float Gr = (Field(Br + E, BU, BFront, SA[Bs], SB[Bs], Cfg, Cfg2) - G) / E;
-        float Gu = (Field(Br, BU + E, BFront, SA[Bs], SB[Bs], Cfg, Cfg2) - G) / E;
+        float Gr = (Field(Br + E, BU, SA[Bs], SB[Bs], SC[Bs], Cfg2) - G) / E;
+        float Gu = (Field(Br, BU + E, SA[Bs], SB[Bs], SC[Bs], Cfg2) - G) / E;
         float3 Grad = (Gr * BDir + Gu * BT) * Cfg2.w;
         float Hoop = G * Cfg2.w / max(Br, 1e-3);
         float3 C0 = float3(1, 0, 0) + BDir * Grad.x + Hoop * (float3(1, 0, 0) - BDir * BDir.x - BT * BT.x);
@@ -252,16 +256,16 @@ struct FGratiaShaftField
 };
 '''
 ARRAYS = ('float4 Pts[4][12] = {' + ', '.join('{' + ', '.join(f'S{s}P{p:02d}' for p in range(POINTS)) + '}' for s in range(SLOTS)) + '};\n'
-          + 'float4 SA[4] = {S0A, S1A, S2A, S3A};\nfloat4 SB[4] = {S0B, S1B, S2B, S3B};\n')
+          + 'float4 SA[4] = {S0A, S1A, S2A, S3A};\nfloat4 SB[4] = {S0B, S1B, S2B, S3B};\nfloat4 SC[4] = {S0C, S1C, S2C, S3C};\n')
 WPO_CODE = FIELD + ARRAYS + r'''
 if (SB[0].w + SB[1].w + SB[2].w + SB[3].w <= 0.0 || Config2.w <= 0.0) return float3(0, 0, 0);
 FGratiaShaftField F;
-return F.All(P, Pts, SA, SB, Config, Config2, Config3);
+return F.All(P, Pts, SA, SB, SC, Config, Config2, Config3);
 '''
 NORMAL_CODE = FIELD + ARRAYS + r'''
 if (SB[0].w + SB[1].w + SB[2].w + SB[3].w <= 0.0 || Config2.w <= 0.0) return float3(0, 0, 0);
 FGratiaShaftField F;
-return F.Turn(P, normalize(VN), Pts, SA, SB, Config, Config2, Config3);
+return F.Turn(P, normalize(VN), Pts, SA, SB, SC, Config, Config2, Config3);
 '''
 
 # ------------------------------------------------------------------ material function

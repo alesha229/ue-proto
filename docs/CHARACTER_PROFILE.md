@@ -62,9 +62,11 @@ The profile owns model-specific references and names:
   the stretched skin by a mask `setup_penetration.py` bakes into the vertex colours). The player's hands enter as three
   fingers, a flat hand or a fist; a channel takes up to two shafts side by side.
 - `Penetration.ShaftCollection` (Shape): the solver writes every engaged shaft (path, form, size, depth) to it each
-  frame and the skin and clothing materials fit the surface to the shaft's exact shape (`MF_GratiaShaftPress`,
-  `setup_shaft_material.py`); the belly in front of the path swells by `BellyAmountCm`. With it the opening morphs keep
-  only the lingering gape, the outer-ring bones and the bulge morphs rest.
+  frame and the skin and clothing materials add, on top of the opening morph and the wall bones, what the shaft's exact
+  shape needs beyond them (`MF_GratiaShaftPress`, `setup_shaft_material.py`), and push out skin the shaft would pass
+  through. `BellyAmountCm` above 0 lets the material swell the belly instead of the bulge morphs (Gratia: 0).
+- Closing (`GapeShare`, `CloseDelaySeconds`/`PerCm`, `CloseSeconds`/`PerCm`, `RelaxSeconds`): after the shaft narrows
+  or leaves, the walls and the opening morph recoil to `GapeShare` of the widest opening, hold, then close slowly.
 - Free-play stances: in a scene the Pose item switches between idle and every PerformanceClip that is
   a looping single clip without music, partner or viewpoint; `Label` is what the menu shows
   (Gratia: `Idle ZZZ` is «игривая»). Diagnostic Arms/Head and full performances stay on F2 in the studio.
