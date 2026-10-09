@@ -16,11 +16,11 @@
    реплики (текст облачка, голос и остальные дубли вида как варианты, настроение, зоны или каналы, сила касания)
    и подписи поз свободной игры в `DA_Gratia`.
 
-Каналы проникновения — `setup_penetration.py` (коммандлет): каналы `DA_Gratia` (кости стенок, глубина) и морфы
-раскрытия `Gratia_OpenVaginal` / `Gratia_OpenAnal` на `SK_Gratia_Game` (`GratiaExperienceToolsLibrary::
-CreateChannelOpeningMorph`: кожа вокруг входа расходится от оси до 4 см и плавно затухает на 8,5 см — меш не рвётся).
-`-GratiaChannelShots` — снимки входов (пусто, три пальца, ладонь, кулак, две руки, примитив XXL) в
-`GratiaVR/Saved/Screenshots/ChannelShots`.
+Каналы проникновения — `setup_penetration.py` (коммандлет): каналы `DA_Gratia` (кости стенок и внешнее кольцо таза и
+ягодиц, глубина 26 и 36 см, профиль тугости) и морфы на `SK_Gratia_Game` — раскрытие `Gratia_OpenVaginal` /
+`Gratia_OpenAnal` (`CreateChannelOpeningMorph`: до 6,2 см от оси, затухание 12,5 см — меш не рвётся) и вздутия живота
+`Gratia_Bulge*` (`CreateChannelBulgeMorph`). `-GratiaChannelShots` — снимки входов (пусто, три пальца, ладонь, кулак,
+две руки, XXL) и живота при глубоком 4XL в `GratiaVR/Saved/Screenshots/ChannelShots`.
 
 Ввод контроллеров — `setup_gratia_locomotion.py` (коммандлет): ходьба, поворот, хват, grip, меню,
 `IA_Recenter` (клик любым стиком — центровка) и `IA_ThumbLeft/Right` (большой палец на стике или кнопке —

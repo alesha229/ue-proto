@@ -235,3 +235,71 @@ int32 UGratiaExperienceToolsLibrary::CreateChannelOpeningMorph(USkeletalMesh* Me
         Lateral.IsZero() ? TEXT("no") : TEXT("yes"));
     return Moved;
 }
+
+namespace
+{
+/** Reference-pose (component space) centre of Bones; false when one is missing. */
+bool GratiaRefCentre(const FReferenceSkeleton& Ref, const TArray<FName>& Bones, FVector& Out)
+{
+    Out = FVector::ZeroVector;
+    for (const FName Bone : Bones)
+    {
+        const int32 Index = Ref.FindBoneIndex(Bone);
+        if (Index == INDEX_NONE) return false;
+        FTransform Pose = Ref.GetRefBonePose()[Index];
+        for (int32 Parent = Ref.GetParentIndex(Index); Parent != INDEX_NONE; Parent = Ref.GetParentIndex(Parent)) Pose *= Ref.GetRefBonePose()[Parent];
+        Out += Pose.GetLocation();
+    }
+    if (Bones.IsEmpty()) return false;
+    Out /= Bones.Num();
+    return true;
+}
+}
+
+int32 UGratiaExperienceToolsLibrary::CreateChannelBulgeMorph(USkeletalMesh* Mesh, FName MorphName, const TArray<FName>& EntranceBones, FName InwardBone,
+    float DepthCm, const TArray<FName>& FrontBones, const TArray<FName>& BackBones, float RadiusCm, float AmountCm)
+{
+    if (!Mesh || MorphName.IsNone() || AmountCm <= 0.0f || !Mesh->HasMeshDescription(0)) return -1;
+    const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
+    FVector Entrance, Target, Front, Back;
+    if (!GratiaRefCentre(Ref, EntranceBones, Entrance) || !GratiaRefCentre(Ref, {InwardBone}, Target)
+        || !GratiaRefCentre(Ref, FrontBones, Front) || !GratiaRefCentre(Ref, BackBones, Back)) return -1;
+    const FVector Inward = (Target - Entrance).GetSafeNormal();
+    FVector Forward = Front - Back;
+    Forward.Z = 0.0;
+    if (Inward.IsNearlyZero() || !Forward.Normalize()) return -1;
+    const FVector Centre = Entrance + Inward * DepthCm;
+    const double Amount = AmountCm, Radius = FMath::Max(double(RadiusCm), 2.0 * Amount);
+    auto Smoother = [](double T) { T = FMath::Clamp(T, 0.0, 1.0); return T * T * T * (T * (6.0 * T - 15.0) + 10.0); };
+    FMeshDescription* Description = Mesh->GetMeshDescription(0);
+    if (!Description) return -1;
+    FSkeletalMeshAttributes Attributes(*Description);
+    if (!Attributes.GetMorphTargetNames().Contains(MorphName) && !Attributes.RegisterMorphTargetAttribute(MorphName, false)) return -1;
+    TVertexAttributesRef<FVector3f> Deltas = Attributes.GetVertexMorphPositionDelta(MorphName);
+    const TVertexAttributesConstRef<FVector3f> Positions = Attributes.GetVertexPositions();
+    int32 Moved = 0;
+    for (const FVertexID Vertex : Description->Vertices().GetElementIDs())
+    {
+        const FVector Away = FVector(Positions[Vertex]) - Centre;
+        const double Distance = Away.Size();
+        FVector Delta = FVector::ZeroVector;
+        if (Distance > 0.05 && Distance < Radius)
+        {
+            const FVector Direction = Away / Distance;
+            // The belly in front swells; the sides a little, the back not at all.
+            const double Facing = Smoother((FVector::DotProduct(Direction, Forward) + 0.2) / 0.8);
+            Delta = Direction * (Amount * (1.0 - Smoother(Distance / Radius)) * Facing);
+        }
+        Deltas[Vertex] = FVector3f(Delta);
+        if (Delta.SizeSquared() > 1.0e-6) ++Moved;
+    }
+    USkeletalMesh::FCommitMeshDescriptionParams Params;
+    Params.bMarkPackageDirty = true;
+    if (!Mesh->CommitMeshDescription(0, Params)) return -1;
+    Mesh->Build();
+    USkinnedAsset* const Built[] = {Mesh};
+    FSkinnedAssetCompilingManager::Get().FinishCompilation(Built);
+    Mesh->MarkPackageDirty();
+    UE_LOG(LogTemp, Display, TEXT("GRATIA_BULGE_MORPH %s depth=%.1fcm moved=%d amount=%.1fcm radius=%.1fcm"), *MorphName.ToString(), DepthCm, Moved, Amount, Radius);
+    return Moved;
+}

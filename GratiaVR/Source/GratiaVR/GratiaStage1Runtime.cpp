@@ -942,6 +942,8 @@ void AGratiaStage1Runtime::UpdateHandPose(FHandProxy& Hand, bool bLeft, const FV
     }
     else if (Hand.PenetrationShape == uint8(EHandShape::Hand))
         Anim->FingerInput[1] = Anim->FingerInput[2] = Anim->FingerInput[3] = Anim->FingerInput[4] = 0.0f;
+    // Straight fingers of the flat hand and of the three fingers lie pressed side by side.
+    Anim->FingersTogether = Hand.PenetrationShape == uint8(EHandShape::Hand) || Hand.PenetrationShape == uint8(EHandShape::Fingers) ? 1.0f : 0.0f;
     const auto* Profile = TargetCharacter.IsValid() ? TargetCharacter->CharacterProfile.Get() : nullptr;
     Anim->bConform = Profile && Profile->SoftBody.bFingerConform && Hand.Gate.CanInteract() && !Hand.bInChannel;
     if (Profile) { Anim->FingerRadiusCm = Profile->SoftBody.FingerRadiusCm; Anim->ConformMarginCm = Profile->SoftBody.FingerConformMarginCm; }

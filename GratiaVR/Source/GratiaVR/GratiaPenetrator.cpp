@@ -41,7 +41,8 @@ AGratiaPenetrator::AGratiaPenetrator()
     Root = CreateDefaultSubobject<USceneComponent>(TEXT("Base"));
     RootComponent = Root;
     Sizes = { GratiaShaftSize(TEXT("S"), 13.0f, 1.6f), GratiaShaftSize(TEXT("M"), 17.0f, 2.1f), GratiaShaftSize(TEXT("L"), 21.0f, 2.7f),
-        GratiaShaftSize(TEXT("XL"), 26.0f, 3.4f), GratiaShaftSize(TEXT("XXL"), 32.0f, 4.3f) };
+        GratiaShaftSize(TEXT("XL"), 26.0f, 3.4f), GratiaShaftSize(TEXT("XXL"), 32.0f, 4.3f),
+        GratiaShaftSize(TEXT("3XL"), 38.0f, 5.2f), GratiaShaftSize(TEXT("4XL"), 45.0f, 6.2f) };
     // Constructor references keep the shapes in the cooked build.
     static ConstructorHelpers::FObjectFinder<UStaticMesh> Cylinder(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
     static ConstructorHelpers::FObjectFinder<UStaticMesh> Sphere(TEXT("/Engine/BasicShapes/Sphere.Sphere"));

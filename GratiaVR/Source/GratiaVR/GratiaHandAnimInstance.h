@@ -66,6 +66,8 @@ public:
     TArray<FVector4> ConformSpheres;
     /** World-space body capsules (limbs, waist) used to stop each finger. */
     TArray<FGratiaConformCapsule> ConformCapsules;
+    /** 0..1: the straight fingers press together side by side (a flat hand for the channels). */
+    float FingersTogether = 0.0f;
     float FingerRadiusCm = 1.1f;
     float ConformMarginCm = 0.2f;
     bool bConform = true;

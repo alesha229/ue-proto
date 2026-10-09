@@ -97,6 +97,19 @@ private:
         FVector Inward = FVector::XAxisVector;
         double Scale = 1.0;
         bool bFrame = false;
+        // Dynamics: the widest opening since the channel last closed, how long it has been open, how long since
+        // the opening last grew, the current contraction (1 at its start, 0 when over) and when the next one comes.
+        double Peak = 0.0;
+        double OpenSeconds = 0.0;
+        double SinceWidest = 0.0;
+        double Clench = 0.0;
+        double NextClench = 0.0;
+        float MorphWeight = 0.0f;
+        int32 Inside = 0;
+        /** Swellings along the channel (morphs present on the mesh), their depths (component cm) and weights. */
+        TArray<FName> BulgeMorphs;
+        TArray<double> BulgeDepths;
+        TArray<float> BulgeWeights;
     };
     struct FEngagement
     {
@@ -112,6 +125,8 @@ private:
         bool bShaftWasHeld = true;
         /** Sideways shift (world) when two shafts share the channel; zero alone. */
         FVector Lateral = FVector::ZeroVector;
+        /** 0..1 how hard the hand pushes against a tight place (the shaft lags behind it). */
+        double Strain = 0.0;
         /** Released while inside: the base stays on the body (anchor-bone space). */
         bool bAnchored = false;
         FTransform AnchoredBase = FTransform::Identity;
@@ -130,7 +145,11 @@ private:
     double CaptureRadius(const FChannel& Channel, const GratiaPenetration::FShaft& Shaft) const;
     /** World offset a wall bone moves to for a shaft inserted to Inserted (cm) at Velocity (cm/s). */
     FVector WallTarget(const FChannel& Channel, const FWallBone& Bone, const GratiaPenetration::FShaft& Shaft, double Inserted, double Velocity) const;
+    /** Walls and morph: open with the shafts at once, after narrowing hold, then close slowly (slower after a wide
+     *  and long opening), and clench now and then while a shaft is inside. */
     void UpdateWalls(float Delta);
+    /** A contraction of Channel now: the walls squeeze in for ClenchSeconds; the shafts inside get a pulse. */
+    void Clench(int32 Channel);
     void PushToAnimation();
     /** Index of a free channel Shaft's tip can enter now, or INDEX_NONE. */
     int32 FindCapture(const AGratiaPenetrator& Shaft) const;

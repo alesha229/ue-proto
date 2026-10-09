@@ -61,4 +61,14 @@ public:
     static int32 CreateChannelOpeningMorph(USkeletalMesh* Mesh, FName MorphName, const TArray<FName>& EntranceBones, FName InwardBone,
         const TArray<FName>& LeftBones, const TArray<FName>& RightBones, float OpeningCm, float CoreRadiusCm, float FalloffCm,
         float OutsideCm, float InsideCm, float AlongSlit);
+    /**
+     * Adds or replaces MorphName on LOD 0 of Mesh: a swelling around the point DepthCm along the channel (entrance at
+     * the centre of EntranceBones, axis toward InwardBone, reference pose). Vertices within RadiusCm of that point
+     * move away from it by up to AmountCm, smoothly fading out (RadiusCm is kept at least twice AmountCm, so the skin
+     * never folds), and mostly toward the front: the side the centre of FrontBones lies on from BackBones, horizontally.
+     * Returns the number of moved vertices, -1 on bad input.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
+    static int32 CreateChannelBulgeMorph(USkeletalMesh* Mesh, FName MorphName, const TArray<FName>& EntranceBones, FName InwardBone,
+        float DepthCm, const TArray<FName>& FrontBones, const TArray<FName>& BackBones, float RadiusCm, float AmountCm);
 };

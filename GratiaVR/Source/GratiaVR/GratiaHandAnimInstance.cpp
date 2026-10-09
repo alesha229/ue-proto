@@ -24,6 +24,7 @@ struct FGratiaHandProxy : public FAnimInstanceProxy
     UMirrorDataTable* Mirror = nullptr;
     bool bLeft = false;
     float Alpha[UGratiaHandAnimInstance::NumFingers] = {};
+    float Together = 0.0f;
     TArray<int32> BoneFinger;
     // Finger chain joints (compact indices) for the active hand side.
     int32 Joints[UGratiaHandAnimInstance::NumFingers][3];
@@ -36,6 +37,34 @@ struct FGratiaHandProxy : public FAnimInstanceProxy
         Owner = CastChecked<UGratiaHandAnimInstance>(InInstance);
         Open = Owner->OpenPose; Closed = Owner->ClosedPose; IndexClosed = Owner->IndexClosedPose; ThumbOpen = Owner->ThumbOpenPose; Mirror = Owner->MirrorTable; bLeft = Owner->bLeftHand;
         for (int32 F = 0; F < UGratiaHandAnimInstance::NumFingers; ++F) Alpha[F] = Owner->FingerAlpha[F];
+        Together = FMath::Clamp(Owner->FingersTogether, 0.0f, 1.0f);
+    }
+
+    /** Fingers pressed together: index, ring and little finger turn at their base toward the middle finger. */
+    void CloseSpread(FCompactPose& Pose) const
+    {
+        if (Together <= 0.0f || Joints[2][0] == INDEX_NONE || Joints[2][1] == INDEX_NONE) return;
+        FCSPose<FCompactPose> Component;
+        Component.InitPose(Pose);
+        auto Point = [&Component](int32 Joint) { return Component.GetComponentSpaceTransform(FCompactPoseBoneIndex(Joint)).GetLocation(); };
+        const FVector Middle = (Point(Joints[2][1]) - Point(Joints[2][0])).GetSafeNormal();
+        if (Middle.IsNearlyZero()) return;
+        TArray<FBoneTransform> Turned;
+        for (const int32 F : {1, 3, 4})
+        {
+            if (Joints[F][0] == INDEX_NONE || Joints[F][1] == INDEX_NONE) continue;
+            const FVector Direction = (Point(Joints[F][1]) - Point(Joints[F][0])).GetSafeNormal();
+            if (Direction.IsNearlyZero()) continue;
+            // Not quite parallel: the fingers touch side by side rather than overlap.
+            const FQuat Turn = FQuat::Slerp(FQuat::Identity, FQuat::FindBetweenNormals(Direction, Middle), 0.85f * Together);
+            FTransform Base = Component.GetComponentSpaceTransform(FCompactPoseBoneIndex(Joints[F][0]));
+            Base.SetRotation(Turn * Base.GetRotation());
+            Turned.Emplace(FCompactPoseBoneIndex(Joints[F][0]), Base);
+        }
+        if (Turned.IsEmpty()) return;
+        Turned.Sort(FCompareBoneTransformIndex());
+        Component.SafeSetCSBoneTransforms(Turned);
+        FCSPose<FCompactPose>::ConvertComponentPosesToLocalPoses(MoveTemp(Component), Pose);
     }
 
     void CacheHandBones(const FBoneContainer& Bones)
@@ -102,6 +131,7 @@ struct FGratiaHandProxy : public FAnimInstanceProxy
         const bool bIndex = IndexClosed && SamplePose(IndexClosed, IndexClosed->GetPlayLength(), IndexPose, CurveC, AttrC);
         const bool bThumb = ThumbOpen && SamplePose(ThumbOpen, ThumbOpen->GetPlayLength(), ThumbPose, CurveD, AttrD);
         BlendInto(Output.Pose, OpenPose, ClosedPose, bIndex ? &IndexPose : nullptr, bThumb ? &ThumbPose : nullptr, Alpha);
+        CloseSpread(Output.Pose);
         if (Owner && !Owner->bSamplesReady.load())
         {
             // Component-space finger joints for every uniform curl step; the game thread

@@ -646,6 +646,21 @@ struct GRATIAVR_API FGratiaChannelBone
     float DragSeconds = 0.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0", ClampMax = "5", Units = "cm"))
     float MaxDragCm = 0.8f;
+    /** Outer ring (hips, buttocks): spreads with the channel's opening beyond StartOpeningCm, so only large sizes
+     *  move it; otherwise the bone only clears the shaft surface from its rest distance to the axis. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration")
+    bool bOuterRing = false;
+};
+
+/** A swelling of the body (mostly the belly in front) where a deep shaft passes DepthCm along the channel. */
+USTRUCT(BlueprintType)
+struct GRATIAVR_API FGratiaChannelBulge
+{
+    GENERATED_BODY()
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration")
+    FName Morph;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0", ClampMax = "100", Units = "cm"))
+    float DepthCm = 15.0f;
 };
 
 /**
@@ -698,6 +713,16 @@ struct GRATIAVR_API FGratiaPenetrationChannel
     FName OpeningMorph;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0.1", ClampMax = "20", Units = "cm"))
     float MorphFullOpeningCm = 4.0f;
+    /** Swellings along the channel: each morph follows the radius of the shaft passing its depth, fully at
+     *  BulgeFullRadiusCm (a thin shaft barely shows, a fist or a large size bulges the belly). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Bulge")
+    TArray<FGratiaChannelBulge> Bulges;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Bulge", meta = (ClampMin = "0.5", ClampMax = "20", Units = "cm"))
+    float BulgeFullRadiusCm = 4.5f;
+    /** Tightness along the channel (X depth cm, Y 0..1, linear between points): where it is tight the shaft lags
+     *  behind the hand (up to MaxLagCm at 1) and slips in once pushed far enough; empty: no resistance. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Resistance")
+    TArray<FVector2D> Resistance;
 };
 
 USTRUCT(BlueprintType)
@@ -711,6 +736,37 @@ struct GRATIAVR_API FGratiaPenetrationSettings
     /** Wall bones approach their offsets at this rate (1/s): soft, without popping. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "1", ClampMax = "100"))
     float WallFollowSpeed = 22.0f;
+    /** After the shaft narrows or leaves, the walls stay open this long before they start closing; a wider
+     *  opening waits longer (CloseDelayPerCm per cm of the widest opening). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Closing", meta = (ClampMin = "0", ClampMax = "5", Units = "s"))
+    float CloseDelaySeconds = 0.35f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Closing", meta = (ClampMin = "0", ClampMax = "5", Units = "s"))
+    float CloseDelayPerCm = 0.2f;
+    /** Closing time constant; a wider and longer opening closes slower (a lasting gape after a large size). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Closing", meta = (ClampMin = "0.05", ClampMax = "20", Units = "s"))
+    float CloseSeconds = 0.9f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Closing", meta = (ClampMin = "0", ClampMax = "10", Units = "s"))
+    float CloseSecondsPerCm = 0.6f;
+    /** Seconds of being held open that double the closing time (a long stretch relaxes the walls). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Closing", meta = (ClampMin = "1", ClampMax = "600", Units = "s"))
+    float RelaxSeconds = 40.0f;
+    /** Contractions: the walls clench around the shaft on entering and now and then while it is inside. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Contraction", meta = (ClampMin = "0", ClampMax = "0.5"))
+    float ClenchAmount = 0.15f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Contraction", meta = (ClampMin = "0.05", ClampMax = "2", Units = "s"))
+    float ClenchSeconds = 0.4f;
+    /** Mean pause between contractions while a shaft is inside (0: only on entering). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Contraction", meta = (ClampMin = "0", ClampMax = "60", Units = "s"))
+    float ClenchEverySeconds = 5.0f;
+    /** Resistance: how far (cm) the hand may push ahead of the shaft at full tightness before it is forced in. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Resistance", meta = (ClampMin = "0", ClampMax = "15", Units = "cm"))
+    float MaxLagCm = 4.0f;
+    /** Pulled back, a tight channel holds the shaft a little (this share of the push lag). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Resistance", meta = (ClampMin = "0", ClampMax = "1"))
+    float SuctionShare = 0.35f;
+    /** Shaft radius at which the profile's tightness applies as given; thinner is easier, thicker harder. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Resistance", meta = (ClampMin = "0.5", ClampMax = "10", Units = "cm"))
+    float ResistanceRadiusCm = 3.0f;
     /** A free shaft slides over the body surface instead of passing through it. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration")
     bool bShaftBodyCollision = true;

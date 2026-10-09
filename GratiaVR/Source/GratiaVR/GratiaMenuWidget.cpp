@@ -603,7 +603,7 @@ UPanelWidget* UGratiaMenuWidget::BuildCharacterPage()
     AddToggle(Behaviour, TEXT("Демо реакций"), TEXT("персонаж сам показывает реакции по зонам"), EGratiaMenuAction::Demo, Character);
     UVerticalBox* Primitive = AddSection(Right, TEXT("ПРОНИКНОВЕНИЕ"));
     AddToggle(Primitive, TEXT("Примитив"), TEXT("появится перед вами; grip у рукояти — взять"), EGratiaMenuAction::Primitive, Character);
-    AddCycle(Primitive, TEXT("Размер"), TEXT("от S до XXL"), EGratiaMenuAction::PrimitiveSize, Character);
+    AddCycle(Primitive, TEXT("Размер"), TEXT("от S до 4XL"), EGratiaMenuAction::PrimitiveSize, Character);
     AddToggle(Primitive, TEXT("Руки в каналы"), TEXT("grip — три пальца, большой на стике — ладонь, grip и курок — кулак"), EGratiaMenuAction::HandPenetration, Character);
     // Reset sits under the behaviour on the left; the right column holds penetration.
     UVerticalBox* Reset = AddSection(Left, TEXT("СБРОС"));
