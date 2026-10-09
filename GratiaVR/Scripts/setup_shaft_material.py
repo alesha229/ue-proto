@@ -6,7 +6,8 @@ Editor commandlet, run after the C++ editor build and setup_soft_press_material.
   length, base scale, the channel's closed radius, 1 when the slot is in use) and S<n>C (the radius the opening morph
   has opened the entrance to, how deep it reaches); Config (the character's front xyz, belly
   swelling cm), Config2 (reach cm, -, -, strength), Config3 (belly radius cm, shaft radius of the full swelling, floor
-  height, -). UGratiaPenetration writes it every frame.
+  height, -). Config2.y: how many times further than area-keeping the tissue beyond the walls spreads.
+  UGratiaPenetration writes it every frame.
 - /Game/Gratia/CharacterMaterials/MF_GratiaShaftPress: a world position offset on top of the opening morph and wall
   bones. Where the inserted part of a shaft is wider than what they opened (R0: the closed radius, or the morph's
   opening near the entrance), every vertex near it moves away from its axis so the area between them is conserved -
@@ -156,7 +157,10 @@ struct FGratiaShaftField
         float Open = lerp(B.z, max(C.x, B.z), 1.0 - Smooth((A.w - U) / max(C.y, 0.5)));
         float Area = Rs * Rs - Open * Open;
         float Out = 0.0;
-        if (Area > 0.0 && Inside > 0.0) Out = (sqrt(r * r + Area) - r) * (1.0 - Smooth((r - Rs) / max(Range - Rs, 1.0))) * Inside;
+        // Beyond the wall the surrounding tissue spreads Cfg2.y times further than area-keeping alone (a wider, softer
+        // spread like the opening morph's, so the lips and the buttocks clear the opening).
+        float Spread = 1.0 + (max(Cfg2.y, 1.0) - 1.0) * Smooth((r - Rs) / 2.0);
+        if (Area > 0.0 && Inside > 0.0) Out = (sqrt(r * r + Area) - r) * Spread * (1.0 - Smooth((r - Rs) / max(Range - Rs, 1.0))) * Inside;
         return max(Out, Contact);
     }
     // Point of the path at distance U from the tip.

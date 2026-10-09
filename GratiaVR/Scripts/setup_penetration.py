@@ -162,8 +162,8 @@ anal = [f'DEF-ero_ass_{side}{suffix}' for side in 'LR' for suffix in ('', '_001'
 clit = ['DEF-ero_clit', 'DEF-ero_clit_001', 'DEF-ero_clit_002']
 # Walls follow the shaft surface (each bone only as far as the surface reaches past its rest distance from the
 # axis) and are dragged a little with its motion; the clit chain, further out, only yields to large sizes. The hip
-# and buttock bones are an outer ring: they spread with the opening only past 2.5-3.5 cm (a fist, 3XL, 4XL) and
-# saturate gently, so they never stretch the thigh for ordinary sizes.
+# and buttock bones are an outer ring: they spread with the opening past 1.2-2 cm (clearly from a fist, XL and
+# larger: 1.5-3 cm, up to 3-4 cm on the largest) and saturate gently.
 # Opening morphs: 6.2 cm off the axis (the largest size, 4XL) within the core, fading over 12.5 cm (more than twice
 # the opening, so no two vertices cross), from a little before the entrance through the channel's depth; the slit
 # opens mostly across (40 % along it), the anus evenly. A fist drives them to about 0.6.
@@ -217,13 +217,13 @@ channels = [
     channel('Vaginal', vag, VAG_DEPTH,
             [bone(b, 1.0, 0.0, 3.5, 0.012, 0.8) for b in vag]
             + [bone(b, 0.35, 0.5, 1.2, 0.006, 0.4) for b in clit]
-            + [bone(b, 0.4, 3.0, 2.0, ring=True) for b in ('DEF-pelvis_L', 'DEF-pelvis_R')]
-            + [bone(b, 0.3, 3.5, 1.5, ring=True) for b in ('DEF-ass_L', 'DEF-ass_R')], morph='Gratia_OpenVaginal', morph_full=OPENING_CM,
+            + [bone(b, 0.8, 1.5, 3.5, ring=True) for b in ('DEF-pelvis_L', 'DEF-pelvis_R')]
+            + [bone(b, 0.7, 2.0, 3.0, ring=True) for b in ('DEF-ass_L', 'DEF-ass_R')], morph='Gratia_OpenVaginal', morph_full=OPENING_CM,
             bulges=bulges['Vaginal'], resistance=VAG_TIGHT, stretch='GratiaStretchVaginal'),
     channel('Anal', anal, ANAL_DEPTH,
             [bone(b, 1.0, 0.0, 3.5, 0.012, 0.8) for b in anal]
-            + [bone(b, 0.55, 2.5, 3.0, ring=True) for b in ('DEF-ass_L', 'DEF-ass_R')]
-            + [bone(b, 0.25, 3.5, 1.2, ring=True) for b in ('DEF-pelvis_L', 'DEF-pelvis_R')], rest=0.3,
+            + [bone(b, 1.0, 1.2, 4.0, ring=True) for b in ('DEF-ass_L', 'DEF-ass_R')]
+            + [bone(b, 0.5, 2.0, 2.5, ring=True) for b in ('DEF-pelvis_L', 'DEF-pelvis_R')], rest=0.3,
             morph='Gratia_OpenAnal', morph_full=OPENING_CM, bulges=bulges['Anal'], resistance=ANAL_TIGHT, stretch='GratiaStretchAnal'),
 ]
 settings = profile.get_editor_property('penetration')

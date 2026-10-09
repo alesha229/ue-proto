@@ -816,7 +816,7 @@ void UGratiaPenetration::PushShaftsToMaterials()
     for (const FChannel& Channel : Channels) if (Channel.bFrame) Floor = FMath::Max(Floor, Channel.Entrance.Z);
     Floor += Settings.BellyFloorCm * Scale;
     Instance->SetVectorParameterValue(TEXT("Config"), FLinearColor(Forward.X, Forward.Y, Forward.Z, Settings.BellyAmountCm * Scale));
-    Instance->SetVectorParameterValue(TEXT("Config2"), FLinearColor(Settings.ShaftDeformRangeCm * Scale, 0.0f, 0.0f, 1.0f));
+    Instance->SetVectorParameterValue(TEXT("Config2"), FLinearColor(Settings.ShaftDeformRangeCm * Scale, Settings.ShaftSpreadGain, 0.0f, 1.0f));
     Instance->SetVectorParameterValue(TEXT("Config3"), FLinearColor(Settings.BellyRadiusCm * Scale, Settings.BellyFullRadiusCm * Scale, Floor, 0.0f));
 }
 

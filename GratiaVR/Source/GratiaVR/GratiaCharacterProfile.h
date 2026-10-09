@@ -808,6 +808,10 @@ struct GRATIAVR_API FGratiaPenetrationSettings
     /** Tissue farther than this from a shaft does not move. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Shape", meta = (ClampMin = "2", ClampMax = "40", Units = "cm"))
     float ShaftDeformRangeCm = 14.0f;
+    /** Tissue beyond the walls spreads this many times further than keeping the area alone would (a wider, softer
+     *  spread like an opening morph's: the lips and buttocks clear the opening); the walls still fit the shaft. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Shape", meta = (ClampMin = "1", ClampMax = "4"))
+    float ShaftSpreadGain = 1.8f;
     /** The skin in front of the inserted part of a shaft (the belly) moves forward by up to this much, fully where the
      *  shaft passing behind it is BellyFullRadiusCm thick (40 % of that shows nothing), following the path; the bulge
      *  morphs rest then. 0: the channels' bulge morphs swell the belly. */
