@@ -580,12 +580,16 @@ if SHOULD_AUTHOR:
         return obj
 
     pick = lambda slug, fallback: user.get(slug, generated[fallback])
+    SHIPPED_ENVIRONMENTS = ('WabiSabi',)
     # Player-facing names of the profile's performance clips (the clip names are technical).
     SHOW_CARDS = {'Idle ZZZ': ('Позирование', 'Шоу · игривая стойка в гостевом доме'),
                   'KM466 Full': ('Ночь на площади', 'Шоу 9,5 мин · с партнёром, вид его глазами')}
     entry('WabiSabi', 'Гостевой дом', 'Ваби-саби: дерево, лён и дневной свет', 'WabiSabi', (0.95, 0.62, 0.38), pick('MechanicalCorpse', 'GratiaMoon'), 0.8, reverb_room)
-    entry('SoulCity', 'Ночной квартал', 'Площадь среди трущоб, неон и огни окон', 'SoulCity', CYAN, pick('NeverSee', 'GratiaNeon'), 0.9, reverb_open)
-    entry('SoulCityRain', 'Дождливая ночь', 'Та же площадь под ливнем', 'SoulCityRain', LILAC, pick('Brain', 'GratiaMoon'), 0.9, reverb_open)
+    # Only the guesthouse ships (user, 9 October 2026: the city scenes cost every build their huge cook); its shows too.
+    if 'SoulCity' in SHIPPED_ENVIRONMENTS:
+        entry('SoulCity', 'Ночной квартал', 'Площадь среди трущоб, неон и огни окон', 'SoulCity', CYAN, pick('NeverSee', 'GratiaNeon'), 0.9, reverb_open)
+    if 'SoulCityRain' in SHIPPED_ENVIRONMENTS:
+        entry('SoulCityRain', 'Дождливая ночь', 'Та же площадь под ливнем', 'SoulCityRain', LILAC, pick('Brain', 'GratiaMoon'), 0.9, reverb_open)
     performance_analysis = unreal.load_asset(BASE + '/DA_KM466Analysis') if LIB.does_asset_exist(BASE + '/DA_KM466Analysis') else None
     for index, clip in enumerate(performances):
         name = str(clip.get_editor_property('name'))
@@ -594,6 +598,8 @@ if SHOULD_AUTHOR:
         # A performance with a partner lying on the floor needs the open plaza; the furnished guesthouse
         # only has a 1.6 m clear strip, enough for one standing character.
         env = 'SoulCity' if clip.get_editor_property('scene').get_editor_property('partner_mesh') else 'WabiSabi'
+        if env not in SHIPPED_ENVIRONMENTS:
+            continue
         title, description = SHOW_CARDS.get(name, (name, 'Шоу · управление воспроизведением'))
         item = entry('Performance_' + str(index), title, description, env, (0.75, 0.3, 1.0), None, 0.8,
                      reverb_room if env == 'WabiSabi' else reverb_open, name)

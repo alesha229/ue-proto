@@ -51,7 +51,7 @@ if ($RegenerateScenes -or -not (Test-Path -LiteralPath $sceneLibrary)) {
 if ($LASTEXITCODE -ne 0) { throw 'Final build stamp failed' }
 $uatArguments = @(
     'BuildCookRun', "-project=$projectFile", '-platform=Win64',
-    '-clientconfig=Development', '-build', '-cook',
+    '-clientconfig=Development', '-build', '-cook', '-iterativecooking',
     '-map=/Game/Gratia/Maps/L_Stage1', '-stage', '-pak', '-iostore',
     '-package',
     '-nop4', '-unattended', '-utf8output', '-NoCompileEditor', '-SkipBuildEditor',
@@ -87,13 +87,12 @@ $manifest | Add-Member -NotePropertyName packaged_utc -NotePropertyValue ([DateT
 $manifest | Add-Member -NotePropertyName package_files -NotePropertyValue $packageFiles
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $packageRoot 'build_manifest.json') -Encoding utf8
 Copy-Item -LiteralPath (Join-Path $packageRoot 'build_manifest.json') -Destination (Join-Path $evidenceRoot 'build_manifest.json')
-# The staged copy and the cooked content are intermediate duplicates of the package; keep only Builds\Windows.
+# The staged copy is an intermediate duplicate of the package; the cooked content stays for the next build's iterative
+# cook (only changed assets are cooked again, shaders come from the DDC).
 $resolvedStage = [IO.Path]::GetFullPath($stagedRoot)
 $allowedStage = [IO.Path]::GetFullPath((Join-Path $projectRoot 'Saved\StagedBuilds')) + [IO.Path]::DirectorySeparatorChar
 if (-not $resolvedStage.StartsWith($allowedStage, [StringComparison]::OrdinalIgnoreCase)) { throw 'Refusing cleanup outside Saved/StagedBuilds' }
 Remove-Item -LiteralPath $resolvedStage -Recurse -Force
-$cookedRoot = Join-Path $projectRoot 'Saved\Cooked'
-if (Test-Path -LiteralPath $cookedRoot) { Remove-Item -LiteralPath $cookedRoot -Recurse -Force }
 Write-Output "Package: $packageRoot (build $($manifest.build_id))"
 exit 0
 
