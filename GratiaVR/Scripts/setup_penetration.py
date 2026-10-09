@@ -70,6 +70,15 @@ def wire_stretched_skin():
         texture.set_editor_property('max_texture_size', 4096)
         assert lib.save_loaded_asset(texture, only_if_is_dirty=False), key
         textures.append(dict(texture=key, compression=str(compression), size=[texture.blueprint_get_size_x(), texture.blueprint_get_size_y()]))
+    # The uncompressed mask is sampled as linear grayscale (a colour sampler fails the suit material's compile).
+    suit = lib.load_asset('/Game/Gratia/CharacterMaterials/M_Gratia_Default_cloth_2')
+    mask = lib.load_asset('/Game/Gratia/Textures/T_default_cloth2_alpha')
+    for sample in mel.get_material_expressions(suit):
+        if isinstance(sample, unreal.MaterialExpressionTextureSample) and sample.get_editor_property('texture') == mask:
+            sample.set_editor_property('sampler_type', unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_GRAYSCALE)
+    errors = mel.recompile_material(suit)
+    assert not errors, list(errors)
+    assert lib.save_loaded_asset(suit, only_if_is_dirty=False)
     expressions = list(mel.get_material_expressions(skin))
 
     def tagged(tag):

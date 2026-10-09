@@ -8,6 +8,8 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/World.h"
+#include "Materials/MaterialParameterCollection.h"
+#include "Materials/MaterialParameterCollectionInstance.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogGratiaPenetration, Log, All);
 
@@ -300,7 +302,11 @@ FVector UGratiaPenetration::WallTarget(const FChannel& Channel, const FWallBone&
     const double Surface = Opening > 0.0 ? Opening + (Settings->RestRadiusCm + Clearance) * Scale : 0.0;
     const double Need = Bone.Settings.bOuterRing ? Opening : FMath::Max(0.0, Surface - Bone.RestDistance * Scale);
     // With an opening morph the morph opens the channel over a wide, smooth area; the bones keep a quarter for the
-    // lips' own shape (and their drag below), so the two do not add up.
+    // lips' own shape (and their drag below), so the two do not add up. With shape-fitting materials the material
+    // spreads the surrounding tissue itself, so the outer ring (pelvis, buttocks) rests instead of doubling it.
+    const UGratiaCharacterProfile* Profile = Character.IsValid() ? Character->CharacterProfile.Get() : nullptr;
+    const bool bFitted = Profile && Profile->Penetration.ShaftCollection != nullptr;
+    if (bFitted && Bone.Settings.bOuterRing) return FVector::ZeroVector;
     const double Share = Channel.Morph.IsNone() || Bone.Settings.bOuterRing ? 1.0 : 0.25;
     const double Out = Share * GratiaPenetration::BoneOffset(Need, Bone.Settings.StartOpeningCm * Scale, Bone.Settings.Response, Bone.Settings.MaxOffsetCm * Scale);
     const double MaxDrag = Bone.Settings.MaxDragCm * Scale;
@@ -438,16 +444,20 @@ void UGratiaPenetration::UpdateWalls(float Delta)
             if (Bone.Offset.ContainsNaN()) Bone.Offset = FVector::ZeroVector;
             Largest = FMath::Max(Largest, Bone.Offset.Size());
         }
+        // With shape-fitting materials the shaft itself shapes the opening; the morph keeps only the gape that lingers
+        // after the shaft narrows or leaves.
+        const bool bFitted = Settings.ShaftCollection != nullptr;
         if (!Channel.Morph.IsNone() && Source)
         {
             const float Target = float(FMath::Clamp(Opening / FMath::Max(0.1, double(Source->MorphFullOpeningCm) * Channel.Scale), 0.0, 1.0) * Squeeze);
             const bool bOpening = Target >= Channel.MorphWeight;
             Channel.MorphWeight = FMath::Lerp(Channel.MorphWeight, Target, float(bOpening || Channel.Clench > 0.0 ? OpenAlpha : CloseAlpha));
             if (Channel.MorphWeight < 1.0e-3 && Target <= 0.0f) Channel.MorphWeight = 0.0f;
-            if (Channel.MorphWeight > 0.0f || Channel.bMorphSet)
+            const float Gape = bFitted ? FMath::Max(0.0f, Channel.MorphWeight - Target) : Channel.MorphWeight;
+            if (Gape > 0.0f || Channel.bMorphSet)
             {
-                Character->CharacterMesh->SetMorphTarget(Channel.Morph, Channel.MorphWeight, false);
-                Channel.bMorphSet = Channel.MorphWeight > 0.0f;
+                Character->CharacterMesh->SetMorphTarget(Channel.Morph, Gape, false);
+                Channel.bMorphSet = Gape > 0.0f;
             }
             // The skin material shades the stretched skin with the opening.
             if (!Source->StretchParameter.IsNone() && FMath::Abs(Channel.MorphWeight - Channel.StretchSent) > 0.002f)
@@ -468,7 +478,7 @@ void UGratiaPenetration::UpdateWalls(float Delta)
             // for the largest sizes up to BulgeMaxWeight.
             const double Full = FMath::Max(0.5, double(Source ? Source->BulgeFullRadiusCm : 4.5f) * Channel.Scale);
             const double MaxWeight = FMath::Max(1.0, double(Source ? Source->BulgeMaxWeight : 1.0f));
-            const float Target = float(FMath::Clamp((Radius - 0.4 * Full) / (0.6 * Full), 0.0, MaxWeight));
+            const float Target = bFitted ? 0.0f : float(FMath::Clamp((Radius - 0.4 * Full) / (0.6 * Full), 0.0, MaxWeight));
             float& Weight = Channel.BulgeWeights[Bulge];
             Weight = FMath::Lerp(Weight, Target, float(Target >= Weight ? OpenAlpha : CloseAlpha));
             if (Weight < 1.0e-3 && Target <= 0.0f) Weight = 0.0f;
@@ -661,11 +671,9 @@ void UGratiaPenetration::Solve(float Delta)
             if (Character->Interaction) Character->Interaction->ExternalReaction(Channel.Name, Shaft->GetHeldHand(), float(FMath::Abs(Engagement.Velocity)));
         }
         Engagement.bFresh = false;
-        if (Shaft == Penetrator.Get())
-        {
-            for (FVector& Joint : Joints) Joint += Engagement.Lateral;
-            PrimitiveJoints = MoveTemp(Joints);
-        }
+        for (FVector& Joint : Joints) Joint += Engagement.Lateral;
+        Engagement.Joints = Joints;
+        if (Shaft == Penetrator.Get()) PrimitiveJoints = MoveTemp(Joints);
     }
     // The drawn primitive: along the channel when inside, otherwise straight and sliding over the body.
     if (AGratiaPenetrator* Primitive = Penetrator.Get())
@@ -694,6 +702,7 @@ void UGratiaPenetration::Solve(float Delta)
     }
     UpdateWalls(Step);
     PushToAnimation();
+    PushShaftsToMaterials();
     // Feedback per held shaft: a short pulse on entering, then vibration with the insertion speed and the stretch.
     float MaxStretch = 0.0f;
     for (AGratiaPenetrator* Shaft : Shafts)
@@ -727,6 +736,77 @@ void UGratiaPenetration::Solve(float Delta)
     }
 }
 
+void UGratiaPenetration::PushShaftsToMaterials()
+{
+    const UGratiaCharacterProfile* Profile = Character.IsValid() ? Character->CharacterProfile.Get() : nullptr;
+    UMaterialParameterCollection* Collection = Profile ? Profile->Penetration.ShaftCollection.Get() : nullptr;
+    UMaterialParameterCollectionInstance* Instance = Collection && GetWorld() ? GetWorld()->GetParameterCollectionInstance(Collection) : nullptr;
+    ShaftsWritten = Collection ? (Instance ? TEXT("") : TEXT("no-instance")) : TEXT("no-collection");
+    if (!Instance || !Character->CharacterMesh) return;
+    constexpr int32 Slots = 4, Points = 12;
+    static const TArray<FName> PointNames = []()
+    {
+        TArray<FName> Names;
+        for (int32 Slot = 0; Slot < Slots; ++Slot)
+            for (int32 Point = 0; Point < Points; ++Point) Names.Add(*FString::Printf(TEXT("S%dP%02d"), Slot, Point));
+        return Names;
+    }();
+    static const FName ShapeNames[Slots] = {TEXT("S0A"), TEXT("S1A"), TEXT("S2A"), TEXT("S3A")};
+    static const FName StateNames[Slots] = {TEXT("S0B"), TEXT("S1B"), TEXT("S2B"), TEXT("S3B")};
+    const FGratiaPenetrationSettings& Settings = Profile->Penetration;
+    int32 Slot = 0;
+    for (const FEngagement& Engagement : Engagements)
+    {
+        if (Slot >= Slots) break;
+        const AGratiaPenetrator* Shaft = Engagement.Shaft.Get();
+        if (!Shaft || Engagement.Joints.Num() < 2 || !Channels.IsValidIndex(Engagement.Channel)) continue;
+        const FChannel& Channel = Channels[Engagement.Channel];
+        const FGratiaPenetrationChannel* Source = Definition(Channel);
+        const GratiaPenetration::FShaft Geometry = Shaft->GetShaft();
+        // The path from the tip back to 4 cm outside the entrance (the part that shapes the body), as Points points
+        // with their distance from the tip; the material evaluates the form's profile there itself.
+        const TArray<FVector>& Joints = Engagement.Joints;
+        TArray<double> FromTip;
+        FromTip.SetNum(Joints.Num());
+        FromTip.Last() = 0.0;
+        for (int32 Joint = Joints.Num() - 2; Joint >= 0; --Joint) FromTip[Joint] = FromTip[Joint + 1] + FVector::Distance(Joints[Joint], Joints[Joint + 1]);
+        const double Reach = FMath::Clamp(FMath::Max(0.0, Engagement.Inserted) + 4.0 * Channel.Scale, 1.0, FromTip[0]);
+        int32 Segment = Joints.Num() - 2;
+        for (int32 Point = 0; Point < Points; ++Point)
+        {
+            const double U = Reach * Point / (Points - 1);
+            while (Segment > 0 && FromTip[Segment] < U) --Segment;
+            const double Span = FMath::Max(1.0e-4, FromTip[Segment] - FromTip[Segment + 1]);
+            const FVector Location = FMath::Lerp(Joints[Segment + 1], Joints[Segment], FMath::Clamp((U - FromTip[Segment + 1]) / Span, 0.0, 1.0));
+            Instance->SetVectorParameterValue(PointNames[Slot * Points + Point], FLinearColor(Location.X, Location.Y, Location.Z, U));
+        }
+        Instance->SetVectorParameterValue(ShapeNames[Slot], FLinearColor(float(int32(Geometry.Form)), Geometry.Radius, Geometry.Length,
+            FMath::Max(0.0, Engagement.Inserted)));
+        Instance->SetVectorParameterValue(StateNames[Slot], FLinearColor(Geometry.TipCm, Geometry.BaseScale,
+            Source ? Source->RestRadiusCm * Channel.Scale : 0.4, 1.0f));
+        FLinearColor Tip, Shape;
+        Instance->GetVectorParameterValue(PointNames[Slot * Points], Tip);
+        Instance->GetVectorParameterValue(ShapeNames[Slot], Shape);
+        ShaftsWritten += FString::Printf(TEXT("%sS%d tip=(%.0f,%.0f,%.0f) form=%.0f r=%.1f in=%.1f"), ShaftsWritten.IsEmpty() ? TEXT("") : TEXT(","),
+            Slot, Tip.R, Tip.G, Tip.B, Shape.R, Shape.G, Shape.A);
+        ++Slot;
+    }
+    if (Slot == 0 && bShaftsCleared) return;
+    for (int32 Free = Slot; Free < Slots; ++Free) Instance->SetVectorParameterValue(StateNames[Free], FLinearColor(0.0f, 0.0f, 0.0f, 0.0f));
+    bShaftsCleared = Slot == 0;
+    // The character's front (the belly swells toward it), the reach of the deformation, the belly's swelling and the
+    // floor below which nothing swells (above the highest entrance).
+    const UGratiaCharacterProfile& Shape = *Profile;
+    const FVector Forward = Character->CharacterMesh->GetComponentTransform().TransformVectorNoScale(Shape.ForwardAxis).GetSafeNormal2D();
+    const double Scale = Character->CharacterMesh->GetComponentTransform().GetScale3D().GetAbsMax();
+    double Floor = -1.0e6;
+    for (const FChannel& Channel : Channels) if (Channel.bFrame) Floor = FMath::Max(Floor, Channel.Entrance.Z);
+    Floor += Settings.BellyFloorCm * Scale;
+    Instance->SetVectorParameterValue(TEXT("Config"), FLinearColor(Forward.X, Forward.Y, Forward.Z, Settings.BellyAmountCm * Scale));
+    Instance->SetVectorParameterValue(TEXT("Config2"), FLinearColor(Settings.ShaftDeformRangeCm * Scale, 0.0f, 0.0f, 1.0f));
+    Instance->SetVectorParameterValue(TEXT("Config3"), FLinearColor(Settings.BellyRadiusCm * Scale, Settings.BellyFullRadiusCm * Scale, Floor, 0.0f));
+}
+
 FString UGratiaPenetration::GetDiagnostics() const
 {
     const AGratiaPenetrator* Shaft = Penetrator.Get();
@@ -745,9 +825,9 @@ FString UGratiaPenetration::GetDiagnostics() const
         for (int32 Bulge = 0; Bulge < Channel.BulgeWeights.Num(); ++Bulge)
             Bulges += FString::Printf(TEXT("%s%.2f"), Bulge ? TEXT("/") : TEXT(""), Channel.BulgeWeights[Bulge]);
     }
-    return FString::Printf(TEXT("channels=%d primitive=%s held=%d inside=[%s] wall_max=%.2fcm bulge=[%s] applied=%d state=%s"),
+    return FString::Printf(TEXT("channels=%d primitive=%s held=%d inside=[%s] wall_max=%.2fcm bulge=[%s] shape=[%s] applied=%d state=%s"),
         Channels.Num(), Shaft ? *Shaft->GetSizeLabel() : TEXT("none"), Shaft ? Shaft->GetHeldHand() : INDEX_NONE, *Inside,
-        GetMaxWallOffsetCm(), *Bulges, Anim ? Anim->GetAppliedPenetrationBones() : -1, IsEnabled() ? TEXT("running") : TEXT("disabled"));
+        GetMaxWallOffsetCm(), *Bulges, *ShaftsWritten, Anim ? Anim->GetAppliedPenetrationBones() : -1, IsEnabled() ? TEXT("running") : TEXT("disabled"));
 }
 
 bool UGratiaPenetration::RunChecks(FString& Failure)

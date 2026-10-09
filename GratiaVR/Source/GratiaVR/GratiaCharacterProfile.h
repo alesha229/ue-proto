@@ -788,6 +788,32 @@ struct GRATIAVR_API FGratiaPenetrationSettings
     /** A free shaft slides over the body surface instead of passing through it. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration")
     bool bShaftBodyCollision = true;
+    /**
+     * Shape-fitting deformation: the solver writes every engaged shaft (its path from the tip, profile form, size and
+     * depth; slots S0..S3) to this collection each frame, and the character's skin and clothing materials push the
+     * surface out of it (MF_GratiaShaftPress: the walls take the shaft's exact cross-section, surrounding tissue moves
+     * less the further it is, the belly in front of the path swells with the shaft's thickness there). With it the
+     * opening morphs only keep the lingering gape after the shaft narrows or leaves, and the bulge morphs rest. None:
+     * the opening morphs and bulges alone.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Shape")
+    TObjectPtr<UMaterialParameterCollection> ShaftCollection;
+    /** Tissue farther than this from a shaft does not move. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Shape", meta = (ClampMin = "2", ClampMax = "40", Units = "cm"))
+    float ShaftDeformRangeCm = 14.0f;
+    /** The skin in front of the inserted part of a shaft (the belly) moves forward by up to this much, fully where the
+     *  shaft passing behind it is BellyFullRadiusCm thick (40 % of that shows nothing), following the path. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Shape", meta = (ClampMin = "0", ClampMax = "15", Units = "cm"))
+    float BellyAmountCm = 4.5f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Shape", meta = (ClampMin = "0.5", ClampMax = "15", Units = "cm"))
+    float BellyFullRadiusCm = 4.5f;
+    /** The swelling fades out across the belly over this distance. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Shape", meta = (ClampMin = "2", ClampMax = "30", Units = "cm"))
+    float BellyRadiusCm = 11.0f;
+    /** Nothing up to this height above the highest channel entrance swells (the entrances, the pubic area, the thighs);
+     *  it fades in over the next 5 cm. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Shape", meta = (ClampMin = "0", ClampMax = "20", Units = "cm"))
+    float BellyFloorCm = 5.0f;
     /** A reaction cue for every this much travel inside (rate limited by ContactSettings). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Reaction", meta = (ClampMin = "1", ClampMax = "50", Units = "cm"))
     float ReactionTravelCm = 8.0f;

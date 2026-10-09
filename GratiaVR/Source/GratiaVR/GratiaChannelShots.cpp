@@ -12,12 +12,15 @@
 #include "Kismet/KismetSystemLibrary.h"
 #include "Misc/Paths.h"
 #include "UnrealClient.h"
+#if WITH_EDITOR
+#include "ShaderCompiler.h"
+#endif
 
 DEFINE_LOG_CATEGORY_STATIC(LogGratiaChannelShots, Log, All);
 
 namespace
 {
-constexpr int32 GratiaShotCases = 7;
+constexpr int32 GratiaShotCases = 9;
 constexpr int32 GratiaShotViews = 2;
 }
 
@@ -30,7 +33,8 @@ UGratiaChannelShots::UGratiaChannelShots()
 
 FString UGratiaChannelShots::CaseName(int32 Case) const
 {
-    static const TCHAR* Names[GratiaShotCases] = {TEXT("Empty"), TEXT("Fingers"), TEXT("Hand"), TEXT("Fist"), TEXT("TwoHands"), TEXT("PrimitiveXXL"), TEXT("Deep4XL")};
+    static const TCHAR* Names[GratiaShotCases] = {TEXT("Empty"), TEXT("Fingers"), TEXT("Hand"), TEXT("Fist"), TEXT("TwoHands"), TEXT("PrimitiveXXL"), TEXT("Deep4XL"),
+        TEXT("BeadsXL"), TEXT("KnotL")};
     return Names[FMath::Clamp(Case, 0, GratiaShotCases - 1)];
 }
 
@@ -62,8 +66,10 @@ bool UGratiaChannelShots::Arrange(int32 Channel, int32 Case)
     {
         AGratiaPenetrator* Shaft = GetWorld()->SpawnActor<AGratiaPenetrator>(AGratiaPenetrator::StaticClass(), FTransform::Identity, Parameters);
         if (!Shaft) continue;
-        // The primitive: XXL at the entrance, the largest (4XL) deep.
-        if (Case >= 5) Shaft->SetSize(Case == 5 ? Shaft->Sizes.Num() - 3 : Shaft->Sizes.Num() - 1);
+        // The primitive: XXL at the entrance, the largest (4XL) deep, XL beads half in, an L knot at the entrance.
+        if (Case == 7) { Shaft->SetSize(3); Shaft->SetForm(EGratiaShaftForm::Beads); }
+        else if (Case == 8) { Shaft->SetSize(2); Shaft->SetForm(EGratiaShaftForm::Knotted); }
+        else if (Case >= 5) Shaft->SetSize(Case == 5 ? Shaft->Sizes.Num() - 3 : Shaft->Sizes.Num() - 1);
         else
         {
             Shaft->SetShape(Shapes[Index].Key.Name, Shapes[Index].Value);
@@ -85,8 +91,12 @@ void UGratiaChannelShots::TickComponent(float Delta, ELevelTick Type, FActorComp
     APlayerController* Player = UGameplayStatics::GetPlayerController(this, 0);
     if (!Penetration || !Player) return;
     Seconds += Delta;
-    // Let the studio, the character and its channels settle first.
+    // Let the studio, the character and its channels settle first (and, from the editor, new shaders compile: until
+    // then the materials draw as the default one).
     if (Step == 0 && (Seconds < 5.0f || Penetration->GetChannelCount() == 0)) return;
+#if WITH_EDITOR
+    if (Step == 0 && GShaderCompilingManager && GShaderCompilingManager->IsCompiling()) return;
+#endif
     const int32 Total = Penetration->GetChannelCount() * GratiaShotCases * GratiaShotViews;
     const int32 Shot = Step == 0 ? 0 : Step - 1;
     if (Step == 0) { Step = 1; Seconds = 0.0f; }
@@ -107,13 +117,15 @@ void UGratiaChannelShots::TickComponent(float Delta, ELevelTick Type, FActorComp
     FVector Entrance, Inward;
     double Depth = 0.0;
     if (!Penetration->GetChannelFrame(Channel, Name, Entrance, Inward, Depth)) { ++Step; Seconds = 0.0f; return; }
-    // Tip 1 cm before the entrance until every shaft is captured (or 3 s passed), then in at 25 cm/s to its depth
-    // (two hands side by side). The deep case first shows the belly with the shaft held at the entrance, then goes in.
+    // Tip 1 cm before the entrance until every shaft is captured (or 3 s passed), then the hand pushes in at 25 cm/s
+    // until the shafts reach their depth against the channel's resistance (at most its largest lag further), like a
+    // hand would (two hands side by side). The deep case first shows the belly with the shaft held at the entrance.
     const bool bFirstFrame = Seconds <= Delta + UE_SMALL_NUMBER;
     const bool bBaseline = Case == 6 && ViewIndex == 0;
-    if (ViewIndex == 0 && bFirstFrame) { Arrange(Channel, Case); Inserting = -1.0f; }
-    if (Case == 6 && ViewIndex == 1 && bFirstFrame) Inserting = 0.0f;
-    const double Target = Case == 3 ? 4.0 : Case == 5 ? 8.0 : Case == 6 ? Depth * 0.85 : 6.0;
+    if (ViewIndex == 0 && bFirstFrame) { Arrange(Channel, Case); Inserting = -1.0f; HandDepth = -1.0; Settled = 0.0f; }
+    if (Case == 6 && ViewIndex == 1 && bFirstFrame) { Inserting = 0.0f; HandDepth = -1.0; Settled = 0.0f; }
+    double Target = Case == 3 ? 4.0 : Case == 5 ? 8.0 : Case == 6 ? Depth * 0.85 : Case == 7 ? 12.0 : 6.0;
+    if (Case == 8 && !Shafts.IsEmpty() && Shafts[0]) Target = 0.8 * Shafts[0]->GetShaft().Length;
     constexpr double Speed = 25.0;
     if (ViewIndex == 0 && Inserting < 0.0f)
     {
@@ -127,7 +139,22 @@ void UGratiaChannelShots::TickComponent(float Delta, ELevelTick Type, FActorComp
         }
     }
     else Inserting += Delta;
-    const double TipDepth = Inserting < 0.0f || bBaseline ? -1.0 : FMath::Min(Target, -1.0 + Inserting * Speed);
+    const bool bInsertView = Case == 6 ? ViewIndex == 1 : ViewIndex == 0;
+    if (bInsertView && Inserting >= 0.0f)
+    {
+        double Shallowest = Target;
+        for (const AGratiaPenetrator* Shaft : Shafts)
+        {
+            FVector ShaftEntrance, ShaftInward;
+            double Inserted = 0.0, ChannelDepth = 0.0;
+            if (Shaft && Penetration->GetEngagedFrame(Shaft, ShaftEntrance, ShaftInward, Inserted, ChannelDepth)) Shallowest = FMath::Min(Shallowest, Inserted);
+        }
+        const UGratiaCharacterProfile* Profile = Runtime->TargetCharacter->CharacterProfile.Get();
+        const double MaxLead = (Profile ? Profile->Penetration.MaxLagCm : 6.0f) + 2.0;
+        if (Shallowest < Target - 0.3 && HandDepth < Target + MaxLead) HandDepth = FMath::Min(HandDepth + Speed * Delta, Target + MaxLead);
+        else Settled += Delta;
+    }
+    const double TipDepth = Inserting < 0.0f || bBaseline ? -1.0 : HandDepth;
     const AActor* Body = Runtime->TargetCharacter.Get();
     const FVector Side = Body->GetActorRightVector();
     for (int32 Index = 0; Index < Shafts.Num(); ++Index)
@@ -138,7 +165,8 @@ void UGratiaChannelShots::TickComponent(float Delta, ELevelTick Type, FActorComp
         const FVector Offset = Shafts.Num() > 1 ? Side * (Index == 0 ? -1.6 : 1.6) : FVector::ZeroVector;
         Shaft->SetBase(FTransform(FRotationMatrix::MakeFromX(Inward).ToQuat(), Entrance + Offset - Inward * (Length - TipDepth)));
     }
-    // Views: from outside the channel (in front of or behind the body, a little below) and from the side.
+    // Views: from outside the channel (in front of or behind the body, a little below) and from lower to one side (a
+    // true side view is behind a thigh).
     const FVector Up = FVector::UpVector;
     FVector Out = -Inward;
     Out.Z = 0.0;
@@ -168,8 +196,7 @@ void UGratiaChannelShots::TickComponent(float Delta, ELevelTick Type, FActorComp
         if (Player->GetViewTarget() != View) Player->SetViewTarget(View);
     }
     // Walls and morphs settle 1.2 s after the shafts reached their depth.
-    const bool bInsertView = Case == 6 ? ViewIndex == 1 : ViewIndex == 0;
-    if (Inserting < 0.0f || (bBaseline ? Inserting < 0.5f : bInsertView ? Inserting < (Target + 1.0) / Speed + 1.2 : Seconds < 0.5f)) return;
+    if (Inserting < 0.0f || (bBaseline ? Inserting < 0.5f : bInsertView ? Settled < 1.2f : Seconds < 0.5f)) return;
     const FString File = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Screenshots/ChannelShots"),
         FString::Printf(TEXT("Channel_%s_%s_%s.png"), *Name.ToString(), *CaseName(Case),
         Case == 6 ? (ViewIndex == 0 ? TEXT("BellyBefore") : TEXT("Belly")) : ViewIndex == 0 ? TEXT("Axis") : TEXT("Side")));

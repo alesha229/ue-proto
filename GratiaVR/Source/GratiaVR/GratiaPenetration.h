@@ -133,6 +133,8 @@ private:
         double Push = 0.0;
         /** The shaft did not move last frame (static friction holds it). */
         bool bStuck = true;
+        /** Joints of the shaft as laid in the channel this frame (world, base first). */
+        TArray<FVector> Joints;
         /** Released while inside: the base stays on the body (anchor-bone space). */
         bool bAnchored = false;
         FTransform AnchoredBase = FTransform::Identity;
@@ -161,6 +163,11 @@ private:
     /** A contraction of Channel now: the walls squeeze in for ClenchSeconds; the shafts inside get a pulse. */
     void Clench(int32 Channel);
     void PushToAnimation();
+    /** Writes the engaged shafts to the profile's ShaftCollection for the shape-fitting materials. */
+    void PushShaftsToMaterials();
+    bool bShaftsCleared = false;
+    /** Shafts written to the shape collection last frame (diagnostics). */
+    FString ShaftsWritten;
     /** Index of a free channel Shaft's tip can enter now, or INDEX_NONE. */
     int32 FindCapture(const AGratiaPenetrator& Shaft) const;
     /** Every shaft the character responds to: the primitive first, then the hands. */
