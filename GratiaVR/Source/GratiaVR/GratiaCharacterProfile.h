@@ -713,6 +713,14 @@ struct GRATIAVR_API FGratiaPenetrationChannel
     FName OpeningMorph;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0.1", ClampMax = "20", Units = "cm"))
     float MorphFullOpeningCm = 4.0f;
+    /** With shape-fitting materials: the opening split in two morphs. SpreadMorph moves the surroundings (lips,
+     *  buttocks, perineum) with the opening and its gape like OpeningMorph; CoreMorph opens the walls near the axis only
+     *  for a gape wider than what is inside (the shaft itself shapes the walls). Both at the same weight make
+     *  OpeningMorph; none: OpeningMorph shows only the gape beyond the shaft. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration")
+    FName SpreadMorph;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration")
+    FName CoreMorph;
     /** How deep into the channel the opening morph opens the walls (the shape-fitting materials add only what the
      *  shaft needs beyond it). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0.5", ClampMax = "40", Units = "cm"))
@@ -805,13 +813,14 @@ struct GRATIAVR_API FGratiaPenetrationSettings
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Shape")
     TObjectPtr<UMaterialParameterCollection> ShaftCollection;
-    /** Tissue farther than this from a shaft does not move. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Shape", meta = (ClampMin = "2", ClampMax = "40", Units = "cm"))
-    float ShaftDeformRangeCm = 14.0f;
-    /** Tissue beyond the walls spreads this many times further than keeping the area alone would (a wider, softer
-     *  spread like an opening morph's: the lips and buttocks clear the opening); the walls still fit the shaft. */
+    /** The tissue the walls push aside fades back over this distance beyond the shaft's surface (the spread morph moves
+     *  the wider surroundings). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Shape", meta = (ClampMin = "0.5", ClampMax = "40", Units = "cm"))
+    float ShaftDeformRangeCm = 3.0f;
+    /** Tissue beyond the walls spreads this many times further than keeping the area alone would; the walls still fit
+     *  the shaft. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Shape", meta = (ClampMin = "1", ClampMax = "4"))
-    float ShaftSpreadGain = 1.8f;
+    float ShaftSpreadGain = 1.0f;
     /** The skin in front of the inserted part of a shaft (the belly) moves forward by up to this much, fully where the
      *  shaft passing behind it is BellyFullRadiusCm thick (40 % of that shows nothing), following the path; the bulge
      *  morphs rest then. 0: the channels' bulge morphs swell the belly. */

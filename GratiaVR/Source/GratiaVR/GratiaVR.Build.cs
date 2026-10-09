@@ -9,6 +9,8 @@ public class GratiaVR : ModuleRules
         PublicIncludePaths.Add(ModuleDirectory);
         PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine", "InputCore", "HeadMountedDisplay", "UMG" });
         PrivateDependencyModuleNames.AddRange(new[] { "XRBase", "RenderCore", "RHI", "PhysicsCore", "EnhancedInput",
-            "KawaiiPhysics", "AnimGraphRuntime", "Slate", "SlateCore", "ProceduralMeshComponent" });
+            "KawaiiPhysics", "AnimGraphRuntime", "Slate", "SlateCore", "ProceduralMeshComponent", "Json" });
+        // The channel gym patches the running game with Live Coding (editor and development builds that have it).
+        if (Target.bWithLiveCoding) PrivateDependencyModuleNames.Add("LiveCoding");
     }
 }

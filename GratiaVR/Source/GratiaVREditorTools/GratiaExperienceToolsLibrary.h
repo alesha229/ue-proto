@@ -55,12 +55,14 @@ public:
      * FalloffCm (kept at least twice OpeningCm so neighbouring vertices never cross: the skin stretches over a wide
      * area instead of tearing), and along the axis from OutsideCm before the entrance to InsideCm in. With Left/Right
      * bones (a slit) the opening is mostly across it: along the slit it is AlongSlit of the full amount. Skin and
-     * clothing in the area move together. Returns the number of moved vertices, -1 on bad input.
+     * clothing in the area move together. With SplitCm above 0 only one part of it is made: the surroundings (beyond
+     * SplitCm from the axis, fading in to full at twice that), or with bInnerPart the rest near the axis; the two parts
+     * add up to the whole opening. Returns the number of moved vertices, -1 on bad input.
      */
     UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
     static int32 CreateChannelOpeningMorph(USkeletalMesh* Mesh, FName MorphName, const TArray<FName>& EntranceBones, FName InwardBone,
         const TArray<FName>& LeftBones, const TArray<FName>& RightBones, float OpeningCm, float CoreRadiusCm, float FalloffCm,
-        float OutsideCm, float InsideCm, float AlongSlit);
+        float OutsideCm, float InsideCm, float AlongSlit, float SplitCm = 0.0f, bool bInnerPart = false);
     /**
      * Splits the triangles of Mesh (LOD 0, mesh description) whose centre lies within RadiusCm of any of Bones
      * (reference pose) into four, and their neighbours along the split edges into two or three, so there are no
@@ -69,6 +71,14 @@ public:
      * description), so a setup script can call it every time. Returns the number of split edges, 0 when already done,
      * -1 on bad input.
      */
+    /**
+     * The mesh edits below (subdivision, morphs, masks) build the skeletal mesh each time (~20 s for the character).
+     * Between BeginMeshEdit and EndMeshEdit they only change its mesh description; EndMeshEdit commits and builds once.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
+    static bool BeginMeshEdit(USkeletalMesh* Mesh);
+    UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
+    static bool EndMeshEdit(USkeletalMesh* Mesh);
     UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
     static int32 SubdivideMeshAroundBones(USkeletalMesh* Mesh, const TArray<FName>& Bones, float RadiusCm, FName Marker);
     /**

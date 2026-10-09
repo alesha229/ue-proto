@@ -35,7 +35,7 @@ def bone(name, response=1.0, start=0.0, max_offset=3.0, drag=0.0, max_drag=0.8, 
 
 
 def channel(name, entrance, depth, bones, capture=3.0, rest=0.4, falloff=2.5, morph='None', morph_full=4.0, bulges=(), resistance=(),
-            stretch='None'):
+            stretch='None', spread='None', core='None'):
     value = unreal.GratiaPenetrationChannel()
     swell = []
     for bulge_morph, bulge_depth in bulges:
@@ -47,7 +47,7 @@ def channel(name, entrance, depth, bones, capture=3.0, rest=0.4, falloff=2.5, mo
                           inward_target_bone='None', depth_cm=depth, capture_radius_cm=capture,
                           capture_angle_degrees=50.0, release_angle_degrees=115.0, rest_radius_cm=rest,
                           wall_falloff_cm=falloff, bones=bones, opening_morph=morph, morph_full_opening_cm=morph_full,
-                          stretch_parameter=stretch, bulges=swell, bulge_full_radius_cm=4.5, bulge_max_weight=1.0,
+                          stretch_parameter=stretch, spread_morph=spread, core_morph=core, bulges=swell, bulge_full_radius_cm=4.5, bulge_max_weight=1.0,
                           resistance=[unreal.Vector2D(d, t) for d, t in resistance]).items():
         value.set_editor_property(key, item)
     return value
@@ -173,10 +173,13 @@ pelvis = 'DEF-spine'
 # triangles within 9 cm of the entrance bones split into four, within 5 cm into sixteen (neighbours along split edges
 # into two or three, no cracks). Each pass runs once per mesh (a marker attribute in the mesh description).
 lib_tools = unreal.GratiaExperienceToolsLibrary
+# Every edit below changes only the mesh description; one build at the end (instead of ~20 s after each of them).
+assert lib_tools.begin_mesh_edit(mesh)
 for marker, radius in (('GratiaChannelDetail_9cm', 9.0), ('GratiaChannelDetail_5cm', 5.0)):
     split = lib_tools.subdivide_mesh_around_bones(mesh, vag + anal + clit, radius, marker)
     assert split >= 0, f'Subdivision {marker} failed'
 OPENING_CM = 6.2
+SPLIT_CM = 2.5
 morphs = {}
 for morph, entrance, depth, left, right, core, outside, along in (
         ('Gratia_OpenVaginal', vag, 8.0, vag[:4], vag[4:], 0.8, 2.5, 0.4),
@@ -185,6 +188,14 @@ for morph, entrance, depth, left, right, core, outside, along in (
         mesh, morph, entrance, pelvis, left, right, OPENING_CM, core, 12.5, outside, depth, along)
     assert moved > 0, f'Opening morph {morph} moved no vertices'
     morphs[morph] = moved
+    # The same opening in two parts for the shape-fitting materials: the surroundings beyond SPLIT_CM of the axis
+    # (lips, perineum, buttocks: they spread with the opening and its gape) and the walls near the axis (only a gape
+    # wider than what is inside opens them; the shaft shapes them itself).
+    for part, inner in ((morph.replace('Gratia_Open', 'Gratia_Spread'), False), (morph + 'Core', True)):
+        moved = unreal.GratiaExperienceToolsLibrary.create_channel_opening_morph(
+            mesh, part, entrance, pelvis, left, right, OPENING_CM, core, 12.5, outside, depth, along, SPLIT_CM, inner)
+        assert moved > 0, f'Opening part {part} moved no vertices'
+        morphs[part] = moved
 # Resistance (depth cm, tightness 0..1): a tight entrance ring, an easy middle, tight again deep - the cervix at
 # 15-18 cm, the second sphincter at 15-20 cm - and moderate beyond. A thicker shaft feels it more, a thinner less.
 VAG_TIGHT = [(0.0, 0.75), (2.0, 0.55), (4.0, 0.25), (12.0, 0.3), (15.0, 0.7), (18.0, 0.85), (26.0, 0.6)]
@@ -210,6 +221,7 @@ for name, entrance, depths, amount, radius in (('Vaginal', vag, (12.0, 17.0, 22.
 # area is full), vaginal in red and anal in green of the vertex colours.
 stretched = lib_tools.bake_morph_stretch_to_vertex_color(mesh, ['Gratia_OpenVaginal', 'Gratia_OpenAnal'], 6.0)
 assert stretched > 0, 'Stretch mask bake failed'
+assert lib_tools.end_mesh_edit(mesh), 'Mesh build failed'
 assert lib.save_loaded_asset(mesh, only_if_is_dirty=False)
 # The profile guards the import by its morph count; the opening morphs are part of it now.
 profile.set_editor_property('expected_morph_count', len(mesh.get_all_morph_target_names()))
@@ -219,12 +231,14 @@ channels = [
             + [bone(b, 0.35, 0.5, 1.2, 0.006, 0.4) for b in clit]
             + [bone(b, 0.8, 1.5, 3.5, ring=True) for b in ('DEF-pelvis_L', 'DEF-pelvis_R')]
             + [bone(b, 0.7, 2.0, 3.0, ring=True) for b in ('DEF-ass_L', 'DEF-ass_R')], morph='Gratia_OpenVaginal', morph_full=OPENING_CM,
-            bulges=bulges['Vaginal'], resistance=VAG_TIGHT, stretch='GratiaStretchVaginal'),
+            bulges=bulges['Vaginal'], resistance=VAG_TIGHT, stretch='GratiaStretchVaginal', spread='Gratia_SpreadVaginal',
+            core='Gratia_OpenVaginalCore'),
     channel('Anal', anal, ANAL_DEPTH,
             [bone(b, 1.0, 0.0, 3.5, 0.012, 0.8) for b in anal]
             + [bone(b, 1.0, 1.2, 4.0, ring=True) for b in ('DEF-ass_L', 'DEF-ass_R')]
             + [bone(b, 0.5, 2.0, 2.5, ring=True) for b in ('DEF-pelvis_L', 'DEF-pelvis_R')], rest=0.3,
-            morph='Gratia_OpenAnal', morph_full=OPENING_CM, bulges=bulges['Anal'], resistance=ANAL_TIGHT, stretch='GratiaStretchAnal'),
+            morph='Gratia_OpenAnal', morph_full=OPENING_CM, bulges=bulges['Anal'], resistance=ANAL_TIGHT, stretch='GratiaStretchAnal',
+            spread='Gratia_SpreadAnal', core='Gratia_OpenAnalCore'),
 ]
 settings = profile.get_editor_property('penetration')
 settings.set_editor_property('enabled', True)

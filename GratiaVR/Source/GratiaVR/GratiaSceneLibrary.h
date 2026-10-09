@@ -97,6 +97,10 @@ struct GRATIAVR_API FGratiaSceneEntry
     /** Start in the partner's eyes (first-person view), as soon as the scene loads. */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Scene")
     bool bStartInPartnerView = false;
+    /** Places from the markers tagged GratiaCharacterSpot_<SpotVariant> / GratiaPlayerSpot_<SpotVariant> in Environment
+     *  (a performance that needs more room than free play); None or missing markers: the default ones. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Scene")
+    FName SpotVariant;
 };
 
 /** Scenes the player picks in the lobby, the lobby itself and the shared look of transitions. */

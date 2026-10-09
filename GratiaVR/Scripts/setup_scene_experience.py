@@ -568,9 +568,10 @@ if SHOULD_AUTHOR:
     performances = profile.get_editor_property('performance_clips')
     entries = []
 
-    def entry(id, title, description, env, accent, music, music_volume, reverb_effect, performance=''):
+    def entry(id, title, description, env, accent, music, music_volume, reverb_effect, performance='', spot=''):
         obj = props(unreal.GratiaSceneEntry(), id=unreal.Name(id), title=title, description=description, environment=unreal.load_asset(environments[env]),
-                    backdrops=backdrops[env], accent=color(accent), performance=unreal.Name(performance), music_volume=music_volume, reverb=reverb_effect)
+                    backdrops=backdrops[env], accent=color(accent), performance=unreal.Name(performance), music_volume=music_volume, reverb=reverb_effect,
+                    spot_variant=unreal.Name(spot))
         if music:
             obj.set_editor_property('music', music)
         preview = f'{BASE}/Previews/T_{id}'
@@ -583,7 +584,7 @@ if SHOULD_AUTHOR:
     SHIPPED_ENVIRONMENTS = ('WabiSabi',)
     # Player-facing names of the profile's performance clips (the clip names are technical).
     SHOW_CARDS = {'Idle ZZZ': ('Позирование', 'Шоу · игривая стойка в гостевом доме'),
-                  'KM466 Full': ('Ночь на площади', 'Шоу 9,5 мин · с партнёром, вид его глазами')}
+                  'KM466 Full': ('Ночь в гостевом доме', 'Шоу 9,5 мин · с партнёром, вид его глазами')}
     entry('WabiSabi', 'Гостевой дом', 'Ваби-саби: дерево, лён и дневной свет', 'WabiSabi', (0.95, 0.62, 0.38), pick('MechanicalCorpse', 'GratiaMoon'), 0.8, reverb_room)
     # Only the guesthouse ships (user, 9 October 2026: the city scenes cost every build their huge cook); its shows too.
     if 'SoulCity' in SHIPPED_ENVIRONMENTS:
@@ -597,12 +598,15 @@ if SHOULD_AUTHOR:
             continue
         # A performance with a partner lying on the floor needs the open plaza; the furnished guesthouse
         # only has a 1.6 m clear strip, enough for one standing character.
-        env = 'SoulCity' if clip.get_editor_property('scene').get_editor_property('partner_mesh') else 'WabiSabi'
+        # A performance with a partner lying on the floor takes the guesthouse's long clear strip (its Show markers);
+        # the plaza of the night quarter no longer ships.
+        partner = bool(clip.get_editor_property('scene').get_editor_property('partner_mesh'))
+        env = 'WabiSabi' if 'WabiSabi' in SHIPPED_ENVIRONMENTS else 'SoulCity' if partner else 'WabiSabi'
         if env not in SHIPPED_ENVIRONMENTS:
             continue
         title, description = SHOW_CARDS.get(name, (name, 'Шоу · управление воспроизведением'))
         item = entry('Performance_' + str(index), title, description, env, (0.75, 0.3, 1.0), None, 0.8,
-                     reverb_room if env == 'WabiSabi' else reverb_open, name)
+                     reverb_room if env == 'WabiSabi' else reverb_open, name, 'Show' if partner and env == 'WabiSabi' else '')
         if performance_analysis and clip.get_editor_property('scene').get_editor_property('music') == performance_analysis.get_editor_property('sound'):
             item.set_editor_property('performance_music', performance_analysis)
     library = data(BASE + '/DA_SceneLibrary', unreal.GratiaSceneLibrary)

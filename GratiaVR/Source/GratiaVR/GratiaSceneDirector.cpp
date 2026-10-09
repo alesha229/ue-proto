@@ -524,13 +524,21 @@ void UGratiaSceneDirector::FinishScene()
     const ULevel* Level = Streamed ? Streamed->GetLoadedLevel() : nullptr;
     if (!Entry->Environment.IsNull() && (!Level || !Streamed->IsLevelVisible())) { FailScene(TEXT("Environment did not become visible.")); return; }
     if (GetVisibleBackdrops() != Entry->Backdrops.Num()) { FailScene(TEXT("Environment backdrop did not become visible.")); return; }
-    const AActor* CharacterSpot = GratiaFindTagged(Level, GratiaCharacterSpotTag);
-    const AActor* PlayerSpot = GratiaFindTagged(Level, GratiaPlayerSpotTag);
+    // A scene may use its own pair of markers (a performance that needs more room); otherwise the default ones.
+    FName CharacterTag = GratiaCharacterSpotTag, PlayerTag = GratiaPlayerSpotTag;
+    if (!Entry->SpotVariant.IsNone())
+    {
+        const FName VariantCharacter(*FString::Printf(TEXT("%s_%s"), *GratiaCharacterSpotTag.ToString(), *Entry->SpotVariant.ToString()));
+        const FName VariantPlayer(*FString::Printf(TEXT("%s_%s"), *GratiaPlayerSpotTag.ToString(), *Entry->SpotVariant.ToString()));
+        if (GratiaFindTagged(Level, VariantCharacter)) { CharacterTag = VariantCharacter; PlayerTag = VariantPlayer; }
+    }
+    const AActor* CharacterSpot = GratiaFindTagged(Level, CharacterTag);
+    const AActor* PlayerSpot = GratiaFindTagged(Level, PlayerTag);
     if (Level)
     {
         int32 CharacterMarkers = 0, PlayerMarkers = 0;
         for (const AActor* Actor : Level->Actors)
-            if (Actor) { CharacterMarkers += Actor->ActorHasTag(GratiaCharacterSpotTag); PlayerMarkers += Actor->ActorHasTag(GratiaPlayerSpotTag); }
+            if (Actor) { CharacterMarkers += Actor->ActorHasTag(CharacterTag); PlayerMarkers += Actor->ActorHasTag(PlayerTag); }
         if (CharacterMarkers > 1 || PlayerMarkers > 1) { FailScene(TEXT("Environment has ambiguous character/player markers.")); return; }
     }
     SetStudioVisible(!Level);

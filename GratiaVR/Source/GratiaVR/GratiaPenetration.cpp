@@ -175,6 +175,12 @@ void UGratiaPenetration::ResetPenetration()
         for (FChannel& Channel : Channels)
         {
             if (Channel.bMorphSet) { Character->CharacterMesh->SetMorphTarget(Channel.Morph, 0.0f, false); Channel.bMorphSet = false; }
+            if (Channel.bSplitSet)
+            {
+                Character->CharacterMesh->SetMorphTarget(Channel.SpreadMorph, 0.0f, false);
+                Character->CharacterMesh->SetMorphTarget(Channel.CoreMorph, 0.0f, false);
+                Channel.bSplitSet = false;
+            }
             const FGratiaPenetrationChannel* Source = Definition(Channel);
             if (Source && !Source->StretchParameter.IsNone() && Channel.StretchSent != 0.0f)
                 Character->CharacterMesh->SetScalarParameterValueOnMaterials(Source->StretchParameter, 0.0f);
@@ -183,6 +189,14 @@ void UGratiaPenetration::ResetPenetration()
     if (Character.IsValid() && Character->CharacterMesh) PushToAnimation();
     if (AGratiaPenetrator* Shaft = Penetrator.Get()) Shaft->SetJoints({});
     Shown.Reset(); Residual.Reset();
+}
+
+void UGratiaPenetration::Reload()
+{
+    ResetPenetration();
+    Channels.Reset();
+    ResolvedProfile = nullptr;
+    ResolvedMesh = nullptr;
 }
 
 void UGratiaPenetration::ResolveChannels()
@@ -249,6 +263,11 @@ void UGratiaPenetration::ResolveChannels()
             Channel.Bones.Add(Bone);
         }
         if (!Source.OpeningMorph.IsNone() && Mesh->FindMorphTarget(Source.OpeningMorph)) Channel.Morph = Source.OpeningMorph;
+        if (!Source.SpreadMorph.IsNone() && !Source.CoreMorph.IsNone() && Mesh->FindMorphTarget(Source.SpreadMorph) && Mesh->FindMorphTarget(Source.CoreMorph))
+        {
+            Channel.SpreadMorph = Source.SpreadMorph;
+            Channel.CoreMorph = Source.CoreMorph;
+        }
         for (const FGratiaChannelBulge& Bulge : Source.Bulges)
             if (!Bulge.Morph.IsNone() && Mesh->FindMorphTarget(Bulge.Morph))
             {
@@ -457,13 +476,31 @@ void UGratiaPenetration::UpdateWalls(float Delta)
             const bool bOpening = Target >= Channel.MorphWeight;
             Channel.MorphWeight = FMath::Lerp(Channel.MorphWeight, Target, float(bOpening || Channel.Clench > 0.0 ? OpenAlpha : CloseAlpha));
             if (Channel.MorphWeight < 1.0e-3 && Target <= 0.0f) Channel.MorphWeight = 0.0f;
-            // With shape-fitting materials the shaft itself shapes the opening while it is inside (the material fits the
-            // skin to it); the morph shows only the gape that lingers beyond it after the shaft narrows or leaves.
-            Channel.MorphShown = Settings.ShaftCollection ? FMath::Max(0.0f, Channel.MorphWeight - Instant) : Channel.MorphWeight;
-            if (Channel.MorphShown > 0.0f || Channel.bMorphSet)
+            // With shape-fitting materials the shaft itself shapes the walls while it is inside (the material fits the
+            // skin to it). Split opening: the spread morph moves the surroundings with the opening and its gape, the core
+            // morph opens the walls only for a gape wider than what is inside (a smaller shaft keeps the gape); otherwise
+            // the whole opening morph shows only the gape beyond the shaft.
+            const bool bSplit = Settings.ShaftCollection && !Channel.SpreadMorph.IsNone() && !Channel.CoreMorph.IsNone();
+            const float GapeWeight = bWidest ? 0.0f : Channel.MorphHeld * float(Gape);
+            float Whole = Channel.MorphWeight;
+            if (bSplit)
             {
-                Character->CharacterMesh->SetMorphTarget(Channel.Morph, Channel.MorphShown, false);
-                Channel.bMorphSet = Channel.MorphShown > 0.0f;
+                const float CoreTarget = GapeWeight > Instant ? GapeWeight : 0.0f;
+                Channel.MorphShown = FMath::Lerp(Channel.MorphShown, CoreTarget, float(CoreTarget >= Channel.MorphShown ? OpenAlpha : CloseAlpha));
+                if (Channel.MorphShown < 1.0e-3 && CoreTarget <= 0.0f) Channel.MorphShown = 0.0f;
+                if (Channel.MorphWeight > 0.0f || Channel.MorphShown > 0.0f || Channel.bSplitSet)
+                {
+                    Character->CharacterMesh->SetMorphTarget(Channel.SpreadMorph, Channel.MorphWeight, false);
+                    Character->CharacterMesh->SetMorphTarget(Channel.CoreMorph, Channel.MorphShown, false);
+                    Channel.bSplitSet = Channel.MorphWeight > 0.0f || Channel.MorphShown > 0.0f;
+                }
+                Whole = 0.0f;
+            }
+            else Channel.MorphShown = Whole = Settings.ShaftCollection ? FMath::Max(0.0f, Channel.MorphWeight - Instant) : Channel.MorphWeight;
+            if (Whole > 0.0f || Channel.bMorphSet)
+            {
+                Character->CharacterMesh->SetMorphTarget(Channel.Morph, Whole, false);
+                Channel.bMorphSet = Whole > 0.0f;
             }
             // The skin material shades the stretched skin with the opening.
             if (!Source->StretchParameter.IsNone() && FMath::Abs(Channel.MorphWeight - Channel.StretchSent) > 0.002f)

@@ -48,6 +48,8 @@ public:
     /** Releases every shaft and returns every wall bone to its pose. */
     UFUNCTION(BlueprintCallable, Category = "Penetration")
     void ResetPenetration();
+    /** Resets and resolves the channels again from the profile next frame (after the profile's values changed). */
+    void Reload();
     void Solve(float Delta);
 
     bool IsEnabled() const;
@@ -109,8 +111,13 @@ private:
         float MorphWeight = 0.0f;
         /** Morph weight at the widest opening (the gape keeps a share of it). */
         float MorphHeld = 0.0f;
-        /** Weight the morph shows: all of MorphWeight, or with shape-fitting materials only the gape beyond the shaft. */
+        /** Weight of the morph opening the walls: all of MorphWeight, or with shape-fitting materials only a gape wider than
+         *  the shaft inside (the core morph, or the opening morph beyond the shaft). */
         float MorphShown = 0.0f;
+        /** Split opening (shape-fitting materials): the spread and core morphs present on the mesh. */
+        FName SpreadMorph;
+        FName CoreMorph;
+        bool bSplitSet = false;
         /** Last value sent to the stretch material parameter. */
         float StretchSent = 0.0f;
         int32 Inside = 0;

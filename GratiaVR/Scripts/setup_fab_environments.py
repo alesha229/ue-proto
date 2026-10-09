@@ -331,8 +331,19 @@ def wabi_grade():
 # Forward shading pays for every dynamic light in every pixel it reaches: two room-wide music lights and a fill
 # light cost 2.6 ms of the High VR frame. The room is lit by its bake and she is self-lit (unlit toon), so one
 # small light in the dining pendant keeps the lamp breathing with the bass.
+def wabi_show():
+    """Performance with a partner lying on the floor, laid out as on the plaza: she faces the player down the clear
+    strip (-X), the partner lies between them - in her frame KM466 lays him diagonally, his head 0.9 m in front of her,
+    his feet 0.5 m behind her and 0.7 m to her side - clear of the console table and the dining chairs (floor plan in
+    docs/EXPERIENCE.md); the player stands at the hall end of the strip, 1.7 m from her."""
+    character, player = (120.0, 170.0), (-50.0, 170.0)
+    marker('GratiaCharacterSpot_Show', (character[0], character[1], 0.0), 180.0 - FORWARD_YAW)
+    marker('GratiaPlayerSpot_Show', (player[0], player[1], 0.0), 0.0)
+    wabi_grade()
+
+
 WABI = scene_level('L_WabiSabi', (130.0, 185.0), (-20.0, 185.0), 0.0, [
-    ('PendantA', (106, -38, 160), WARM, 6.0, 160, ('GratiaAudioLight',))], wabi_grade)
+    ('PendantA', (106, -38, 160), WARM, 6.0, 160, ('GratiaAudioLight',))], wabi_show)
 
 # ------------------------------------------------------------------------------- Soul: City
 # The night was lit for UE 4.19 eye adaptation (several EV of automatic brightening). GratiaVR keeps a

@@ -19,6 +19,44 @@
 #include "SkinnedAssetCompiler.h"
 #include "ReferenceSkeleton.h"
 
+namespace
+{
+/** Meshes between BeginMeshEdit and EndMeshEdit: their edits stay in the mesh description until one build at the end. */
+TSet<TWeakObjectPtr<USkeletalMesh>> GratiaDeferredMeshes;
+
+/** Commits Mesh's LOD 0 description and builds it (skeletal meshes build asynchronously: the morphs exist for
+ *  FindMorphTarget only once the build finished), unless its build is deferred. */
+bool GratiaCommitMesh(USkeletalMesh* Mesh, bool bForce = false)
+{
+    if (!bForce && GratiaDeferredMeshes.Contains(Mesh)) return true;
+    USkeletalMesh::FCommitMeshDescriptionParams Params;
+    Params.bMarkPackageDirty = true;
+    if (!Mesh->CommitMeshDescription(0, Params)) return false;
+    Mesh->Build();
+    USkinnedAsset* const Built[] = {Mesh};
+    FSkinnedAssetCompilingManager::Get().FinishCompilation(Built);
+    Mesh->MarkPackageDirty();
+    return true;
+}
+}
+
+bool UGratiaExperienceToolsLibrary::BeginMeshEdit(USkeletalMesh* Mesh)
+{
+    if (!Mesh || !Mesh->HasMeshDescription(0)) return false;
+    GratiaDeferredMeshes.Add(Mesh);
+    return true;
+}
+
+bool UGratiaExperienceToolsLibrary::EndMeshEdit(USkeletalMesh* Mesh)
+{
+    if (!Mesh) return false;
+    GratiaDeferredMeshes.Remove(Mesh);
+    const double Start = FPlatformTime::Seconds();
+    const bool bBuilt = GratiaCommitMesh(Mesh, true);
+    UE_LOG(LogTemp, Display, TEXT("GRATIA_MESH_BUILD %s %s in %.1fs"), *Mesh->GetName(), bBuilt ? TEXT("built") : TEXT("FAILED"), FPlatformTime::Seconds() - Start);
+    return bBuilt;
+}
+
 bool UGratiaExperienceToolsLibrary::BuildCompositeFont(UFont* Font, const TArray<FName>& Names, const TArray<UFontFace*>& Faces)
 {
     if (!Font || Names.IsEmpty() || Names.Num() != Faces.Num()) return false;
@@ -162,7 +200,7 @@ UFontFace* UGratiaExperienceToolsLibrary::ImportFontFace(const FString& Filename
 
 int32 UGratiaExperienceToolsLibrary::CreateChannelOpeningMorph(USkeletalMesh* Mesh, FName MorphName, const TArray<FName>& EntranceBones, FName InwardBone,
     const TArray<FName>& LeftBones, const TArray<FName>& RightBones, float OpeningCm, float CoreRadiusCm, float FalloffCm,
-    float OutsideCm, float InsideCm, float AlongSlit)
+    float OutsideCm, float InsideCm, float AlongSlit, float SplitCm, bool bInnerPart)
 {
     if (!Mesh || MorphName.IsNone() || EntranceBones.IsEmpty() || OpeningCm <= 0.0f || !Mesh->HasMeshDescription(0)) return -1;
     const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
@@ -218,21 +256,21 @@ int32 UGratiaExperienceToolsLibrary::CreateChannelOpeningMorph(USkeletalMesh* Me
             const double Across = 1.0 - Smoother((Distance - Core) / Falloff);
             const double Depth = (1.0 - Smoother((-Along - Outside) / Edge)) * (1.0 - Smoother((Along - Inside) / Edge));
             const double Shape = Lateral.IsZero() ? 1.0 : FMath::Lerp(double(AlongSlit), 1.0, FMath::Abs(FVector::DotProduct(Radial, Lateral)));
-            Delta = Radial * (Opening * Across * Depth * Shape);
+            // A part: the surroundings beyond the split (fading in to full at twice its distance) or the rest inside it.
+            double Part = 1.0;
+            if (SplitCm > 0.0f)
+            {
+                const double Outer = Smoother((Distance - SplitCm) / SplitCm);
+                Part = bInnerPart ? 1.0 - Outer : Outer;
+            }
+            Delta = Radial * (Opening * Across * Depth * Shape * Part);
         }
         Deltas[Vertex] = FVector3f(Delta);
         if (Delta.SizeSquared() > 1.0e-6) ++Moved;
     }
-    USkeletalMesh::FCommitMeshDescriptionParams Params;
-    Params.bMarkPackageDirty = true;
-    if (!Mesh->CommitMeshDescription(0, Params)) return -1;
-    Mesh->Build();
-    // Skeletal meshes build asynchronously; the morph exists for FindMorphTarget only once the build finished.
-    USkinnedAsset* const Built[] = {Mesh};
-    FSkinnedAssetCompilingManager::Get().FinishCompilation(Built);
-    Mesh->MarkPackageDirty();
-    UE_LOG(LogTemp, Display, TEXT("GRATIA_CHANNEL_MORPH %s moved=%d opening=%.1fcm falloff=%.1fcm slit=%s"), *MorphName.ToString(), Moved, Opening, Falloff,
-        Lateral.IsZero() ? TEXT("no") : TEXT("yes"));
+    if (!GratiaCommitMesh(Mesh)) return -1;
+    UE_LOG(LogTemp, Display, TEXT("GRATIA_CHANNEL_MORPH %s moved=%d opening=%.1fcm falloff=%.1fcm slit=%s part=%s"), *MorphName.ToString(), Moved, Opening,
+        Falloff, Lateral.IsZero() ? TEXT("no") : TEXT("yes"), SplitCm <= 0.0f ? TEXT("whole") : bInnerPart ? TEXT("inner") : TEXT("outer"));
     return Moved;
 }
 
@@ -300,13 +338,7 @@ int32 UGratiaExperienceToolsLibrary::CreateChannelBulgeMorph(USkeletalMesh* Mesh
         Deltas[Vertex] = FVector3f(Delta);
         if (Delta.SizeSquared() > 1.0e-6) ++Moved;
     }
-    USkeletalMesh::FCommitMeshDescriptionParams Params;
-    Params.bMarkPackageDirty = true;
-    if (!Mesh->CommitMeshDescription(0, Params)) return -1;
-    Mesh->Build();
-    USkinnedAsset* const Built[] = {Mesh};
-    FSkinnedAssetCompilingManager::Get().FinishCompilation(Built);
-    Mesh->MarkPackageDirty();
+    if (!GratiaCommitMesh(Mesh)) return -1;
     UE_LOG(LogTemp, Display, TEXT("GRATIA_BULGE_MORPH %s depth=%.1fcm moved=%d amount=%.1fcm radius=%.1fcm floor=%.1fcm"), *MorphName.ToString(), DepthCm,
         Moved, Amount, Radius, FloorCm);
     return Moved;
@@ -457,13 +489,7 @@ int32 UGratiaExperienceToolsLibrary::SubdivideMeshAroundBones(USkeletalMesh* Mes
         if (Description->IsEdgeValid(Edge) && Description->GetNumEdgeConnectedTriangles(Edge) == 0) Description->DeleteEdge(Edge);
     Description->ResumeUVIndexing();
     Description->VertexAttributes().RegisterAttribute<int32>(Marker, 1, 0);
-    USkeletalMesh::FCommitMeshDescriptionParams Params;
-    Params.bMarkPackageDirty = true;
-    if (!Mesh->CommitMeshDescription(0, Params)) return -1;
-    Mesh->Build();
-    USkinnedAsset* const Built[] = {Mesh};
-    FSkinnedAssetCompilingManager::Get().FinishCompilation(Built);
-    Mesh->MarkPackageDirty();
+    if (!GratiaCommitMesh(Mesh)) return -1;
     UE_LOG(LogTemp, Display, TEXT("GRATIA_SUBDIVIDE %s radius=%.1fcm split_edges=%d triangles=%d vertices=%d"), *Marker.ToString(), RadiusCm,
         Split.Num(), Description->Triangles().Num(), Description->Vertices().Num());
     return Split.Num();
@@ -522,13 +548,7 @@ int32 UGratiaExperienceToolsLibrary::BakeMorphStretchToVertexColor(USkeletalMesh
         if (Value.X > 0.05f || Value.Y > 0.05f) ++Stretched;
     }
     // Committing non-white colours makes the mesh keep a vertex colour buffer.
-    USkeletalMesh::FCommitMeshDescriptionParams Params;
-    Params.bMarkPackageDirty = true;
-    if (!Mesh->CommitMeshDescription(0, Params)) return -1;
-    Mesh->Build();
-    USkinnedAsset* const Built[] = {Mesh};
-    FSkinnedAssetCompilingManager::Get().FinishCompilation(Built);
-    Mesh->MarkPackageDirty();
+    if (!GratiaCommitMesh(Mesh)) return -1;
     UE_LOG(LogTemp, Display, TEXT("GRATIA_STRETCH_MASK morphs=%d stretched_instances=%d full_area_ratio=%.1f vertex_colors=%d"), Morphs.Num(), Stretched,
         FullAreaRatio, Mesh->GetHasVertexColors() ? 1 : 0);
     return Stretched;
