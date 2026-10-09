@@ -553,3 +553,47 @@ int32 UGratiaExperienceToolsLibrary::BakeMorphStretchToVertexColor(USkeletalMesh
         FullAreaRatio, Mesh->GetHasVertexColors() ? 1 : 0);
     return Stretched;
 }
+
+FString UGratiaExperienceToolsLibrary::DescribeChannelRegion(USkeletalMesh* Mesh, const TArray<FName>& EntranceBones, FName InwardBone, float RadiusCm)
+{
+    if (!Mesh || !Mesh->HasMeshDescription(0)) return TEXT("no mesh");
+    const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
+    FVector Entrance, Target;
+    if (!GratiaRefCentre(Ref, EntranceBones, Entrance) || !GratiaRefCentre(Ref, {InwardBone}, Target)) return TEXT("no bones");
+    const FVector Inward = (Target - Entrance).GetSafeNormal();
+    FMeshDescription* Description = Mesh->GetMeshDescription(0);
+    FSkeletalMeshAttributes Attributes(*Description);
+    const TVertexAttributesConstRef<FVector3f> Positions = Attributes.GetVertexPositions();
+    const TPolygonGroupAttributesConstRef<FName> Slots = Attributes.GetPolygonGroupMaterialSlotNames();
+    // Per material slot: triangles whose centre lies within RadiusCm of the axis, by depth along it (2 cm bins from -6).
+    TMap<FName, TArray<int32>> Bins;
+    double Exit = -1.0;
+    for (const FTriangleID Triangle : Description->Triangles().GetElementIDs())
+    {
+        const TArrayView<const FVertexID> Corners = Description->GetTriangleVertices(Triangle);
+        const FVector A(Positions[Corners[0]]), B(Positions[Corners[1]]), C(Positions[Corners[2]]);
+        const FVector Centre = (A + B + C) / 3.0;
+        const double Along = FVector::DotProduct(Centre - Entrance, Inward);
+        const double Across = ((Centre - Entrance) - Inward * Along).Size();
+        if (Across < RadiusCm && Along > -6.0 && Along < 44.0)
+        {
+            TArray<int32>& Row = Bins.FindOrAdd(Slots[Description->GetTrianglePolygonGroup(Triangle)]);
+            if (Row.IsEmpty()) Row.Init(0, 25);
+            ++Row[FMath::Clamp(int32((Along + 6.0) / 2.0), 0, 24)];
+        }
+        // Where the axis ray leaves the body: the deepest crossing of a triangle beyond 3 cm.
+        FVector Hit;
+        FVector Normal;
+        if (FMath::SegmentTriangleIntersection(Entrance + Inward * 3.0, Entrance + Inward * 60.0, A, B, C, Hit, Normal))
+            Exit = FMath::Max(Exit, FVector::DotProduct(Hit - Entrance, Inward));
+    }
+    FString Out = FString::Printf(TEXT("entrance=(%.1f,%.1f,%.1f) inward=(%.2f,%.2f,%.2f) radius=%.1f axis_exit=%.1fcm\n  depth bins (2 cm from -6):"),
+        Entrance.X, Entrance.Y, Entrance.Z, Inward.X, Inward.Y, Inward.Z, RadiusCm, Exit);
+    for (const TPair<FName, TArray<int32>>& Pair : Bins)
+    {
+        Out += FString::Printf(TEXT("\n  %-24s"), *Pair.Key.ToString());
+        for (const int32 Count : Pair.Value) Out += FString::Printf(TEXT(" %4d"), Count);
+    }
+    UE_LOG(LogTemp, Display, TEXT("GRATIA_CHANNEL_REGION %s"), *Out);
+    return Out;
+}

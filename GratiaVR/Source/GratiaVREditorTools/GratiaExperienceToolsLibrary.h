@@ -75,6 +75,10 @@ public:
      * The mesh edits below (subdivision, morphs, masks) build the skeletal mesh each time (~20 s for the character).
      * Between BeginMeshEdit and EndMeshEdit they only change its mesh description; EndMeshEdit commits and builds once.
      */
+    /** Report of LOD 0 around a channel: triangles near its axis per material slot by depth, and where the axis leaves
+     *  the body (logged as GRATIA_CHANNEL_REGION). */
+    UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
+    static FString DescribeChannelRegion(USkeletalMesh* Mesh, const TArray<FName>& EntranceBones, FName InwardBone, float RadiusCm);
     UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
     static bool BeginMeshEdit(USkeletalMesh* Mesh);
     UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")

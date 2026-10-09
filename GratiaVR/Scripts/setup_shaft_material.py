@@ -335,11 +335,8 @@ for path in TARGETS:
     assert lib.save_loaded_asset(material, only_if_is_dirty=False)
     report.append({'material': path, 'status': status})
 
-profile = lib.load_asset('/Game/Characters/Profiles/DA_Gratia')
-settings = profile.get_editor_property('penetration')
-settings.set_editor_property('shaft_collection', collection)
-profile.set_editor_property('penetration', settings)
-assert lib.save_loaded_asset(profile, only_if_is_dirty=False)
+# The profile turns the shape fitting on by setting its ShaftCollection to this collection; Gratia keeps it off
+# (the opening morphs and bones, which the user prefers) until the channel insert mesh replaces it.
 out = ROOT / 'evidence/06/shaft_material_setup.json'
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(json.dumps({'collection': MPC_PATH, 'function': MF_PATH, 'materials': report}, indent=2), encoding='utf-8')
