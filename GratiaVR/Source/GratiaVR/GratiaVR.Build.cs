@@ -9,6 +9,6 @@ public class GratiaVR : ModuleRules
         PublicIncludePaths.Add(ModuleDirectory);
         PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine", "InputCore", "HeadMountedDisplay", "UMG" });
         PrivateDependencyModuleNames.AddRange(new[] { "XRBase", "RenderCore", "RHI", "PhysicsCore", "EnhancedInput",
-            "KawaiiPhysics", "AnimGraphRuntime", "Slate", "SlateCore" });
+            "KawaiiPhysics", "AnimGraphRuntime", "Slate", "SlateCore", "ProceduralMeshComponent" });
     }
 }

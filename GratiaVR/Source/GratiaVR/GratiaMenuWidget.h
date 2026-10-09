@@ -25,7 +25,7 @@ enum class EGratiaMenuAction : uint8
     Hair, Cloth, Body, Ears, Physics, Springs,
     Quality, Sound, MusicDown, MusicUp, HapticsDown, HapticsUp, HeightDown, HeightUp, Recenter,
     TrackPrev, TrackNext,
-    Primitive, PrimitiveSize,
+    Primitive, PrimitiveSize, PrimitiveForm,
     Captions, VoiceDown, VoiceUp, TurnMode, WalkSpeed, ResetSettings,
     HandPenetration, Forearms
 };

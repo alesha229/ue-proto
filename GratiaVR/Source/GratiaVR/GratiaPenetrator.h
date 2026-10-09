@@ -8,6 +8,7 @@
 class UMaterialInstanceDynamic;
 class UMaterialInterface;
 class UPoseableMeshComponent;
+class UProceduralMeshComponent;
 class USkeletalMesh;
 class UStaticMesh;
 class UStaticMeshComponent;
@@ -24,11 +25,18 @@ struct GRATIAVR_API FGratiaShaftSize
     float RadiusCm = 2.0f;
 };
 
+/** Primitive forms the menu cycles (GratiaPenetration::EShaftForm). */
+UENUM(BlueprintType)
+enum class EGratiaShaftForm : uint8
+{
+    Smooth, Realistic, Knotted, Beads, Cone, Ribbed, Flared, Tentacle
+};
+
 /**
  * Jointed primitive shaft: JointCount joints from the base (actor origin, +X toward the tip) with a
  * handle behind the base for the hand. Free, it is straight; engaged in a character channel
- * (UGratiaPenetration), the joints follow the curve from the hand into the channel. Drawn with basic
- * shapes, or with ChainMesh whose ChainBones (base first) follow the joints.
+ * (UGratiaPenetration), the joints follow the curve from the hand into the channel. Drawn as a smooth tube
+ * with the form's profile along the joints, or with ChainMesh whose ChainBones (base first) follow the joints.
  */
 UCLASS()
 class GRATIAVR_API AGratiaPenetrator : public AActor
@@ -45,6 +53,9 @@ public:
     TArray<FGratiaShaftSize> Sizes;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Primitive")
     int32 SizeIndex = 1;
+    /** Profile along the length: smooth, realistic head, knot, beads, cone, ribs, flared head, tentacle. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Primitive")
+    EGratiaShaftForm Form = EGratiaShaftForm::Smooth;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Primitive", meta = (ClampMin = "0.2", ClampMax = "10", Units = "cm"))
     float TipTaperCm = 2.5f;
     /** Base radius relative to the body radius (above 1: wider toward the base). */
@@ -76,6 +87,13 @@ public:
     void SetSize(int32 Index);
     UFUNCTION(BlueprintCallable, Category = "Primitive")
     void CycleSize();
+    UFUNCTION(BlueprintCallable, Category = "Primitive")
+    void SetForm(EGratiaShaftForm NewForm);
+    UFUNCTION(BlueprintCallable, Category = "Primitive")
+    void CycleForm();
+    /** Menu name of the form (Russian). */
+    UFUNCTION(BlueprintPure, Category = "Primitive")
+    FString GetFormLabel() const;
     UFUNCTION(BlueprintPure, Category = "Primitive")
     FString GetSizeLabel() const;
     GratiaPenetration::FShaft GetShaft() const;
@@ -105,10 +123,10 @@ private:
 
     UPROPERTY(VisibleAnywhere, Category = "Primitive")
     TObjectPtr<USceneComponent> Root;
+    /** The tube: Rings rings of Sides vertices from the base to the tip, then the base cap. */
     UPROPERTY(Transient)
-    TArray<TObjectPtr<UStaticMeshComponent>> Segments;
-    UPROPERTY(Transient)
-    TArray<TObjectPtr<UStaticMeshComponent>> Knuckles;
+    TObjectPtr<UProceduralMeshComponent> Tube;
+    bool bTubeBuilt = false;
     UPROPERTY(Transient)
     TObjectPtr<UStaticMeshComponent> Handle;
     UPROPERTY(Transient)
@@ -119,8 +137,6 @@ private:
     TObjectPtr<UMaterialInstanceDynamic> HandleMaterial;
     UPROPERTY()
     TObjectPtr<UStaticMesh> CylinderMesh;
-    UPROPERTY()
-    TObjectPtr<UStaticMesh> SphereMesh;
     UPROPERTY()
     TObjectPtr<UMaterialInterface> BasicMaterial;
     TArray<FVector> Joints;

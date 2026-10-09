@@ -9,6 +9,7 @@ class APlayerController;
 class APawn;
 class AGratiaPreviewCharacter;
 class AGratiaPenetrator;
+enum class EGratiaShaftForm : uint8;
 class UCameraComponent;
 class UMotionControllerComponent;
 class UPrimitiveComponent;
@@ -158,6 +159,9 @@ public:
     TObjectPtr<AGratiaPenetrator> Primitive;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Primitive")
     TSubclassOf<AGratiaPenetrator> PrimitiveClass;
+    /** Size and form chosen in the menu; a primitive shown again keeps them (-1: its own default size). */
+    int32 PrimitiveSizeChoice = INDEX_NONE;
+    EGratiaShaftForm PrimitiveFormChoice{};
     /** The hands' own invisible shafts (left, right): fingers, flat hand or fist entering the character's channels. */
     UPROPERTY(Transient, VisibleInstanceOnly, Category = "Primitive")
     TArray<TObjectPtr<AGratiaPenetrator>> HandShafts;
@@ -188,6 +192,9 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Primitive")
     void CyclePrimitiveSize();
     FString GetPrimitiveLabel() const;
+    UFUNCTION(BlueprintCallable, Category = "Primitive")
+    void CyclePrimitiveForm();
+    FString GetPrimitiveFormLabel() const;
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Stage 1")
     TObjectPtr<UTextRenderComponent> DebugPanel;

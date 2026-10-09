@@ -90,9 +90,14 @@ void UGratiaChannelShots::TickComponent(float Delta, ELevelTick Type, FActorComp
     const int32 Total = Penetration->GetChannelCount() * GratiaShotCases * GratiaShotViews;
     const int32 Shot = Step == 0 ? 0 : Step - 1;
     if (Step == 0) { Step = 1; Seconds = 0.0f; }
-    if (Shot >= Total)
+    if (Shot > Total)
     {
         if (Seconds > 1.0f) UKismetSystemLibrary::QuitGame(this, Player, EQuitPreference::Quit, false);
+        return;
+    }
+    if (Shot == Total)
+    {
+        ShootForms(Player);
         return;
     }
     const int32 Channel = Shot / (GratiaShotCases * GratiaShotViews);
@@ -170,6 +175,52 @@ void UGratiaChannelShots::TickComponent(float Delta, ELevelTick Type, FActorComp
         Case == 6 ? (ViewIndex == 0 ? TEXT("BellyBefore") : TEXT("Belly")) : ViewIndex == 0 ? TEXT("Axis") : TEXT("Side")));
     FScreenshotRequest::RequestScreenshot(File, false, false);
     UE_LOG(LogGratiaChannelShots, Display, TEXT("CHANNEL_SHOT %s %s"), *File, *Penetration->GetDiagnostics());
+    ++Step;
+    Seconds = 0.0f;
+}
+
+void UGratiaChannelShots::ShootForms(APlayerController* Player)
+{
+    // Every primitive form at size L standing in a row a metre in front of the character, seen from further out.
+    auto* Runtime = Cast<AGratiaStage1Runtime>(GetOwner());
+    const AActor* Body = Runtime && Runtime->TargetCharacter.IsValid() ? Runtime->TargetCharacter.Get() : nullptr;
+    if (!Body) { ++Step; Seconds = 0.0f; return; }
+    const UGratiaCharacterProfile* Profile = Runtime->TargetCharacter->CharacterProfile.Get();
+    const USceneComponent* Mesh = Runtime->TargetCharacter->CharacterMesh.Get();
+    const FTransform Frame = Mesh ? Mesh->GetComponentTransform() : Body->GetActorTransform();
+    const FVector Forward = Frame.TransformVectorNoScale(Profile ? Profile->ForwardAxis : FVector::RightVector).GetSafeNormal2D();
+    const FVector Across = FVector::CrossProduct(FVector::UpVector, Forward);
+    const FVector Origin = Body->GetActorLocation() + Forward * 100.0 + FVector::UpVector * 75.0;
+    constexpr int32 Forms = int32(EGratiaShaftForm::Tentacle) + 1;
+    if (Seconds <= GetWorld()->GetDeltaSeconds() + UE_SMALL_NUMBER)
+    {
+        for (AGratiaPenetrator* Shaft : Shafts) if (Shaft) Shaft->Destroy();
+        Shafts.Reset();
+        Runtime->QAShafts.Reset();
+        FActorSpawnParameters Parameters;
+        Parameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+        for (int32 Form = 0; Form < Forms; ++Form)
+        {
+            AGratiaPenetrator* Shaft = GetWorld()->SpawnActor<AGratiaPenetrator>(AGratiaPenetrator::StaticClass(), FTransform::Identity, Parameters);
+            if (!Shaft) continue;
+            Shaft->SetSize(2);
+            Shaft->SetForm(static_cast<EGratiaShaftForm>(Form));
+            Shaft->SetBase(FTransform(FRotationMatrix::MakeFromX(FVector::UpVector).ToQuat(), Origin + Across * ((Form - (Forms - 1) * 0.5) * 13.0)));
+            Shaft->SetJoints({});
+            Shafts.Add(Shaft);
+        }
+    }
+    const FVector Look = Origin + FVector::UpVector * 10.0;
+    const FVector Eye = Look + Forward * 150.0;
+    if (View)
+    {
+        View->SetActorLocationAndRotation(Eye, (Look - Eye).Rotation());
+        if (Player->GetViewTarget() != View) Player->SetViewTarget(View);
+    }
+    if (Seconds < 1.0f) return;
+    const FString File = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Screenshots/ChannelShots/Primitive_Forms.png"));
+    FScreenshotRequest::RequestScreenshot(File, false, false);
+    UE_LOG(LogGratiaChannelShots, Display, TEXT("CHANNEL_SHOT %s forms=%d"), *File, Shafts.Num());
     ++Step;
     Seconds = 0.0f;
 }

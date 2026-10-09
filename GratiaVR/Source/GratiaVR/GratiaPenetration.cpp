@@ -171,7 +171,13 @@ void UGratiaPenetration::ResetPenetration()
     }
     if (Character.IsValid() && Character->CharacterMesh)
         for (FChannel& Channel : Channels)
+        {
             if (Channel.bMorphSet) { Character->CharacterMesh->SetMorphTarget(Channel.Morph, 0.0f, false); Channel.bMorphSet = false; }
+            const FGratiaPenetrationChannel* Source = Definition(Channel);
+            if (Source && !Source->StretchParameter.IsNone() && Channel.StretchSent != 0.0f)
+                Character->CharacterMesh->SetScalarParameterValueOnMaterials(Source->StretchParameter, 0.0f);
+            Channel.StretchSent = 0.0f;
+        }
     if (Character.IsValid() && Character->CharacterMesh) PushToAnimation();
     if (AGratiaPenetrator* Shaft = Penetrator.Get()) Shaft->SetJoints({});
     Shown.Reset(); Residual.Reset();
@@ -280,7 +286,8 @@ double UGratiaPenetration::CaptureRadius(const FChannel& Channel, const GratiaPe
     return (Settings ? Settings->CaptureRadiusCm * Channel.Scale : 0.0) + 0.5 * Shaft.Radius;
 }
 
-FVector UGratiaPenetration::WallTarget(const FChannel& Channel, const FWallBone& Bone, const GratiaPenetration::FShaft& Shaft, double Inserted, double Velocity) const
+FVector UGratiaPenetration::WallTarget(const FChannel& Channel, const FWallBone& Bone, const GratiaPenetration::FShaft& Shaft, double Inserted, double Velocity,
+    double Push) const
 {
     const FGratiaPenetrationChannel* Settings = Definition(Channel);
     if (!Settings || !Channel.bFrame) return FVector::ZeroVector;
@@ -297,10 +304,38 @@ FVector UGratiaPenetration::WallTarget(const FChannel& Channel, const FWallBone&
     const double Share = Channel.Morph.IsNone() || Bone.Settings.bOuterRing ? 1.0 : 0.25;
     const double Out = Share * GratiaPenetration::BoneOffset(Need, Bone.Settings.StartOpeningCm * Scale, Bone.Settings.Response, Bone.Settings.MaxOffsetCm * Scale);
     const double MaxDrag = Bone.Settings.MaxDragCm * Scale;
-    // Only a wall the shaft touches is dragged along with it.
-    const double Drag = Need > 0.0 ? FMath::Clamp(Velocity * Bone.Settings.DragSeconds, -MaxDrag, MaxDrag) * FMath::Min(1.0, Need / FMath::Max(0.1, 0.5 * Scale)) : 0.0;
+    // Only a wall the shaft touches is dragged along with it, and with the hand's push against a tight ring (the
+    // entrance dents in before the shaft pops through; pulled back, it is drawn out).
+    const double Drag = Need > 0.0 ? FMath::Clamp(Velocity * Bone.Settings.DragSeconds + 0.4 * Push, -MaxDrag, MaxDrag) * FMath::Min(1.0, Need / FMath::Max(0.1, 0.5 * Scale)) : 0.0;
     const FVector Result = Channel.AnchorWorld.TransformVectorNoScale(Bone.Radial) * Out + Channel.Inward * Drag;
     return Result.ContainsNaN() ? FVector::ZeroVector : Result;
+}
+
+void UGratiaPenetration::RingForces(const FChannel& Channel, const GratiaPenetration::FShaft& Shaft, double Inserted, double& Ring, double& Friction) const
+{
+    Ring = Friction = 0.0;
+    const FGratiaPenetrationChannel* Source = Definition(Channel);
+    const UGratiaCharacterProfile* Profile = Character.IsValid() ? Character->CharacterProfile.Get() : nullptr;
+    if (!Source || !Profile || Source->Resistance.IsEmpty() || Inserted <= 0.0) return;
+    const FGratiaPenetrationSettings& Settings = Profile->Penetration;
+    // Every half centimetre of the channel the shaft passes is a ring of the profile's tightness (relaxing the longer
+    // the channel has been open). A ring stretched by a part of radius R pushes back with tightness x R x dR (the part
+    // widening as it goes in); the stretched walls rub with tightness x R.
+    constexpr double Spacing = 0.5;
+    const double Scale = Channel.Scale;
+    const double Rest = Source->RestRadiusCm * Scale;
+    const double Relax = 1.0 - 0.5 * FMath::Min(1.0, Channel.OpenSeconds / FMath::Max(1.0f, Settings.RelaxSeconds));
+    const double Unit = Settings.ResistanceGain / FMath::Max(0.5, double(Settings.ResistanceRadiusCm) * Scale);
+    const double End = FMath::Min(Inserted, Channel.Path.Length());
+    for (double Depth = 0.0; Depth <= End; Depth += Spacing)
+    {
+        const double U = Inserted - Depth;
+        const double Stretch = FMath::Max(0.0, Shaft.RadiusAt(U) - Rest);
+        if (Stretch <= 0.0) continue;
+        const double Tight = GratiaTightness(*Source, Depth / Scale) * Relax;
+        Ring += Unit * Tight * Stretch * Shaft.SlopeAt(U) * Spacing;
+        Friction += Unit * Settings.FrictionShare * Tight * Stretch * Spacing;
+    }
 }
 
 void UGratiaPenetration::CollideWithBody(const GratiaPenetration::FShaft& Shaft, TArray<FVector>& Joints) const
@@ -382,14 +417,14 @@ void UGratiaPenetration::UpdateWalls(float Delta)
         {
             FVector Target = FVector::ZeroVector;
             if (Inside.Num() == 1)
-                Target = WallTarget(Channel, Bone, Inside[0]->Shaft->GetShaft(), Inside[0]->Inserted, Inside[0]->Velocity);
+                Target = WallTarget(Channel, Bone, Inside[0]->Shaft->GetShaft(), Inside[0]->Inserted, Inside[0]->Velocity, Inside[0]->Push);
             else if (Inside.Num() > 1)
             {
                 const FVector Radial = Channel.AnchorWorld.TransformVectorNoScale(Bone.Radial);
                 double Out = 0.0, Drag = 0.0;
                 for (const FEngagement* Engagement : Inside)
                 {
-                    const FVector Part = WallTarget(Channel, Bone, Engagement->Shaft->GetShaft(), Engagement->Inserted, Engagement->Velocity);
+                    const FVector Part = WallTarget(Channel, Bone, Engagement->Shaft->GetShaft(), Engagement->Inserted, Engagement->Velocity, Engagement->Push);
                     Out += FMath::Square(FVector::DotProduct(Part, Radial));
                     Drag += FVector::DotProduct(Part, Channel.Inward);
                 }
@@ -413,6 +448,12 @@ void UGratiaPenetration::UpdateWalls(float Delta)
             {
                 Character->CharacterMesh->SetMorphTarget(Channel.Morph, Channel.MorphWeight, false);
                 Channel.bMorphSet = Channel.MorphWeight > 0.0f;
+            }
+            // The skin material shades the stretched skin with the opening.
+            if (!Source->StretchParameter.IsNone() && FMath::Abs(Channel.MorphWeight - Channel.StretchSent) > 0.002f)
+            {
+                Character->CharacterMesh->SetScalarParameterValueOnMaterials(Source->StretchParameter, Channel.MorphWeight);
+                Channel.StretchSent = Channel.MorphWeight;
             }
         }
         // Bulges: each follows the radius of the shaft passing its depth (thicker shaft, bigger swelling), with the
@@ -562,27 +603,49 @@ void UGratiaPenetration::Solve(float Delta)
             Release(Index, !Source || !Channel.bFrame ? TEXT("channel unavailable") : Requested < 0.0 ? TEXT("pulled out") : TEXT("bent away"));
             continue;
         }
-        // Resistance: where the channel is tight (its profile at the tip, harder for a thicker shaft, easier the longer it
-        // has been open) the shaft lags behind the hand by up to MaxLagCm, creeps after it and slips in once pushed far
-        // enough; pulled back, it is held a little. The walls, the hand and the reactions follow the shaft, not the hand.
+        // Resistance: the hand holds the shaft like a spring (1 cm of lead = 1 unit of push). The tight rings push back
+        // where a wider part arrives and draw a narrowing part in, the stretched walls rub. The shaft moves only while
+        // the push beats them: it stays behind the hand at a tight ring (sliding back in the grip, the entrance dented
+        // in) and pops through once pushed hard enough - a jolt in the hand, a gasp and a clench. At most MaxLagCm
+        // behind, it is forced on. The walls, the drawn hand and the reactions follow the shaft, not the hand.
         double Inserted = Requested;
+        const double PreviousStrain = Engagement.Strain, PreviousPush = Engagement.Push;
         Engagement.Strain = 0.0;
+        Engagement.Push = 0.0;
         if (!Engagement.bFresh && !Source->Resistance.IsEmpty())
         {
             const double Previous = Engagement.Inserted;
-            const double Size = FMath::Clamp(Geometry.Radius / FMath::Max(0.5, double(Settings.ResistanceRadiusCm) * Channel.Scale), 0.5, 1.5);
-            const double Relax = 1.0 - 0.4 * FMath::Min(1.0, Channel.OpenSeconds / FMath::Max(1.0f, Settings.RelaxSeconds));
-            const double Tight = FMath::Clamp(GratiaTightness(*Source, FMath::Max(0.0, Previous) / Channel.Scale) * Size * Relax, 0.0, 0.98);
-            const double Lag = Settings.MaxLagCm * Channel.Scale * Tight;
-            const double Follow = 1.0 - FMath::Exp(-12.0 * Step);
-            if (Requested > Previous)
-                Inserted = FMath::Min(Requested, FMath::Max(Previous + (Requested - Previous) * (1.0 - Tight) * Follow, Requested - Lag));
-            else
-                Inserted = FMath::Max(Requested, FMath::Min(Previous + (Requested - Previous) * (1.0 - 0.6 * Tight) * Follow, Requested + Lag * Settings.SuctionShare));
-            Engagement.Strain = FMath::Clamp((Requested - Inserted) / FMath::Max(0.1, double(Settings.MaxLagCm) * Channel.Scale), 0.0, 1.0);
-            // A tight ring gives way: the shaft slips in at once, a jolt in the hand.
-            if (Inserted - Previous > 0.35 * Channel.Scale) Engagement.Pulse = FMath::Max(Engagement.Pulse, 0.1);
-            // The drawn shaft slides back in the hand by the lag.
+            const double MaxLag = Settings.MaxLagCm * Channel.Scale;
+            const double MaxStep = 150.0 * Channel.Scale * Step / 8.0;
+            double Position = Previous;
+            bool bMoved = false;
+            for (int32 Iteration = 0; Iteration < 8; ++Iteration)
+            {
+                double Ring = 0.0, Friction = 0.0;
+                RingForces(Channel, Geometry, Position, Ring, Friction);
+                // Pulled back, the rings hold less than they resist going in.
+                if (Requested < Position) Ring = Ring > 0.0 ? Ring : Ring * Settings.SuctionShare;
+                const double Net = (Requested - Position) - Ring;
+                const double Hold = Engagement.bStuck && !bMoved ? 1.25 * Friction : Friction;
+                if (FMath::Abs(Net) <= Hold) break;
+                Position += FMath::Clamp((Net - FMath::Sign(Net) * Friction) * 0.6, -MaxStep, MaxStep);
+                bMoved = true;
+            }
+            Inserted = FMath::Clamp(Position, Requested - MaxLag, Requested + MaxLag * Settings.SuctionShare);
+            Engagement.bStuck = FMath::Abs(Inserted - Previous) < 1.0e-3;
+            Engagement.Push = Requested - Inserted;
+            Engagement.Strain = FMath::Clamp(FMath::Abs(Engagement.Push) / FMath::Max(0.1, MaxLag), 0.0, 1.0);
+            // A ring gives way: held back, the shaft suddenly catches up with the hand (not while it is forced on at the
+            // largest lead).
+            if (Inserted - Previous > 0.45 * Channel.Scale && PreviousStrain > 0.2 && PreviousPush - Engagement.Push > 0.4 * Channel.Scale)
+            {
+                Engagement.Pulse = FMath::Max(Engagement.Pulse, 0.15);
+                Clench(Engagement.Channel);
+                if (Character->Interaction) Character->Interaction->ExternalReaction(Channel.Name, Shaft->GetHeldHand(), 120.0f);
+                UE_LOG(LogGratiaPenetration, Display, TEXT("PENETRATION_POP channel=%s shaft=%s depth=%.1fcm push=%.1fcm"), *Channel.Name.ToString(),
+                    *Shaft->GetSizeLabel(), Inserted, PreviousStrain * MaxLag);
+            }
+            // The drawn shaft slides back in the hand by the lead.
             if (FMath::Abs(Requested - Inserted) > 1.0e-3)
                 GratiaPenetration::EngagedJoints(Geometry, Base.GetLocation() - Engagement.Lateral - Direction * (Requested - Inserted), Direction,
                     Channel.Path, Channel.Path.Length(), Joints);
@@ -644,10 +707,10 @@ void UGratiaPenetration::Solve(float Delta)
             if (Shaft->IsHeld())
             {
                 const float Speed = FMath::Clamp(float(FMath::Abs(Engagement->Velocity)) / FMath::Max(1.0f, Settings.HapticFullSpeed), 0.0f, 1.0f);
-                // Pushing against a tight place buzzes harder than sliding.
-                Amplitude = Settings.HapticBase + (Settings.HapticMax - Settings.HapticBase)
-                    * FMath::Max3(Speed, 0.35f * Stretch, 0.8f * float(Engagement->Strain));
-                Frequency = FMath::Lerp(0.2f, 0.7f, Speed);
+                // Pushing against a tight ring rumbles low and grows with the push; sliding buzzes with the speed.
+                const float Strain = float(Engagement->Strain);
+                Amplitude = Settings.HapticBase + (Settings.HapticMax - Settings.HapticBase) * FMath::Max3(Speed, 0.35f * Stretch, Strain);
+                Frequency = Strain > Speed ? FMath::Lerp(0.15f, 0.3f, Strain) : FMath::Lerp(0.2f, 0.7f, Speed);
                 if (Engagement->Pulse > 0.0) { Amplitude = FMath::Max(Amplitude, Settings.HapticCapturePulse); Frequency = 0.4f; }
             }
         }
@@ -807,7 +870,7 @@ bool UGratiaPenetration::RunChecks(FString& Failure)
             World->SpawnActor<AGratiaPenetrator>(AGratiaPenetrator::StaticClass(), FTransform::Identity, Parameters)};
         bool bFistEnters = false, bFistLeaves = false, bCloses = false, bShared = false, bApart = false, bWider = false, bTwoChannels = Channels.Num() < 2;
         double FistDepth = 0.0, HeldDepth = 0.0, OneOpen = 0.0, TwoOpen = 0.0, FistOpen = 0.0, GapeOpen = 0.0, ClosedOpen = 0.0;
-        bool bResists = false;
+        bool bResists = false, bPopped = false;
         if (Hands[0] && Hands[1])
         {
             const TArray<TWeakObjectPtr<AGratiaPenetrator>> Saved = Candidates;
@@ -822,15 +885,24 @@ bool UGratiaPenetration::RunChecks(FString& Failure)
             const GratiaPenetration::FShaft Fist = GratiaPenetration::HandShaft(GratiaPenetration::EHandShape::Fist);
             Hands[0]->SetShape(TEXT("fist"), Fist);
             Hands[0]->SetHeld(1);
-            // Tip 1 cm before the entrance (captured), then pushed 3 cm in.
+            // Tip 1 cm before the entrance (captured), the hand 3 cm in: the knuckles stay at the entrance ring. Pushed on
+            // at 20 cm/s to 9 cm, they pop through.
             Place(Hands[0], First, Fist, -1.0, FVector::ZeroVector); Step();
-            Place(Hands[0], First, Fist, 3.0, FVector::ZeroVector); Step();
+            Place(Hands[0], First, Fist, 3.0, FVector::ZeroVector);
+            for (int32 Frame = 0; Frame < 90; ++Frame) Step();
             FVector Entrance, Inward;
             double Depth = 0.0;
             GetEngagedFrame(Hands[0], Entrance, Inward, HeldDepth, Depth);
-            for (int32 Frame = 0; Frame < 300; ++Frame) Step();
-            bFistEnters = IsEngaged(Hands[0]) && GetEngagedFrame(Hands[0], Entrance, Inward, FistDepth, Depth) && FMath::Abs(FistDepth - 3.0) < 0.5;
-            bResists = First.Bones.IsEmpty() || 3.0 - HeldDepth > 0.5;
+            double Last = HeldDepth;
+            for (int32 Frame = 1; Frame <= 120; ++Frame)
+            {
+                Place(Hands[0], First, Fist, FMath::Min(9.0, 3.0 + Frame * 20.0 / 90.0), FVector::ZeroVector); Step();
+                double Now = 0.0;
+                if (GetEngagedFrame(Hands[0], Entrance, Inward, Now, Depth)) { bPopped |= Now - Last > 0.45; Last = Now; }
+            }
+            bFistEnters = IsEngaged(Hands[0]) && GetEngagedFrame(Hands[0], Entrance, Inward, FistDepth, Depth) && FistDepth > 4.0;
+            const FGratiaPenetrationChannel* FirstSource = Definition(First);
+            bResists = !FirstSource || FirstSource->Resistance.IsEmpty() || (3.0 - HeldDepth > 1.0 && bPopped);
             FistOpen = GetMaxWallOffsetCm();
             Hands[0]->SetHeld(INDEX_NONE); Step();
             bFistLeaves = GetEngagementCount() == 0;
@@ -879,12 +951,28 @@ bool UGratiaPenetration::RunChecks(FString& Failure)
             if (Character->Interaction) Character->Interaction->ResetState();
         }
         for (AGratiaPenetrator* Hand : Hands) if (Hand) Hand->Destroy();
-        const bool bHands = bFistEnters && bResists && bFistLeaves && bCloses && bShared && bApart && bWider && bTwoChannels;
+        // Every primitive form at three sizes: a finite profile, closed at the tip (a blunt head at most 0.8 x the radius
+        // 0.5 mm back), nowhere wider than 1.6 x the size's radius.
+        bool bForms = true;
+        for (int32 Form = 0; Form < int32(GratiaPenetration::EShaftForm::Count); ++Form)
+            for (const double Size : {1.6, 4.3, 6.2})
+            {
+                GratiaPenetration::FShaft Shaft;
+                Shaft.Form = static_cast<GratiaPenetration::EShaftForm>(Form);
+                Shaft.Radius = Size; Shaft.Length = 7.0 * Size + 2.0;
+                bForms &= Shaft.RadiusAt(0.0) == 0.0 && Shaft.RadiusAt(0.05) < 0.8 * Size;
+                for (int32 Sample = 1; Sample <= 200; ++Sample)
+                {
+                    const double Radius = Shaft.RadiusAt(Shaft.Length * Sample / 200.0);
+                    bForms &= FMath::IsFinite(Radius) && Radius > 0.0 && Radius <= 1.6 * Size;
+                }
+            }
+        const bool bHands = bFistEnters && bResists && bFistLeaves && bCloses && bShared && bApart && bWider && bTwoChannels && bForms;
         UE_LOG(LogGratiaPenetration, Display,
-            TEXT("PENETRATION_CHECK hands channel=%s fist_enters=%d first_frame=%.2fcm depth=%.2fcm leaves_on_open=%d open=%.2fcm after_0.3s=%.2fcm after_20s=%.2fcm two_in_one=%d apart=%d open_one=%.2fcm open_two=%.2fcm two_channels=%d %s"),
-            *Channels[0].Name.ToString(), bFistEnters ? 1 : 0, HeldDepth, FistDepth, bFistLeaves ? 1 : 0, FistOpen, GapeOpen, ClosedOpen, bShared ? 1 : 0, bApart ? 1 : 0,
-            OneOpen, TwoOpen, bTwoChannels ? 1 : 0, bHands ? TEXT("PASS") : TEXT("FAIL"));
-        if (!bHands && Failure.IsEmpty()) Failure = TEXT("Hands do not enter, leave, share a channel or take two channels as expected");
+            TEXT("PENETRATION_CHECK hands channel=%s fist_held_at=%.2fcm(hand 3) popped=%d pushed_to=%.2fcm(hand 9) leaves_on_open=%d open=%.2fcm after_0.3s=%.2fcm after_20s=%.2fcm two_in_one=%d apart=%d open_one=%.2fcm open_two=%.2fcm two_channels=%d forms=%d %s"),
+            *Channels[0].Name.ToString(), HeldDepth, bPopped ? 1 : 0, FistDepth, bFistLeaves ? 1 : 0, FistOpen, GapeOpen, ClosedOpen, bShared ? 1 : 0, bApart ? 1 : 0,
+            OneOpen, TwoOpen, bTwoChannels ? 1 : 0, bForms ? 1 : 0, bHands ? TEXT("PASS") : TEXT("FAIL"));
+        if (!bHands && Failure.IsEmpty()) Failure = TEXT("Hands do not resist, enter, leave, share a channel or take two channels, or a primitive form is broken");
         bPass &= bHands;
     }
     ResetPenetration();

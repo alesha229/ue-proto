@@ -83,4 +83,13 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
     static int32 CreateChannelBulgeMorph(USkeletalMesh* Mesh, FName MorphName, const TArray<FName>& EntranceBones, FName InwardBone,
         float DepthCm, const TArray<FName>& FrontBones, const TArray<FName>& BackBones, float RadiusCm, float AmountCm, float FloorCm);
+    /**
+     * Writes how much each of Morphs (one or two, at weight 1) stretches the skin around every vertex into the vertex
+     * colours of LOD 0 (the first morph in red, the second in green; blue 0, alpha 1): log2 of the area ratio of the
+     * surrounding triangles over log2 FullAreaRatio, 0..1. A material reads it to soften and tint the stretched skin as
+     * the morphs open (the mesh's materials must not use vertex colours otherwise). Returns the number of stretched
+     * vertex instances, -1 on bad input.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
+    static int32 BakeMorphStretchToVertexColor(USkeletalMesh* Mesh, const TArray<FName>& Morphs, float FullAreaRatio);
 };

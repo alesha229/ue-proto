@@ -713,6 +713,10 @@ struct GRATIAVR_API FGratiaPenetrationChannel
     FName OpeningMorph;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration", meta = (ClampMin = "0.1", ClampMax = "20", Units = "cm"))
     float MorphFullOpeningCm = 4.0f;
+    /** Material scalar parameter on the character mesh that receives the opening morph's weight (a skin material
+     *  shading the stretched skin by a baked mask); none: not sent. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration")
+    FName StretchParameter;
     /** Swellings along the channel: each morph follows the radius of the shaft passing its depth, fully at
      *  BulgeFullRadiusCm (a thin shaft barely shows, a fist or a large size bulges the belly). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Bulge")
@@ -721,9 +725,10 @@ struct GRATIAVR_API FGratiaPenetrationChannel
     float BulgeFullRadiusCm = 4.5f;
     /** Shafts thicker than BulgeFullRadiusCm keep growing the swelling (the morph past 1), up to this weight. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Bulge", meta = (ClampMin = "1", ClampMax = "3"))
-    float BulgeMaxWeight = 1.25f;
-    /** Tightness along the channel (X depth cm, Y 0..1, linear between points): where it is tight the shaft lags
-     *  behind the hand (up to MaxLagCm at 1) and slips in once pushed far enough; empty: no resistance. */
+    float BulgeMaxWeight = 1.0f;
+    /** Tightness along the channel (X depth cm, Y 0..1, linear between points): rings that a wider part of the shaft
+     *  has to stretch (the shaft stays behind the hand until pushed hard enough, then pops through) and rub against;
+     *  empty: no resistance. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Resistance")
     TArray<FVector2D> Resistance;
 };
@@ -761,13 +766,23 @@ struct GRATIAVR_API FGratiaPenetrationSettings
     /** Mean pause between contractions while a shaft is inside (0: only on entering). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Contraction", meta = (ClampMin = "0", ClampMax = "60", Units = "s"))
     float ClenchEverySeconds = 5.0f;
-    /** Resistance: how far (cm) the hand may push ahead of the shaft at full tightness before it is forced in. */
+    /** Resistance: the hand holds the shaft like a spring; the shaft slides back in the grip by at most this much
+     *  (cm) against a tight ring, then it is forced in. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Resistance", meta = (ClampMin = "0", ClampMax = "15", Units = "cm"))
-    float MaxLagCm = 4.0f;
-    /** Pulled back, a tight channel holds the shaft a little (this share of the push lag). */
+    float MaxLagCm = 6.0f;
+    /** How hard the rings push back, in cm of hand lead per unit of ring stretch (tightness x radius x its growth,
+     *  over ResistanceRadiusCm): a widening part (head, knot, bead, the tip of a thick shaft) is held at a tight ring,
+     *  a narrowing part is drawn in. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Resistance", meta = (ClampMin = "0", ClampMax = "20"))
+    float ResistanceGain = 4.0f;
+    /** Rubbing of the stretched walls along the shaft, relative to ResistanceGain (sliding needs this much more lead;
+     *  a resting shaft a quarter more to start moving). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Resistance", meta = (ClampMin = "0", ClampMax = "1"))
-    float SuctionShare = 0.35f;
-    /** Shaft radius at which the profile's tightness applies as given; thinner is easier, thicker harder. */
+    float FrictionShare = 0.05f;
+    /** Pulled back, the tight walls drag the entrance outward and hold the shaft (this share of the push resistance). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Resistance", meta = (ClampMin = "0", ClampMax = "1"))
+    float SuctionShare = 0.5f;
+    /** Ring stretch is measured in units of this radius (a shaft of this radius at a ring of tightness 1). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Penetration|Resistance", meta = (ClampMin = "0.5", ClampMax = "10", Units = "cm"))
     float ResistanceRadiusCm = 3.0f;
     /** A free shaft slides over the body surface instead of passing through it. */

@@ -22,11 +22,15 @@
   без трещин; каждый проход — один раз, по метке в описании меша);
 - морфы раскрытия `Gratia_OpenVaginal` / `Gratia_OpenAnal` (`CreateChannelOpeningMorph`: до 6,2 см от оси, затухание
   12,5 см — меш не рвётся);
-- вздутия живота `Gratia_Bulge*` (`CreateChannelBulgeMorph`: вперёд на 5–5,5 см при весе 1, до 1,25 у 3XL/4XL,
-  ни вход, ни лобок, ни бёдра не трогает).
+- вздутия живота `Gratia_Bulge*` (`CreateChannelBulgeMorph`: вперёд до 4,5 см, ни вход, ни лобок, ни бёдра не
+  трогает);
+- маска растяжения кожи в цветах вершин (`BakeMorphStretchToVertexColor`: R — влагалище, G — анус) и материал кожи,
+  который по ней и весу морфа (`GratiaStretchVaginal` / `GratiaStretchAnal` от решателя) смягчает и тонирует
+  растянутую кожу; сжатие BC7 у кожи и ткани костюма, маска выреза без сжатия.
 
 `-GratiaChannelShots` — снимки входов (пусто, три пальца, ладонь, кулак, две руки, XXL; формы ждут захвата у входа и
-входят со скоростью 25 см/с) и живота до и после глубокого 4XL в `GratiaVR/Saved/Screenshots/ChannelShots`.
+входят со скоростью 25 см/с), живота до и после глубокого 4XL и всех форм примитива в ряд
+(`Primitive_Forms.png`) в `GratiaVR/Saved/Screenshots/ChannelShots`.
 
 Ввод контроллеров — `setup_gratia_locomotion.py` (коммандлет): ходьба, поворот, хват, grip, меню,
 `IA_Recenter` (клик любым стиком — центровка) и `IA_ThumbLeft/Right` (большой палец на стике или кнопке —

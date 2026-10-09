@@ -468,3 +468,68 @@ int32 UGratiaExperienceToolsLibrary::SubdivideMeshAroundBones(USkeletalMesh* Mes
         Split.Num(), Description->Triangles().Num(), Description->Vertices().Num());
     return Split.Num();
 }
+
+int32 UGratiaExperienceToolsLibrary::BakeMorphStretchToVertexColor(USkeletalMesh* Mesh, const TArray<FName>& Morphs, float FullAreaRatio)
+{
+    if (!Mesh || Morphs.IsEmpty() || Morphs.Num() > 2 || FullAreaRatio <= 1.0f || !Mesh->HasMeshDescription(0)) return -1;
+    FMeshDescription* Description = Mesh->GetMeshDescription(0);
+    if (!Description) return -1;
+    FSkeletalMeshAttributes Attributes(*Description);
+    for (const FName Morph : Morphs)
+        if (!Attributes.GetMorphTargetNames().Contains(Morph))
+        {
+            UE_LOG(LogTemp, Warning, TEXT("GRATIA_STRETCH_MASK missing morph %s"), *Morph.ToString());
+            return -1;
+        }
+    TVertexInstanceAttributesRef<FVector4f> Colors = Attributes.GetVertexInstanceColors();
+    if (!Colors.IsValid()) return -1;
+    const TVertexAttributesConstRef<FVector3f> Positions = Attributes.GetVertexPositions();
+    // Area ratio of every triangle with the morph at 1, averaged per vertex by the triangles' rest areas; the mask is
+    // log2 of it over log2 of FullAreaRatio (0 where the skin does not stretch, 1 at FullAreaRatio or more).
+    TArray<TArray<float>> Masks;
+    Masks.SetNum(Morphs.Num());
+    for (int32 Index = 0; Index < Morphs.Num(); ++Index)
+    {
+        const TVertexAttributesRef<FVector3f> Deltas = Attributes.GetVertexMorphPositionDelta(Morphs[Index]);
+        TArray<double> Weighted, Area;
+        Weighted.SetNumZeroed(Description->Vertices().GetArraySize());
+        Area.SetNumZeroed(Description->Vertices().GetArraySize());
+        for (const FTriangleID Triangle : Description->Triangles().GetElementIDs())
+        {
+            const TArrayView<const FVertexID> Corners = Description->GetTriangleVertices(Triangle);
+            FVector Rest[3], Moved[3];
+            for (int32 Corner = 0; Corner < 3; ++Corner)
+            {
+                Rest[Corner] = FVector(Positions[Corners[Corner]]);
+                Moved[Corner] = Rest[Corner] + FVector(Deltas[Corners[Corner]]);
+            }
+            const double Before = FVector::CrossProduct(Rest[1] - Rest[0], Rest[2] - Rest[0]).Size();
+            if (Before < 1.0e-8) continue;
+            const double Ratio = FVector::CrossProduct(Moved[1] - Moved[0], Moved[2] - Moved[0]).Size() / Before;
+            for (const FVertexID Corner : Corners) { Weighted[Corner.GetValue()] += Ratio * Before; Area[Corner.GetValue()] += Before; }
+        }
+        Masks[Index].SetNumZeroed(Weighted.Num());
+        for (int32 Vertex = 0; Vertex < Weighted.Num(); ++Vertex)
+            if (Area[Vertex] > 0.0)
+                Masks[Index][Vertex] = float(FMath::Clamp(FMath::Log2(FMath::Max(1.0, Weighted[Vertex] / Area[Vertex])) / FMath::Log2(double(FullAreaRatio)), 0.0, 1.0));
+    }
+    int32 Stretched = 0;
+    for (const FVertexInstanceID Instance : Description->VertexInstances().GetElementIDs())
+    {
+        const int32 Vertex = Description->GetVertexInstanceVertex(Instance).GetValue();
+        const FVector4f Value(Masks[0][Vertex], Masks.Num() > 1 ? Masks[1][Vertex] : 0.0f, 0.0f, 1.0f);
+        Colors[Instance] = Value;
+        if (Value.X > 0.05f || Value.Y > 0.05f) ++Stretched;
+    }
+    // Committing non-white colours makes the mesh keep a vertex colour buffer.
+    USkeletalMesh::FCommitMeshDescriptionParams Params;
+    Params.bMarkPackageDirty = true;
+    if (!Mesh->CommitMeshDescription(0, Params)) return -1;
+    Mesh->Build();
+    USkinnedAsset* const Built[] = {Mesh};
+    FSkinnedAssetCompilingManager::Get().FinishCompilation(Built);
+    Mesh->MarkPackageDirty();
+    UE_LOG(LogTemp, Display, TEXT("GRATIA_STRETCH_MASK morphs=%d stretched_instances=%d full_area_ratio=%.1f vertex_colors=%d"), Morphs.Num(), Stretched,
+        FullAreaRatio, Mesh->GetHasVertexColors() ? 1 : 0);
+    return Stretched;
+}

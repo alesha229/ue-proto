@@ -118,7 +118,7 @@ void AGratiaStage1Runtime::BeginPlay()
         Shots->RegisterComponent();
     }
     UE_LOG(LogGratiaStage1, Display, TEXT("BUILD id=%s commit=%s"), TEXT(GRATIA_BUILD_ID), TEXT(GRATIA_BUILD_COMMIT));
-    UE_LOG(LogGratiaStage1, Display, TEXT("Stage 1 runtime started. R=recenter, PgUp/PgDn=height, Home=reset height, F1=debug, F6=primitive on/off, F7=primitive size, F8/F9=toggle forced left/right tracking loss."));
+    UE_LOG(LogGratiaStage1, Display, TEXT("Stage 1 runtime started. R=recenter, PgUp/PgDn=height, Home=reset height, F1=debug, F6=primitive on/off, F7=primitive size, F5=primitive form, F8/F9=toggle forced left/right tracking loss."));
 }
 
 void AGratiaStage1Runtime::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -215,8 +215,11 @@ bool AGratiaStage1Runtime::SetPrimitiveShown(bool bShown)
     Primitive = GetWorld()->SpawnActor<AGratiaPenetrator>(PrimitiveClass ? PrimitiveClass.Get() : AGratiaPenetrator::StaticClass(),
         Location, Yaw + FRotator(-20.0, 0.0, 0.0), Parameters);
     if (!Primitive) return false;
+    if (PrimitiveSizeChoice != INDEX_NONE) Primitive->SetSize(PrimitiveSizeChoice);
+    Primitive->SetForm(PrimitiveFormChoice);
     if (TargetCharacter.IsValid() && TargetCharacter->Penetration) TargetCharacter->Penetration->SetPenetrator(Primitive);
-    UE_LOG(LogGratiaStage1, Display, TEXT("PRIMITIVE shown size=%s; grip near the handle picks it up"), *Primitive->GetSizeLabel());
+    UE_LOG(LogGratiaStage1, Display, TEXT("PRIMITIVE shown size=%s form=%s; grip near the handle picks it up"), *Primitive->GetSizeLabel(),
+        *Primitive->GetFormLabel());
     return true;
 }
 
@@ -224,12 +227,26 @@ void AGratiaStage1Runtime::CyclePrimitiveSize()
 {
     if (!Primitive) return;
     Primitive->CycleSize();
+    PrimitiveSizeChoice = Primitive->SizeIndex;
     UE_LOG(LogGratiaStage1, Display, TEXT("PRIMITIVE size=%s"), *Primitive->GetSizeLabel());
 }
 
 FString AGratiaStage1Runtime::GetPrimitiveLabel() const
 {
     return Primitive ? Primitive->GetSizeLabel() : FString(TEXT("—"));
+}
+
+void AGratiaStage1Runtime::CyclePrimitiveForm()
+{
+    if (!Primitive) return;
+    Primitive->CycleForm();
+    PrimitiveFormChoice = Primitive->Form;
+    UE_LOG(LogGratiaStage1, Display, TEXT("PRIMITIVE form=%s"), *Primitive->GetFormLabel());
+}
+
+FString AGratiaStage1Runtime::GetPrimitiveFormLabel() const
+{
+    return Primitive ? Primitive->GetFormLabel() : FString(TEXT("—"));
 }
 
 void AGratiaStage1Runtime::ReleasePrimitive(FHandProxy& Hand, bool bLeft, const TCHAR* Reason)
@@ -440,6 +457,7 @@ void AGratiaStage1Runtime::Tick(float DeltaSeconds)
         if (PC->WasInputKeyJustPressed(EKeys::F1)) bShowDebug = !bShowDebug;
         if (IsSceneInteractionAllowed() && PC->WasInputKeyJustPressed(EKeys::F6)) SetPrimitiveShown(!IsPrimitiveShown());
         if (IsSceneInteractionAllowed() && PC->WasInputKeyJustPressed(EKeys::F7)) CyclePrimitiveSize();
+        if (IsSceneInteractionAllowed() && PC->WasInputKeyJustPressed(EKeys::F5)) CyclePrimitiveForm();
         if (PC->WasInputKeyJustPressed(EKeys::F8)) SetForcedTrackingLoss(true, !LeftHand.bForceLoss);
         if (PC->WasInputKeyJustPressed(EKeys::F9)) SetForcedTrackingLoss(false, !RightHand.bForceLoss);
     }

@@ -41,7 +41,10 @@ struct FPath
     }
 };
 
-/** Shaft shape: rounded tip over TipCm, a body of Radius that grows to Radius x BaseScale at the base. */
+/** Profile of a shaft along its length (the primitive's selectable forms; the hands are Smooth). */
+enum class EShaftForm : uint8 { Smooth, Realistic, Knotted, Beads, Cone, Ribbed, Flared, Tentacle, Count };
+
+/** Shaft shape: Form's profile of Radius (rounded tip over TipCm, Radius x BaseScale at the base for Smooth). */
 struct FShaft
 {
     double Length = 18.0;
@@ -49,18 +52,112 @@ struct FShaft
     double TipCm = 2.5;
     double BaseScale = 1.0;
     int32 Joints = 8;
+    EShaftForm Form = EShaftForm::Smooth;
 
     /** Radius at distance U from the tip (0 outside the shaft). */
     double RadiusAt(double U) const
     {
         if (U <= 0.0 || U > Length + 1.0e-6) return 0.0;
-        const double Body = Radius * FMath::Lerp(1.0, BaseScale, FMath::Clamp(U / FMath::Max(Length, 0.01), 0.0, 1.0));
-        if (U >= TipCm) return Body;
-        const double T = U / FMath::Max(TipCm, 0.01);
-        return Body * FMath::Sqrt(FMath::Max(0.0, 1.0 - FMath::Square(1.0 - T)));
+        const double L = FMath::Max(Length, 0.01), R = Radius, T = FMath::Clamp(U / L, 0.0, 1.0);
+        // Rounded end: 0 at the tip, full over Over cm (a quarter ellipse).
+        auto Cap = [U](double Over) { const double X = FMath::Clamp(U / FMath::Max(Over, 0.01), 0.0, 1.0); return FMath::Sqrt(FMath::Max(0.0, 1.0 - FMath::Square(1.0 - X))); };
+        auto Smooth = [](double X) { X = FMath::Clamp(X, 0.0, 1.0); return X * X * (3.0 - 2.0 * X); };
+        auto Bump = [U](double Centre, double Width) { return FMath::Exp(-FMath::Square((U - Centre) / FMath::Max(Width, 0.01))); };
+        switch (Form)
+        {
+        case EShaftForm::Realistic:
+        {
+            // A head a little wider than the shaft with a ridge and a groove behind it, the shaft thickening to the base.
+            const double Head = FMath::Max(1.5, 0.2 * L);
+            const double Body = R * FMath::Lerp(1.0, 1.1, T);
+            if (U < Head) return 1.1 * R * Cap(0.7 * Head);
+            if (U < Head + 0.5) return FMath::Lerp(1.1 * R, 0.86 * R, (U - Head) / 0.5);
+            return FMath::Lerp(0.86 * R, Body, Smooth((U - Head - 0.5) / 2.5));
+        }
+        case EShaftForm::Knotted:
+            // A pointed, tapering tip and a knot near the base (up to 1.45 x the shaft).
+            return R * (0.85 * (0.3 + 0.7 * Smooth(U / (0.3 * L))) * Cap(1.0) + 0.6 * Bump(0.8 * L, 0.07 * L));
+        case EShaftForm::Beads:
+        {
+            // Balls growing from 0.55 to 1 x the radius toward the base on a thin cord.
+            const int32 Count = FMath::Clamp(FMath::RoundToInt(L / (3.2 * R + 1.0)), 3, 8);
+            double Size[8], Centre[8], Total = 0.0;
+            for (int32 Ball = 0; Ball < Count; ++Ball)
+            {
+                Size[Ball] = R * (0.55 + 0.45 * Ball / double(Count - 1));
+                Total += (Ball ? 0.35 * R : 0.0) + 2.0 * Size[Ball];
+            }
+            const double Fit = L / FMath::Max(Total, 0.01);
+            double Along = 0.0, Best = 0.22 * R;
+            for (int32 Ball = 0; Ball < Count; ++Ball)
+            {
+                Along += (Ball ? 0.35 * R * Fit : 0.0) + Size[Ball] * Fit;
+                Centre[Ball] = Along;
+                Along += Size[Ball] * Fit;
+                const double Half = Size[Ball] * Fit, Off = U - Centre[Ball];
+                if (FMath::Abs(Off) < Half) Best = FMath::Max(Best, Size[Ball] * FMath::Sqrt(1.0 - FMath::Square(Off / Half)));
+            }
+            return Best;
+        }
+        case EShaftForm::Cone:
+            // A narrow rounded tip widening steadily to 1.5 x the radius at the base.
+            return R * FMath::Lerp(0.3, 1.5, FMath::Pow(T, 0.85)) * Cap(1.2);
+        case EShaftForm::Ribbed:
+        {
+            const double Body = R * FMath::Lerp(1.0, BaseScale, T) * Cap(TipCm);
+            const double Period = FMath::Max(1.2, 0.07 * L);
+            return U > TipCm ? Body * (1.0 + 0.13 * (0.5 + 0.5 * FMath::Cos(2.0 * PI * (U - TipCm) / Period))) : Body;
+        }
+        case EShaftForm::Flared:
+        {
+            // A blunt flared head (1.4 x) over a narrow neck, a ring halfway down and a thick base.
+            const double Head = FMath::Max(1.5, 0.09 * L), Neck = 0.04 * L;
+            const double Body = R * FMath::Lerp(0.95, 1.12, T) * (1.0 + 0.16 * Bump(0.45 * L, 0.035 * L));
+            if (U < Head) return 1.4 * R * FMath::Sqrt(Cap(Head));
+            if (U < Head + Neck) return FMath::Lerp(1.4 * R, 0.86 * R, Smooth((U - Head) / Neck));
+            return FMath::Lerp(0.86 * R, Body, Smooth((U - Head - Neck) / (0.1 * L)));
+        }
+        case EShaftForm::Tentacle:
+        {
+            // From a thin pointed tip to 1.35 x at the base, with soft rings.
+            const double Body = R * FMath::Lerp(0.12, 1.35, FMath::Pow(T, 0.75)) * Cap(0.6);
+            return T > 0.2 ? Body * (1.0 + 0.06 * FMath::Sin(2.0 * PI * U / 1.8)) : Body;
+        }
+        default:
+        {
+            const double Body = R * FMath::Lerp(1.0, BaseScale, T);
+            if (U >= TipCm) return Body;
+            return Body * Cap(TipCm);
+        }
+        }
+    }
+    /** Slope of the radius along U (per cm). */
+    double SlopeAt(double U) const { constexpr double H = 0.05; return (RadiusAt(U + H) - RadiusAt(FMath::Max(1.0e-4, U - H))) / (2.0 * H); }
+    /** Widest radius along the shaft. */
+    double MaxRadius() const
+    {
+        double Widest = 0.0;
+        for (int32 Sample = 1; Sample <= 96; ++Sample) Widest = FMath::Max(Widest, RadiusAt(Length * Sample / 96.0));
+        return Widest;
     }
     double Spacing() const { return Length / FMath::Max(1, Joints - 1); }
 };
+
+/** Menu name of a primitive form. */
+inline const TCHAR* ShaftFormName(EShaftForm Form)
+{
+    switch (Form)
+    {
+    case EShaftForm::Realistic: return TEXT("Реалистичный");
+    case EShaftForm::Knotted: return TEXT("С узлом");
+    case EShaftForm::Beads: return TEXT("Бусины");
+    case EShaftForm::Cone: return TEXT("Конус");
+    case EShaftForm::Ribbed: return TEXT("Ребристый");
+    case EShaftForm::Flared: return TEXT("Расклёшенный");
+    case EShaftForm::Tentacle: return TEXT("Щупальце");
+    default: return TEXT("Гладкий");
+    }
+}
 
 /** The player's hand as a shaft: three straight fingers, the whole hand with straight fingers, a fist. */
 enum class EHandShape : uint8 { None, Fingers, Hand, Fist };

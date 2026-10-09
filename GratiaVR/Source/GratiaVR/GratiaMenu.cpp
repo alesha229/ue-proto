@@ -501,7 +501,7 @@ bool UGratiaMenu::IsActionAvailable(EGratiaMenuAction Action, int32 Param) const
         return Runtime && I && Profile && Profile->Penetration.bEnabled && CharacterScene;
     }
     case EGratiaMenuAction::Forearms: return Cast<AGratiaStage1Runtime>(GetOwner()) != nullptr;
-    case EGratiaMenuAction::PrimitiveSize:
+    case EGratiaMenuAction::PrimitiveSize: case EGratiaMenuAction::PrimitiveForm:
     {
         const auto* Runtime = Cast<AGratiaStage1Runtime>(GetOwner());
         return Runtime && Runtime->IsPrimitiveShown();
@@ -573,6 +573,7 @@ void UGratiaMenu::Execute(EGratiaMenuAction Action, int32 Param)
     case EGratiaMenuAction::TrackNext: if (Director) Director->NextTrack(); break;
     case EGratiaMenuAction::Primitive: if (Runtime) Runtime->SetPrimitiveShown(!Runtime->IsPrimitiveShown()); break;
     case EGratiaMenuAction::PrimitiveSize: if (Runtime) Runtime->CyclePrimitiveSize(); break;
+    case EGratiaMenuAction::PrimitiveForm: if (Runtime) Runtime->CyclePrimitiveForm(); break;
     }
     if (Director) Director->SaveUserSettings();
     Refresh();
@@ -624,6 +625,7 @@ FString UGratiaMenu::ValueFor(EGratiaMenuAction Action) const
         ? FString::Printf(TEXT("%.2g×"), Character->GetPerformanceRate()) : TEXT("—");
     case EGratiaMenuAction::Pose: return Character.IsValid() && IsActionAvailable(Action) ? Character->GetPoseMenuLabel() : TEXT("—");
     case EGratiaMenuAction::PrimitiveSize: return Runtime && Runtime->IsPrimitiveShown() ? Runtime->GetPrimitiveLabel() : TEXT("—");
+    case EGratiaMenuAction::PrimitiveForm: return Runtime && Runtime->IsPrimitiveShown() ? Runtime->GetPrimitiveFormLabel() : TEXT("—");
     case EGratiaMenuAction::PartnerView: return ViewLabel();
     default: return TEXT("");
     }
@@ -644,6 +646,7 @@ FString UGratiaMenu::LabelFor(EGratiaMenuAction Action, int32 Param) const
     case EGratiaMenuAction::HapticsUp: return FString::Printf(TEXT("Вибрация: %d%%   +"), FMath::RoundToInt((Settings ? Settings->HapticsScale : 0) * 100));
     case EGratiaMenuAction::HeightUp: return FString::Printf(TEXT("Высота глаз: %+.0f см   +"), Runtime ? Runtime->HeightOffsetCm : 0.0f);
     case EGratiaMenuAction::PrimitiveSize: return TEXT("Размер: ") + (Runtime && Runtime->IsPrimitiveShown() ? Runtime->GetPrimitiveLabel() : FString(TEXT("включите примитив")));
+    case EGratiaMenuAction::PrimitiveForm: return TEXT("Форма: ") + (Runtime && Runtime->IsPrimitiveShown() ? Runtime->GetPrimitiveFormLabel() : FString(TEXT("включите примитив")));
     case EGratiaMenuAction::Primitive: Name = TEXT("Примитив"); break;
     case EGratiaMenuAction::Demo: Name = TEXT("Демо реакций"); break;
     case EGratiaMenuAction::Hair: Name = TEXT("Волосы"); break;

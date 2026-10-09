@@ -5,13 +5,15 @@
 
 class AGratiaPenetrator;
 class ACameraActor;
+class APlayerController;
 
 /**
  * -GratiaChannelShots (desktop, studio): for every channel of the character's profile and every case (empty,
  * three fingers, flat hand, fist, two hands of three fingers side by side, an XXL primitive, the largest primitive
  * deep with the belly in view) holds visible stand-in shafts at the entrance until they are captured, pushes them in,
- * lets the walls settle and captures the entrance along the channel axis and
- * from the side into Saved/Screenshots/ChannelShots, then quits. Layout and deformation review without a headset.
+ * lets the walls settle and captures the entrance along the channel axis and from the side (the belly before and
+ * after) into Saved/Screenshots/ChannelShots; last, every primitive form side by side; then quits. Layout and
+ * deformation review without a headset.
  */
 UCLASS()
 class GRATIAVR_API UGratiaChannelShots : public UActorComponent
@@ -30,5 +32,7 @@ private:
     /** Seconds since every shaft of the case was captured (-1: still approaching). */
     float Inserting = -1.0f;
     bool Arrange(int32 Channel, int32 Case);
+    /** Last shot: every primitive form side by side (Primitive_Forms.png). */
+    void ShootForms(APlayerController* Player);
     FString CaseName(int32 Case) const;
 };

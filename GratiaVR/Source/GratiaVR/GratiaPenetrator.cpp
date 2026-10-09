@@ -5,6 +5,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "ProceduralMeshComponent.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -27,11 +28,20 @@ void GratiaPlaceCylinder(UStaticMeshComponent* Mesh, const FVector& A, const FVe
     Mesh->SetWorldScale3D(FVector(Radius / 50.0, Radius / 50.0, Length / 100.0));
 }
 
-void GratiaPlaceSphere(UStaticMeshComponent* Mesh, const FVector& Center, double Radius)
+constexpr int32 GratiaTubeRings = 80;
+constexpr int32 GratiaTubeSides = 24;
+
+/** Catmull-Rom point (and tangent) between Points[Segment] and Points[Segment + 1] at T in 0..1; the ends extend. */
+FVector GratiaCurve(const TArray<FVector>& Points, int32 Segment, double T, FVector& Tangent)
 {
-    Mesh->SetVisibility(Radius > 0.01);
-    Mesh->SetWorldLocation(Center, false, nullptr, ETeleportType::TeleportPhysics);
-    Mesh->SetWorldScale3D(FVector(Radius / 50.0));
+    const int32 Last = Points.Num() - 1;
+    const FVector P1 = Points[Segment], P2 = Points[FMath::Min(Segment + 1, Last)];
+    const FVector P0 = Segment > 0 ? Points[Segment - 1] : P1 * 2.0 - P2;
+    const FVector P3 = Segment + 2 <= Last ? Points[Segment + 2] : P2 * 2.0 - P1;
+    const double T2 = T * T, T3 = T2 * T;
+    Tangent = (0.5 * ((P2 - P0) + 2.0 * T * (2.0 * P0 - 5.0 * P1 + 4.0 * P2 - P3) + 3.0 * T2 * (3.0 * P1 - P0 - 3.0 * P2 + P3))).GetSafeNormal();
+    if (Tangent.IsNearlyZero()) Tangent = (P2 - P1).GetSafeNormal();
+    return 0.5 * ((2.0 * P1) + (P2 - P0) * T + (2.0 * P0 - 5.0 * P1 + 4.0 * P2 - P3) * T2 + (3.0 * P1 - P0 - 3.0 * P2 + P3) * T3);
 }
 }
 
@@ -45,9 +55,8 @@ AGratiaPenetrator::AGratiaPenetrator()
         GratiaShaftSize(TEXT("3XL"), 38.0f, 5.2f), GratiaShaftSize(TEXT("4XL"), 45.0f, 6.2f) };
     // Constructor references keep the shapes in the cooked build.
     static ConstructorHelpers::FObjectFinder<UStaticMesh> Cylinder(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
-    static ConstructorHelpers::FObjectFinder<UStaticMesh> Sphere(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
     static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
-    CylinderMesh = Cylinder.Object; SphereMesh = Sphere.Object; BasicMaterial = Material.Object;
+    CylinderMesh = Cylinder.Object; BasicMaterial = Material.Object;
 }
 
 void AGratiaPenetrator::BeginPlay()
@@ -65,6 +74,7 @@ GratiaPenetration::FShaft AGratiaPenetrator::GetShaft() const
     Shaft.TipCm = FMath::Clamp(TipTaperCm, 0.2f, float(Shaft.Length) * 0.5f);
     Shaft.BaseScale = FMath::Clamp(BaseRadiusScale, 0.5f, 2.0f);
     Shaft.Joints = FMath::Clamp(JointCount, 3, 16);
+    Shaft.Form = static_cast<GratiaPenetration::EShaftForm>(FMath::Clamp(int32(Form), 0, int32(GratiaPenetration::EShaftForm::Count) - 1));
     return Shaft;
 }
 
@@ -80,6 +90,24 @@ void AGratiaPenetrator::SetShape(FName Label, const GratiaPenetration::FShaft& S
     TipTaperCm = float(Shape.TipCm);
     BaseRadiusScale = float(Shape.BaseScale);
     JointCount = Shape.Joints;
+    Form = static_cast<EGratiaShaftForm>(FMath::Min(int32(Shape.Form), int32(EGratiaShaftForm::Tentacle)));
+}
+
+void AGratiaPenetrator::SetForm(EGratiaShaftForm NewForm)
+{
+    Form = NewForm;
+    // The solver re-shapes an engaged shaft next frame; a free one is redrawn straight now.
+    SetJoints({});
+}
+
+void AGratiaPenetrator::CycleForm()
+{
+    SetForm(static_cast<EGratiaShaftForm>((int32(Form) + 1) % (int32(EGratiaShaftForm::Tentacle) + 1)));
+}
+
+FString AGratiaPenetrator::GetFormLabel() const
+{
+    return GratiaPenetration::ShaftFormName(GetShaft().Form);
 }
 
 void AGratiaPenetrator::SetSize(int32 Index)
@@ -129,34 +157,35 @@ double AGratiaPenetrator::GrabGap(const FVector& Point) const
 
 void AGratiaPenetrator::BuildVisuals()
 {
-    const int32 Count = GetShaft().Joints;
     const bool bMesh = ChainMesh && ChainBones.Num() >= 2;
-    auto Make = [this](const TCHAR* Prefix, int32 Index, UStaticMesh* Shape, UMaterialInstanceDynamic* Material)
-    {
-        UStaticMeshComponent* Mesh = NewObject<UStaticMeshComponent>(this, *FString::Printf(TEXT("%s%d"), Prefix, Index));
-        Mesh->SetupAttachment(Root);
-        Mesh->SetUsingAbsoluteLocation(true); Mesh->SetUsingAbsoluteRotation(true); Mesh->SetUsingAbsoluteScale(true);
-        Mesh->SetStaticMesh(Shape);
-        Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-        Mesh->SetGenerateOverlapEvents(false);
-        Mesh->SetCastShadow(false);
-        if (Material) Mesh->SetMaterial(0, Material);
-        Mesh->RegisterComponent();
-        return Mesh;
-    };
     if (!ShaftMaterial && BasicMaterial)
     {
         ShaftMaterial = UMaterialInstanceDynamic::Create(BasicMaterial, this);
         HandleMaterial = UMaterialInstanceDynamic::Create(BasicMaterial, this);
     }
-    if (ShaftMaterial) ShaftMaterial->SetVectorParameterValue(TEXT("Color"), ShaftColor);
+    // Each form has its own colour; the smooth one keeps ShaftColor.
+    static const FLinearColor FormColors[] = {FLinearColor(0.78f, 0.42f, 0.55f), FLinearColor(0.86f, 0.56f, 0.5f), FLinearColor(0.62f, 0.16f, 0.22f),
+        FLinearColor(0.26f, 0.12f, 0.38f), FLinearColor(0.16f, 0.52f, 0.58f), FLinearColor(0.24f, 0.34f, 0.8f), FLinearColor(0.36f, 0.23f, 0.21f),
+        FLinearColor(0.46f, 0.22f, 0.6f)};
+    const int32 FormIndex = int32(Form);
+    if (ShaftMaterial) ShaftMaterial->SetVectorParameterValue(TEXT("Color"), Form == EGratiaShaftForm::Smooth || FormIndex >= UE_ARRAY_COUNT(FormColors)
+        ? ShaftColor : FormColors[FormIndex]);
     if (HandleMaterial) HandleMaterial->SetVectorParameterValue(TEXT("Color"), HandleColor);
-    if (!Handle && CylinderMesh) Handle = Make(TEXT("Handle"), 0, CylinderMesh, HandleMaterial);
+    if (!Handle && CylinderMesh)
+    {
+        Handle = NewObject<UStaticMeshComponent>(this, TEXT("Handle0"));
+        Handle->SetupAttachment(Root);
+        Handle->SetUsingAbsoluteLocation(true); Handle->SetUsingAbsoluteRotation(true); Handle->SetUsingAbsoluteScale(true);
+        Handle->SetStaticMesh(CylinderMesh);
+        Handle->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        Handle->SetGenerateOverlapEvents(false);
+        Handle->SetCastShadow(false);
+        if (HandleMaterial) Handle->SetMaterial(0, HandleMaterial);
+        Handle->RegisterComponent();
+    }
     if (bMesh)
     {
-        for (UStaticMeshComponent* Mesh : Segments) if (Mesh) Mesh->DestroyComponent();
-        for (UStaticMeshComponent* Mesh : Knuckles) if (Mesh) Mesh->DestroyComponent();
-        Segments.Reset(); Knuckles.Reset();
+        if (Tube) { Tube->DestroyComponent(); Tube = nullptr; bTubeBuilt = false; }
         if (!Poseable)
         {
             Poseable = NewObject<UPoseableMeshComponent>(this, TEXT("ChainMesh"));
@@ -169,11 +198,19 @@ void AGratiaPenetrator::BuildVisuals()
         return;
     }
     if (Poseable) { Poseable->DestroyComponent(); Poseable = nullptr; }
-    if (!CylinderMesh || !SphereMesh) return;
-    while (Segments.Num() > Count - 1) { if (Segments.Last()) Segments.Last()->DestroyComponent(); Segments.Pop(); }
-    while (Knuckles.Num() > Count) { if (Knuckles.Last()) Knuckles.Last()->DestroyComponent(); Knuckles.Pop(); }
-    while (Segments.Num() < Count - 1) Segments.Add(Make(TEXT("Segment"), Segments.Num(), CylinderMesh, ShaftMaterial));
-    while (Knuckles.Num() < Count) Knuckles.Add(Make(TEXT("Joint"), Knuckles.Num(), SphereMesh, ShaftMaterial));
+    if (!Tube)
+    {
+        Tube = NewObject<UProceduralMeshComponent>(this, TEXT("Tube"));
+        Tube->SetupAttachment(Root);
+        Tube->SetUsingAbsoluteLocation(true); Tube->SetUsingAbsoluteRotation(true); Tube->SetUsingAbsoluteScale(true);
+        Tube->SetWorldTransform(FTransform::Identity);
+        Tube->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        Tube->bUseComplexAsSimpleCollision = false;
+        Tube->SetGenerateOverlapEvents(false);
+        Tube->SetCastShadow(false);
+        Tube->RegisterComponent();
+        bTubeBuilt = false;
+    }
 }
 
 void AGratiaPenetrator::UpdateVisuals()
@@ -214,17 +251,69 @@ void AGratiaPenetrator::UpdateVisuals()
         }
         return;
     }
-    for (int32 Segment = 0; Segment < Segments.Num(); ++Segment)
-        if (Segments[Segment])
-            GratiaPlaceCylinder(Segments[Segment], Joints[Segment], Joints[Segment + 1],
-                Shaft.RadiusAt(0.5 * (FromTip[Segment] + FromTip[Segment + 1])));
-    for (int32 Joint = 0; Joint < Knuckles.Num(); ++Joint)
+    // An invisible shaft (a hand) draws no tube.
+    if (!Tube || IsHidden()) return;
+    // Rings from the base to the tip along a smooth curve through the joints, each with the form's radius at its
+    // distance from the tip; the ring frame is carried along the curve so the tube does not twist.
+    const double Total = FromTip[0];
+    TArray<FVector> Vertices, Normals;
+    TArray<FVector2D> UVs;
+    const int32 Stride = GratiaTubeSides + 1;
+    Vertices.Reserve(GratiaTubeRings * Stride + Stride + 1);
+    Normals.Reserve(Vertices.Max());
+    UVs.Reserve(Vertices.Max());
+    FVector Side = FVector::CrossProduct(Forward, FVector::UpVector).GetSafeNormal();
+    if (Side.IsNearlyZero()) Side = FVector::CrossProduct(Forward, FVector::RightVector).GetSafeNormal();
+    FVector BaseTangent = Forward;
+    int32 Segment = 0;
+    for (int32 Ring = 0; Ring < GratiaTubeRings; ++Ring)
     {
-        if (!Knuckles[Joint]) continue;
-        if (Joint + 1 < Knuckles.Num()) { GratiaPlaceSphere(Knuckles[Joint], Joints[Joint], Shaft.RadiusAt(FromTip[Joint])); continue; }
-        // Rounded tip: a sphere that ends at the tip joint.
-        const FVector Back = (Joints[Joint - 1] - Joints[Joint]).GetSafeNormal();
-        const double Radius = 0.9 * Shaft.RadiusAt(FMath::Min(Shaft.TipCm, FromTip[Joint - 1]));
-        GratiaPlaceSphere(Knuckles[Joint], Joints[Joint] + Back * Radius, Radius);
+        // Denser rings toward the tip, where the forms change fastest.
+        const double F = double(Ring) / (GratiaTubeRings - 1);
+        const double U = FMath::Max(0.0, Total * FMath::Square(1.0 - F));
+        while (Segment < Joints.Num() - 2 && FromTip[Segment + 1] > U) ++Segment;
+        const double Span = FMath::Max(1.0e-4, FromTip[Segment] - FromTip[Segment + 1]);
+        FVector Tangent;
+        const FVector Centre = GratiaCurve(Joints, Segment, FMath::Clamp((FromTip[Segment] - U) / Span, 0.0, 1.0), Tangent);
+        if (Ring == 0) BaseTangent = Tangent;
+        Side = FVector::VectorPlaneProject(Side, Tangent).GetSafeNormal();
+        if (Side.IsNearlyZero()) Side = FVector::CrossProduct(Tangent, FVector::UpVector).GetSafeNormal();
+        const FVector Up = FVector::CrossProduct(Tangent, Side);
+        // The profile follows the drawn length (a shaft compressed at the channel end keeps its shape).
+        const double ProfileU = Total > 1.0e-3 ? U * Shaft.Length / Total : U;
+        const double Radius = Shaft.RadiusAt(FMath::Max(ProfileU, 1.0e-3));
+        const double Slope = Shaft.SlopeAt(FMath::Max(ProfileU, 0.06));
+        for (int32 Step = 0; Step <= GratiaTubeSides; ++Step)
+        {
+            const double Angle = 2.0 * PI * Step / GratiaTubeSides;
+            const FVector Radial = Side * FMath::Cos(Angle) + Up * FMath::Sin(Angle);
+            Vertices.Add(Centre + Radial * Radius);
+            Normals.Add(Ring == GratiaTubeRings - 1 ? Tangent : (Radial + Tangent * Slope).GetSafeNormal());
+            UVs.Add(FVector2D(double(Step) / GratiaTubeSides, U / FMath::Max(Shaft.Length, 1.0)));
+        }
     }
+    // Base cap: a flat disc facing back.
+    const int32 CapCentre = Vertices.Num();
+    Vertices.Add(Joints[0]); Normals.Add(-BaseTangent); UVs.Add(FVector2D(0.5, 1.0));
+    for (int32 Step = 0; Step <= GratiaTubeSides; ++Step)
+    {
+        const FVector Rim = Vertices[Step];
+        Vertices.Add(Rim); Normals.Add(-BaseTangent); UVs.Add(FVector2D(double(Step) / GratiaTubeSides, 1.0));
+    }
+    if (!bTubeBuilt || Tube->GetNumSections() == 0)
+    {
+        TArray<int32> Triangles;
+        for (int32 Ring = 0; Ring + 1 < GratiaTubeRings; ++Ring)
+            for (int32 Step = 0; Step < GratiaTubeSides; ++Step)
+            {
+                const int32 A = Ring * Stride + Step, B = A + 1, C = A + Stride, D = C + 1;
+                // Engine front faces wind clockwise seen from outside.
+                Triangles.Append({A, C, B, B, C, D});
+            }
+        for (int32 Step = 0; Step < GratiaTubeSides; ++Step) Triangles.Append({CapCentre, CapCentre + 1 + Step, CapCentre + 2 + Step});
+        Tube->CreateMeshSection_LinearColor(0, Vertices, Triangles, Normals, UVs, {}, {}, false);
+        if (ShaftMaterial) Tube->SetMaterial(0, ShaftMaterial);
+        bTubeBuilt = true;
+    }
+    else Tube->UpdateMeshSection_LinearColor(0, Vertices, Normals, UVs, {}, {});
 }

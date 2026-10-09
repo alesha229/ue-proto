@@ -105,6 +105,8 @@ private:
         double Clench = 0.0;
         double NextClench = 0.0;
         float MorphWeight = 0.0f;
+        /** Last value sent to the stretch material parameter. */
+        float StretchSent = 0.0f;
         int32 Inside = 0;
         /** Swellings along the channel (morphs present on the mesh), their depths (component cm) and weights. */
         TArray<FName> BulgeMorphs;
@@ -127,6 +129,10 @@ private:
         FVector Lateral = FVector::ZeroVector;
         /** 0..1 how hard the hand pushes against a tight place (the shaft lags behind it). */
         double Strain = 0.0;
+        /** Hand lead over the shaft (cm, negative pulling back): the walls are dragged with it. */
+        double Push = 0.0;
+        /** The shaft did not move last frame (static friction holds it). */
+        bool bStuck = true;
         /** Released while inside: the base stays on the body (anchor-bone space). */
         bool bAnchored = false;
         FTransform AnchoredBase = FTransform::Identity;
@@ -144,7 +150,11 @@ private:
     /** The tip enters within this distance of the entrance (a larger shaft finds it from further). */
     double CaptureRadius(const FChannel& Channel, const GratiaPenetration::FShaft& Shaft) const;
     /** World offset a wall bone moves to for a shaft inserted to Inserted (cm) at Velocity (cm/s). */
-    FVector WallTarget(const FChannel& Channel, const FWallBone& Bone, const GratiaPenetration::FShaft& Shaft, double Inserted, double Velocity) const;
+    FVector WallTarget(const FChannel& Channel, const FWallBone& Bone, const GratiaPenetration::FShaft& Shaft, double Inserted, double Velocity,
+        double Push = 0.0) const;
+    /** Push of the rings against the shaft with its tip at Inserted (cm of hand lead; positive resists going in) and the
+     *  walls' rubbing along it. */
+    void RingForces(const FChannel& Channel, const GratiaPenetration::FShaft& Shaft, double Inserted, double& Ring, double& Friction) const;
     /** Walls and morph: open with the shafts at once, after narrowing hold, then close slowly (slower after a wide
      *  and long opening), and clench now and then while a shaft is inside. */
     void UpdateWalls(float Delta);
