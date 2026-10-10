@@ -608,6 +608,9 @@ UPanelWidget* UGratiaMenuWidget::BuildCharacterPage()
         EGratiaMenuAction::PrimitiveForm, Character);
     AddToggle(Primitive, TEXT("Руки в каналы"), TEXT("grip — три пальца, большой на стике — ладонь, grip и курок — кулак"), EGratiaMenuAction::HandPenetration, Character);
     // Reset sits under the behaviour on the left; the right column holds penetration.
+    UVerticalBox* Look = AddSection(Right, TEXT("ВИД"));
+    AddStepper(Look, TEXT("Влажность"), TEXT("мокрая кожа и одежда: блеск, капли, стекающие струйки"), EGratiaMenuAction::WetnessDown,
+        EGratiaMenuAction::WetnessUp, Character);
     UVerticalBox* Reset = AddSection(Left, TEXT("СБРОС"));
     AddTextButton(Reset, TEXT("Сбросить позу и контакты"), EGratiaMenuAction::Reset, 0, Character, -1.0f, 58.0f, 21);
     UWidget* Empty = MakeEmptyState(TEXT("Персонажа нет рядом"),

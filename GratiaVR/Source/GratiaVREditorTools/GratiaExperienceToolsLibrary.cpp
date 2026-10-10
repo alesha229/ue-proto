@@ -667,3 +667,51 @@ FString UGratiaExperienceToolsLibrary::DescribeChannelRegion(USkeletalMesh* Mesh
     UE_LOG(LogTemp, Display, TEXT("GRATIA_CHANNEL_REGION %s"), *Out);
     return Out;
 }
+
+int32 UGratiaExperienceToolsLibrary::KeepTrianglesOnBones(USkeletalMesh* Mesh, const TArray<FName>& Bones, bool bIncludeChildren, float MinWeight)
+{
+    if (!Mesh || !Mesh->HasMeshDescription(0)) return -1;
+    FMeshDescription* Description = Mesh->GetMeshDescription(0);
+    if (!Description) return -1;
+    const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
+    TBitArray<> Kept(false, Ref.GetNum());
+    for (const FName Bone : Bones)
+        if (const int32 Index = Ref.FindBoneIndex(Bone); Index != INDEX_NONE) Kept[Index] = true;
+    // The skeleton lists parents before children.
+    if (bIncludeChildren)
+        for (int32 Index = 0; Index < Ref.GetNum(); ++Index)
+            if (Ref.GetParentIndex(Index) != INDEX_NONE && Kept[Ref.GetParentIndex(Index)]) Kept[Index] = true;
+    FSkeletalMeshAttributes Attributes(*Description);
+    FSkinWeightsVertexAttributesRef Weights = Attributes.GetVertexSkinWeights();
+    TBitArray<> Inside(false, Description->Vertices().GetArraySize());
+    for (const FVertexID Vertex : Description->Vertices().GetElementIDs())
+    {
+        float Share = 0.0f;
+        for (const UE::AnimationCore::FBoneWeight Weight : Weights.Get(Vertex))
+            if (Kept.IsValidIndex(Weight.GetBoneIndex()) && Kept[Weight.GetBoneIndex()]) Share += Weight.GetWeight();
+        Inside[Vertex.GetValue()] = Share >= MinWeight;
+    }
+    TArray<FTriangleID> Remove;
+    int32 Count = 0;
+    for (const FTriangleID Triangle : Description->Triangles().GetElementIDs())
+    {
+        const TArrayView<const FVertexID> Corners = Description->GetTriangleVertices(Triangle);
+        if (Inside[Corners[0].GetValue()] && Inside[Corners[1].GetValue()] && Inside[Corners[2].GetValue()]) ++Count;
+        else Remove.Add(Triangle);
+    }
+    TArray<FEdgeID> OrphanEdges;
+    TArray<FVertexInstanceID> OrphanInstances;
+    TArray<FPolygonGroupID> OrphanGroups;
+    TArray<FVertexID> OrphanVertices;
+    Description->SuspendUVIndexing();
+    for (const FTriangleID Triangle : Remove) Description->DeleteTriangle(Triangle, &OrphanEdges, &OrphanInstances, nullptr);
+    Description->ResumeUVIndexing();
+    for (const FVertexInstanceID Instance : OrphanInstances) if (Description->IsVertexInstanceValid(Instance)) Description->DeleteVertexInstance(Instance, &OrphanVertices);
+    for (const FEdgeID Edge : OrphanEdges) if (Description->IsEdgeValid(Edge)) Description->DeleteEdge(Edge, &OrphanVertices);
+    for (const FVertexID Vertex : OrphanVertices) if (Description->IsVertexValid(Vertex) && Description->GetVertexVertexInstanceIDs(Vertex).IsEmpty()) Description->DeleteVertex(Vertex);
+    FElementIDRemappings Remappings;
+    Description->Compact(Remappings);
+    if (!GratiaCommitMesh(Mesh, true)) return -1;
+    UE_LOG(LogTemp, Display, TEXT("GRATIA_KEEP_TRIANGLES %s kept=%d removed=%d"), *Mesh->GetName(), Count, Remove.Num());
+    return Count;
+}

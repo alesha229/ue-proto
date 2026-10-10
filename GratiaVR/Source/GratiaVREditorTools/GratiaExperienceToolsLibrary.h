@@ -106,4 +106,10 @@ public:
      */
     UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
     static int32 BakeMorphStretchToVertexColor(USkeletalMesh* Mesh, const TArray<FName>& Morphs, float FullAreaRatio);
+    /**
+     * Keeps only the triangles of Mesh's LOD 0 whose three corners are each skinned at least MinWeight to Bones (or their
+     * descendants when bIncludeChildren): a player forearm and hand cut out of a template body. Returns the triangles kept.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Gratia|Editor")
+    static int32 KeepTrianglesOnBones(USkeletalMesh* Mesh, const TArray<FName>& Bones, bool bIncludeChildren, float MinWeight);
 };

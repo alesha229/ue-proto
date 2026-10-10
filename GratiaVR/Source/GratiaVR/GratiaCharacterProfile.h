@@ -940,6 +940,10 @@ public:
     /** Speech bubble and voice per reaction (FGratiaReactionLine). Empty: zone sounds and no bubble. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Presentation|Lines", meta = (TitleProperty = "Text"))
     TArray<FGratiaReactionLine> ReactionLines;
+    /** Where the voice comes from: this far from the Head semantic bone in the character's frame at the reference pose
+     *  (X forward, Y right, Z up, cm); it turns and moves with the head. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Presentation|Sound", meta = (Units = "cm"))
+    FVector VoiceMouthOffsetCm = FVector(9.0, 0.0, 4.0);
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mapping")
     TMap<FName, FName> SemanticBones;

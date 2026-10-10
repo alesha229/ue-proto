@@ -16,6 +16,8 @@
 #include "Sound/SoundBase.h"
 #include "Sound/SoundAttenuation.h"
 #include "Sound/SoundWaveProcedural.h"
+#include "CollisionQueryParams.h"
+#include "Engine/SkeletalMesh.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -48,8 +50,34 @@ void UGratiaReactionPresentation::BeginPlay()
         Settings.AttenuationShape = EAttenuationShape::Sphere;
         Settings.AttenuationShapeExtents = FVector(30.0f, 0.0f, 0.0f);
         Settings.FalloffDistance = 1200.0f;
-        // HRTF when a spatialization plugin is active, otherwise the engine's stereo panner.
+        // Binaural (Resonance Audio's HRTF, the Windows spatialization plugin in DefaultEngine.ini).
         Settings.SpatializationAlgorithm = ESoundSpatializationAlgorithm::SPATIALIZATION_HRTF;
+        // A real voice: louder the closer it is (natural falloff from 15 cm), darker with distance (air), and drier up
+        // close: the room's reverb grows from 5 % at 20 cm to 45 % at 4 m.
+        Settings.AttenuationShapeExtents = FVector(15.0f, 0.0f, 0.0f);
+        Settings.DistanceAlgorithm = EAttenuationDistanceModel::NaturalSound;
+        Settings.dBAttenuationAtMax = -40.0f;
+        Settings.bAttenuateWithLPF = true;
+        Settings.LPFRadiusMin = 300.0f;
+        Settings.LPFRadiusMax = 1500.0f;
+        Settings.LPFFrequencyAtMin = 20000.0f;
+        Settings.LPFFrequencyAtMax = 7000.0f;
+        Settings.bEnableReverbSend = true;
+        Settings.ReverbSendMethod = EReverbSendMethod::Linear;
+        Settings.ReverbDistanceMin = 20.0f;
+        Settings.ReverbDistanceMax = 400.0f;
+        Settings.ReverbWetLevelMin = 0.05f;
+        Settings.ReverbWetLevelMax = 0.45f;
+    }
+    if (!NearAttenuation)
+    {
+        // The near-field copy: positioned by the panner (lows carry little direction), no reverb.
+        NearAttenuation = NewObject<USoundAttenuation>(this, TEXT("VoiceNearAttenuation"));
+        FSoundAttenuationSettings& Settings = NearAttenuation->Attenuation;
+        Settings = ReactionAttenuation->Attenuation;
+        Settings.SpatializationAlgorithm = ESoundSpatializationAlgorithm::SPATIALIZATION_Default;
+        Settings.bAttenuateWithLPF = false;
+        Settings.bEnableReverbSend = false;
     }
     Super::BeginPlay();
     Character = Cast<AGratiaPreviewCharacter>(GetOwner());
@@ -77,7 +105,9 @@ void UGratiaReactionPresentation::EndPlay(const EEndPlayReason::Type EndPlayReas
 void UGratiaReactionPresentation::StopSound()
 {
     if (IsValid(ActiveAudio.Get())) ActiveAudio->Stop();
+    if (IsValid(NearAudio.Get())) NearAudio->Stop();
     ActiveAudio = nullptr;
+    NearAudio = nullptr;
 }
 
 void UGratiaReactionPresentation::ResetPresentation()
@@ -252,15 +282,95 @@ void UGratiaReactionPresentation::HandleContactReaction(FName ZoneName, int32 Ha
         Sound = Chime;
     }
     if (!Sound) return;
-    FVector Location = Character->GetActorLocation();
-    const int32 ZoneIndex = Source->Zones.IndexOfByPredicate(
-        [ZoneName](const FGratiaContactZone& Zone) { return Zone.Name == ZoneName; });
-    if (ZoneIndex != INDEX_NONE) Location = Source->GetZoneWorldPosition(ZoneIndex);
-    StopSound();
-    ActiveAudio = UGameplayStatics::SpawnSoundAtLocation(this, Sound, Location, FRotator::ZeroRotator,
-        FMath::Clamp(NonnegativePresentation(SoundVolume) * FMath::Clamp(NonnegativePresentation(VoiceVolume), 0.0f, 1.0f), 0.0f, 1.0f),
-        1.0f, 0.0f, ReactionAttenuation);
+    PlayMouthSound(Sound, 1.0f);
     LastVoiceTime = Now;
+}
+
+FVector UGratiaReactionPresentation::GetMouthLocation() const
+{
+    const AGratiaPreviewCharacter* Owner = Character.Get();
+    if (!Owner) return GetOwner() ? GetOwner()->GetActorLocation() : FVector::ZeroVector;
+    const USkeletalMeshComponent* Mesh = Owner->CharacterMesh;
+    const UGratiaCharacterProfile* Profile = Owner->CharacterProfile;
+    if (!Mesh || !Profile || !Mesh->GetSkeletalMeshAsset()) return Owner->GetActorLocation();
+    auto* Self = const_cast<UGratiaReactionPresentation*>(this);
+    if (Self->MouthProfile.Get() != Profile)
+    {
+        Self->MouthProfile = const_cast<UGratiaCharacterProfile*>(Profile);
+        Self->MouthHead = Profile->ResolveBone(TEXT("Head"));
+        const FReferenceSkeleton& Ref = Mesh->GetSkeletalMeshAsset()->GetRefSkeleton();
+        const int32 Head = Ref.FindBoneIndex(Self->MouthHead);
+        FQuat HeadRef = FQuat::Identity;
+        for (int32 Bone = Head; Bone != INDEX_NONE; Bone = Ref.GetParentIndex(Bone)) HeadRef = Ref.GetRefBonePose()[Bone].GetRotation() * HeadRef;
+        // Character frame (actor-local forward/up) -> component -> head bone (rotation only: imported bones carry a scale).
+        const FVector Forward = Profile->ForwardAxis.GetSafeNormal(), Up = Profile->UpAxis.GetSafeNormal();
+        const FVector Right = FVector::CrossProduct(Up, Forward).GetSafeNormal();
+        const FVector InActor = Forward * Profile->VoiceMouthOffsetCm.X + Right * Profile->VoiceMouthOffsetCm.Y + Up * Profile->VoiceMouthOffsetCm.Z;
+        const FVector InComponent = Mesh->GetRelativeRotation().Quaternion().UnrotateVector(InActor);
+        Self->MouthInHead = Head == INDEX_NONE ? InComponent : HeadRef.UnrotateVector(InComponent);
+        if (Head == INDEX_NONE) Self->MouthHead = NAME_None;
+    }
+    if (MouthHead.IsNone()) return Mesh->GetComponentTransform().TransformPosition(MouthInHead);
+    const FTransform Head = Mesh->GetSocketTransform(MouthHead, RTS_World);
+    return Head.GetLocation() + Head.GetRotation().RotateVector(MouthInHead) * Mesh->GetComponentScale().GetAbsMax();
+}
+
+UAudioComponent* UGratiaReactionPresentation::PlayMouthSound(USoundBase* Sound, float Volume)
+{
+    if (!Sound) return nullptr;
+    StopSound();
+    const FVector Mouth = GetMouthLocation();
+    ActiveVolume = FMath::Clamp(NonnegativePresentation(SoundVolume) * FMath::Clamp(NonnegativePresentation(VoiceVolume), 0.0f, 1.0f)
+        * NonnegativePresentation(Volume), 0.0f, 1.0f);
+    ActiveAudio = UGameplayStatics::SpawnSoundAtLocation(this, Sound, Mouth, FRotator::ZeroRotator, ActiveVolume, 1.0f, 0.0f, ReactionAttenuation);
+    // The near-field layer starts silent and with the same sample: the two stay in phase.
+    NearAudio = UGameplayStatics::SpawnSoundAtLocation(this, Sound, Mouth, FRotator::ZeroRotator, ActiveVolume, 1.0f, 0.0f, NearAttenuation);
+    if (NearAudio)
+    {
+        NearAudio->SetLowPassFilterEnabled(true);
+        NearAudio->SetLowPassFilterFrequency(NearFieldBassHz);
+        NearAudio->SetVolumeMultiplier(0.0f);
+    }
+    NextOcclusionTrace = 0.0;
+    UpdateVoice(0.0f);
+    return ActiveAudio;
+}
+
+void UGratiaReactionPresentation::UpdateVoice(float DeltaSeconds)
+{
+    if (!IsValid(ActiveAudio.Get()) || !ActiveAudio->IsPlaying())
+    {
+        if (IsValid(NearAudio.Get()) && (!IsValid(ActiveAudio.Get()) || !ActiveAudio->IsPlaying())) NearAudio->Stop();
+        return;
+    }
+    const FVector Mouth = GetMouthLocation();
+    ActiveAudio->SetWorldLocation(Mouth);
+    if (IsValid(NearAudio.Get())) NearAudio->SetWorldLocation(Mouth);
+    const APlayerController* Player = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+    FVector Ear = Mouth + FVector(1000.0, 0.0, 0.0);
+    FVector Front, Right;
+    if (Player) Player->GetAudioListenerPosition(Ear, Front, Right);
+    const double Distance = FVector::Distance(Ear, Mouth);
+    // Occlusion: a trace at 15 Hz from the ear to the mouth, ignoring the character and the player's pawn.
+    const double Now = GetWorld()->GetTimeSeconds();
+    if (Now >= NextOcclusionTrace)
+    {
+        NextOcclusionTrace = Now + 1.0 / 15.0;
+        FCollisionQueryParams Query(SCENE_QUERY_STAT(GratiaVoiceOcclusion), false);
+        Query.AddIgnoredActor(GetOwner());
+        if (Player && Player->GetPawn()) Query.AddIgnoredActor(Player->GetPawn());
+        FHitResult Hit;
+        OcclusionTarget = GetWorld()->LineTraceSingleByChannel(Hit, Ear, Mouth, ECC_Visibility, Query) ? 1.0f : 0.0f;
+    }
+    Occlusion = FMath::FInterpConstantTo(Occlusion, OcclusionTarget, FMath::Max(0.0f, DeltaSeconds), 6.0f);
+    ActiveAudio->SetLowPassFilterEnabled(Occlusion > 0.01f);
+    ActiveAudio->SetLowPassFilterFrequency(FMath::Lerp(20000.0f, OccludedLowPassHz, Occlusion));
+    ActiveAudio->SetVolumeMultiplier(ActiveVolume * FMath::Lerp(1.0f, OccludedVolume, Occlusion));
+    if (IsValid(NearAudio.Get()))
+    {
+        const float Near = 1.0f - FMath::SmoothStep(NearFieldFullCm, FMath::Max(NearFieldFullCm + 1.0f, NearFieldCm), float(Distance));
+        NearAudio->SetVolumeMultiplier(ActiveVolume * NearFieldBassGain * Near * (1.0f - Occlusion));
+    }
 }
 
 void UGratiaReactionPresentation::TickComponent(float DeltaSeconds, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
@@ -276,6 +386,7 @@ void UGratiaReactionPresentation::TickComponent(float DeltaSeconds, ELevelTick T
     }
     if (!bPresentSound || !Source->bSound || !Profile->Capabilities.bSound) StopSound();
     if (!FMath::IsFinite(DeltaSeconds) || DeltaSeconds <= 0.0f) return;
+    UpdateVoice(DeltaSeconds);
     CaptionSeconds = FMath::Max(0.0f, CaptionSeconds - FMath::Min(DeltaSeconds, 0.05f));
     CaptionAge += FMath::Min(DeltaSeconds, 0.05f);
     if (CaptionSeconds <= 0.0f) CaptionText = FText::GetEmpty();

@@ -38,6 +38,8 @@ struct FGratiaKawaiiChain
     bool bSpring = false;
     uint8 Group = 0;
     bool bRunning = false;
+    /** Damping per 1/90 s, as authored; the node gets it per frame. */
+    float Damping90Hz = 0.0f;
 };
 
 constexpr int32 GratiaKawaiiMaxHandSpheres = 24;
@@ -199,12 +201,12 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
         }
         Node.DummyBoneLength = DummyCm;
         Node.BoneForwardAxis = ToKawaiiAxis(Axis);
-        // Kawaii steps at a fixed 1/TargetFramerate without interpolating its output, so at 90 FPS a frame got 0 or 2
-        // steps (stutter). Four steps per 90 Hz frame with the per-step damping/stiffness converted keep the authored
-        // (90 Hz) feel and quarter the step-aliasing.
-        constexpr int32 StepsPer90Hz = 4;
-        Node.PhysicsSettings.Damping = 1.0f - FMath::Pow(1.0f - FMath::Clamp(Damping, 0.0f, 1.0f), 1.0f / StepsPer90Hz);
-        Node.PhysicsSettings.Stiffness = 1.0f - FMath::Pow(1.0f - FMath::Clamp(Stiffness, 0.0f, 1.0f), 1.0f / StepsPer90Hz);
+        // One Kawaii step per rendered frame (DefaultEngine.ini: bUseFixedSubstepping=False). The fixed 1/90 s steps
+        // were not interpolated, so at ~90 FPS frames got 0 or 2 steps: the hair stuttered. Stiffness is normalised to
+        // the frame time by Kawaii; the damping is normalised every update (PreUpdate) from the authored 90 Hz value.
+        Node.PhysicsSettings.Damping = Damping;
+        Node.PhysicsSettings.Stiffness = Stiffness;
+        Chain.Damping90Hz = FMath::Clamp(Damping, 0.0f, 1.0f);
         // Placing the character in a scene moved it 30-140 cm in one frame and swung the hair up to 60 cm.
         Node.TeleportDistanceThreshold = 15.0f;
         Node.PhysicsSettings.WorldDampingLocation = WorldLocation;
@@ -219,7 +221,7 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
         Chain.GravityCmPerSecond2 = 980.0f * GravityScale;
         Chain.GravityParent = Ref.GetParentIndex(Ref.FindBoneIndex(Roots[0]));
         if (Chain.GravityParent != INDEX_NONE) Chain.GravityParentRef = GratiaKawaiiRefTransform(Ref, Chain.GravityParent).GetRotation();
-        Node.TargetFramerate = 90 * StepsPer90Hz;
+        Node.TargetFramerate = 90;
         Node.bUpdatePhysicsSettingsInGame = true;
         return Chain;
     }
@@ -597,6 +599,7 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
         SpringGroups = Profile && Mesh ? Instance->SpringGroups : 0;
         bSoftBodyReset |= Instance->SoftBodyInput.bReset;
         JiggleDelta = DeltaSeconds;
+        BlendDelta += FMath::IsFinite(DeltaSeconds) ? FMath::Clamp(DeltaSeconds, 0.0f, 0.1f) : 0.0f;
         Instance->SoftBodyInput.bReset = false;
         Grabs = Instance->SoftBodyInput.Grabs;
         Scales = Instance->SoftBodyInput.Scales;
@@ -617,6 +620,8 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
                     Gravity = (Down - Delta.RotateVector(FVector(0, 0, -1))) * Chain.GravityCmPerSecond2;
                 }
                 Chain.Node->Gravity = Gravity.ContainsNaN() ? FVector::ZeroVector : Gravity;
+                const float FrameTime = FMath::IsFinite(DeltaSeconds) ? FMath::Clamp(DeltaSeconds, 0.001f, 0.05f) : 1.0f / 90.0f;
+                Chain.Node->PhysicsSettings.Damping = 1.0f - FMath::Pow(1.0f - Chain.Damping90Hz, FrameTime * 90.0f);
             }
             for (FGratiaKawaiiChain& Chain : Kawaii)
             {
@@ -625,7 +630,7 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
                 for (int32 I = 0; I < Slots; ++I)
                 {
                     FSphericalLimit& Limit = Chain.Node->SphericalLimits[Chain.FirstHandLimit + I];
-                    const bool bActive = Spheres.IsValidIndex(I);
+                    const bool bActive = Spheres.IsValidIndex(I) && Spheres[I].W > 0.0;
                     const FVector4 Sphere = bActive ? Spheres[I] : FVector4(0, 0, -1.0e6, 0);
                     Limit.OffsetLocation = Root.InverseTransformPosition(FVector(Sphere.X, Sphere.Y, Sphere.Z));
                     Limit.Radius = bActive ? float(Sphere.W) * (Chain.bSpring ? 1.0f : SoftPushFraction) : 0.0f;
@@ -653,9 +658,50 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
         }
     }
 
+    /** Clip switches during playback (a performance part, a non-seamless loop wrap) start the new pose from the one on screen:
+     *  the previous pose fades out over SwitchBlendSeconds instead of the whole body jumping in one frame. */
+    static constexpr float SwitchBlendSeconds = 0.3f;
+    const UAnimationAsset* ShownAsset = nullptr;
+    float ShownTime = 0.0f;
+    uint16 ShownSerial = 0;
+    TArray<FTransform> ShownPose, HeldPose;
+    float HeldWeight = 0.0f;
+    float BlendDelta = 0.0f;
+
+    void BlendClipSwitch(FPoseContext& Output)
+    {
+        const uint16 Serial = Output.Pose.GetBoneContainer().GetSerialNumber();
+        const int32 Bones = Output.Pose.GetNumBones();
+        const bool bSamePose = Serial == ShownSerial && ShownPose.Num() == Bones;
+        // A loop wraps when the time runs backwards by more than a frame or two while the clip plays forward.
+        const bool bWrapped = CurrentAsset == ShownAsset && IsPlaying() && GetPlayRate() > 0.0f && GetCurrentTime() + 0.05f < ShownTime;
+        // Only switches during playback blend: an explicit pose change (SetPreviewPose ticks with zero time and refreshes
+        // the bones at once) still snaps, as resets and checks expect.
+        if (bSamePose && CurrentAsset && BlendDelta > 0.0f && (CurrentAsset != ShownAsset || bWrapped)) { HeldPose = ShownPose; HeldWeight = 1.0f; }
+        if (HeldWeight > 0.0f && HeldPose.Num() == Bones && bSamePose)
+        {
+            HeldWeight = FMath::Max(0.0f, HeldWeight - BlendDelta / SwitchBlendSeconds);
+            const float Keep = FMath::SmoothStep(0.0f, 1.0f, HeldWeight);
+            for (FCompactPoseBoneIndex Index : Output.Pose.ForEachBoneIndex())
+            {
+                FTransform& Bone = Output.Pose[Index];
+                const FTransform& Held = HeldPose[Index.GetInt()];
+                Bone.SetTranslation(FMath::Lerp(Bone.GetTranslation(), Held.GetTranslation(), double(Keep)));
+                Bone.SetRotation(FQuat::Slerp(Bone.GetRotation(), Held.GetRotation(), Keep).GetNormalized());
+                Bone.SetScale3D(FMath::Lerp(Bone.GetScale3D(), Held.GetScale3D(), double(Keep)));
+            }
+        }
+        else HeldWeight = 0.0f;
+        BlendDelta = 0.0f;
+        ShownAsset = CurrentAsset; ShownTime = GetCurrentTime(); ShownSerial = Serial;
+        ShownPose.SetNumUninitialized(Bones);
+        for (FCompactPoseBoneIndex Index : Output.Pose.ForEachBoneIndex()) ShownPose[Index.GetInt()] = Output.Pose[Index];
+    }
+
     virtual bool Evaluate(FPoseContext& Output) override
     {
         const bool Result = EvaluateProcedural(Output);
+        if (Result) BlendClipSwitch(Output);
         if (Result) GratiaBodyMotionPose::ApplyBones(Output, BodyMotion);
         if (Result) EvaluateFace(Output);
         if (Result) GratiaPlayPose::ApplyBody(Output, PlayPose);

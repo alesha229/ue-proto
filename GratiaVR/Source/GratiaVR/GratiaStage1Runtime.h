@@ -15,6 +15,9 @@ class UMotionControllerComponent;
 class UPrimitiveComponent;
 class USphereComponent;
 class UStaticMeshComponent;
+class UPoseableMeshComponent;
+class USkeletalMesh;
+class UMaterialInterface;
 class UTextRenderComponent;
 class UGratiaLocomotion;
 class UGratiaMenu;
@@ -196,6 +199,20 @@ public:
     float ForearmLengthCm = 26.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hands", meta = (ClampMin = "1", ClampMax = "6", Units = "cm"))
     float ForearmRadiusCm = 3.0f;
+    /**
+     * The player's arms: a skinned forearm and hand on the UE5 mannequin skeleton. The hand bones copy the
+     * animated XR hand each frame (finger curl, contact, grip), the forearm runs from the wrist to the solved elbow; the XR
+     * hand itself keeps working (animation, collision proxies) but is not drawn. Without them the forearms are simple
+     * shapes on the XR hands.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hands")
+    TSoftObjectPtr<USkeletalMesh> PlayerArmLeft = TSoftObjectPtr<USkeletalMesh>(FSoftObjectPath(TEXT("/Game/Gratia/PlayerArms/SKM_PlayerArm_L.SKM_PlayerArm_L")));
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hands")
+    TSoftObjectPtr<USkeletalMesh> PlayerArmRight = TSoftObjectPtr<USkeletalMesh>(FSoftObjectPath(TEXT("/Game/Gratia/PlayerArms/SKM_PlayerArm_R.SKM_PlayerArm_R")));
+    /** Skin of the player's arms (empty: the mesh's own material). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hands")
+    TSoftObjectPtr<UMaterialInterface> PlayerSkinMaterial = TSoftObjectPtr<UMaterialInterface>(
+        FSoftObjectPath(TEXT("/Game/Gratia/PlayerArms/MI_PlayerSkin.MI_PlayerSkin")));
     /** Shows the primitive in front of the player (spawned on demand) or removes it. */
     UFUNCTION(BlueprintCallable, Category = "Primitive")
     bool SetPrimitiveShown(bool bShown);
@@ -382,7 +399,21 @@ private:
         /** The forearm continuing the hand toward an estimated elbow, and the ball rounding the wrist. */
         TWeakObjectPtr<UStaticMeshComponent> Forearm;
         TWeakObjectPtr<UStaticMeshComponent> WristJoint;
+        /** The skinned player arm posed from the XR hand (PlayerArmLeft/Right); tried once. */
+        TWeakObjectPtr<UPoseableMeshComponent> Arm;
+        bool bArmTried = false;
+        /** Bones the arm copies from the XR hand (same names on both skeletons), parents first. */
+        TArray<FName> ArmHandBones;
+        FName ArmForearm, ArmHand;
+        /** Forearm-to-hand reference direction and length, and both reference rotations (arm component space). */
+        FVector ArmForearmRefDir = FVector::ForwardVector;
+        double ArmForearmRefLength = 25.0;
+        FQuat ArmForearmRef = FQuat::Identity, ArmHandRef = FQuat::Identity;
     };
+    /** Creates the skinned arm of a hand from PlayerArmLeft/Right; false when it is not available. */
+    bool CreateArm(FHandProxy& Hand, bool bLeft);
+    /** Poses the skinned arm: hand and fingers as the XR hand, forearm from the wrist toward the elbow. */
+    void PoseArm(FHandProxy& Hand, const FVector& TowardElbow);
     /** Places the forearm of a visible hand: from the wrist to an elbow solved off the head; straight on in a channel. */
     void UpdateForearm(FHandProxy& Hand, bool bLeft);
     /** Grip near the primitive's handle picks it up, release lets go; the held primitive follows the controller. */
