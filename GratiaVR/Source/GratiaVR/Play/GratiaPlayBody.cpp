@@ -445,9 +445,13 @@ void UGratiaPlayBody::UpdateSoft(const UGratiaPlaySettings& Settings, float Delt
         if (!bPelvisValid || FVector::Distance(Position, PelvisPrev) > 30.0) { PelvisVelocity = FVector::ZeroVector; PelvisAccel = FVector::ZeroVector; }
         else
         {
-            const FVector Accel = (Velocity - PelvisVelocity) / Dt;
-            PelvisAccel = FMath::Lerp(PelvisAccel, Accel.ContainsNaN() ? FVector::ZeroVector : Accel, double(1.0f - FMath::Exp(-Dt / 0.05f)));
-            PelvisVelocity = Velocity;
+            // Smoothed over 0.1 s: a raw per-frame second difference of the pelvis is mostly frame-time noise and
+            // animation steps, and kicked the hair and soft parts by up to 3000 cm/s (wild jumping, soft parts off pose).
+            const float Blend = 1.0f - FMath::Exp(-Dt / 0.1f);
+            const FVector Smoothed = FMath::Lerp(PelvisVelocity, Velocity.ContainsNaN() ? PelvisVelocity : Velocity, double(Blend));
+            const FVector Accel = (Smoothed - PelvisVelocity) / Dt;
+            PelvisAccel = FMath::Lerp(PelvisAccel, Accel.ContainsNaN() ? FVector::ZeroVector : Accel, double(Blend));
+            PelvisVelocity = Smoothed;
         }
         PelvisPrev = Position;
         bPelvisValid = true;
@@ -459,7 +463,9 @@ void UGratiaPlayBody::UpdateSoft(const UGratiaPlaySettings& Settings, float Delt
         Pose.Soft.Damping[Group] = Tuning.Damping;
         Pose.Soft.Stiffness[Group] = Tuning.Stiffness;
         // An opposite push for a moment when the body jolts: the soft parts lag and swing back (cm/s).
-        Pose.Soft.KickWS[Group] = (-PelvisAccel * Tuning.InertiaKick * 0.03).GetClampedToMaxSize(Settings.MaxInertiaKick);
+        // Small accelerations (idle sway, breathing) do not kick.
+        const FVector Felt = PelvisAccel.GetSafeNormal() * FMath::Max(0.0, PelvisAccel.Size() - double(Settings.InertiaKickDeadzone));
+        Pose.Soft.KickWS[Group] = (-Felt * Tuning.InertiaKick * 0.03).GetClampedToMaxSize(Settings.MaxInertiaKick);
     }
 }
 

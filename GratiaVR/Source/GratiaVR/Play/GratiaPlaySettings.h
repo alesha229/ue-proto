@@ -306,7 +306,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Anime Soft")
     FGratiaSoftGroupTuning EarsTail;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Anime Soft", meta = (ClampMin = "0", Units = "cm/s"))
-    float MaxInertiaKick = 3000.0f;
+    float MaxInertiaKick = 120.0f;
+    /** Pelvis accelerations below this (cm/s², idle sway, breathing) give no kick. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Anime Soft", meta = (ClampMin = "0"))
+    float InertiaKickDeadzone = 150.0f;
 
     // ---- Garments
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Garments", meta = (TitleProperty = "Name"))
