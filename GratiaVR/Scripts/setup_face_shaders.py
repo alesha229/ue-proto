@@ -221,7 +221,9 @@ def mask(expr, source, channels, x, y):
     node = expr(unreal.MaterialExpressionComponentMask, x, y)
     for channel in "rgba":
         node.set_editor_property(channel, channel in channels)
-    assert mel.connect_material_expressions(source, "", node, "")
+    # A vector parameter's default output is RGB: a mask that needs alpha takes its RGBA output.
+    out = "RGBA" if isinstance(source, unreal.MaterialExpressionVectorParameter) and "a" in channels else ""
+    assert mel.connect_material_expressions(source, out, node, "")
     return node
 
 
