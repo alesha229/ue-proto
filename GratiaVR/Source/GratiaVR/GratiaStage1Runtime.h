@@ -15,6 +15,9 @@ class UMotionControllerComponent;
 class UPrimitiveComponent;
 class USphereComponent;
 class UStaticMeshComponent;
+class UPoseableMeshComponent;
+class USkeletalMesh;
+class UMaterialInterface;
 class UTextRenderComponent;
 class UGratiaLocomotion;
 class UGratiaMenu;
@@ -92,28 +95,38 @@ struct FGratiaHandOffsetSmoother
     FTransform PrevTarget = FTransform::Identity;
     FVector PrevOffset = FVector::ZeroVector;
     FQuat PrevOffsetRotation = FQuat::Identity;
+    /** What is still shown of earlier jumps: an offset (cm) and a turn (rotation vector, radians), with their rates. */
     FVector Residual = FVector::ZeroVector;
-    FQuat RotationResidual = FQuat::Identity;
+    FVector ResidualVelocity = FVector::ZeroVector;
+    FVector Turn = FVector::ZeroVector;
+    FVector TurnVelocity = FVector::ZeroVector;
     bool bValid = false;
 
     /** Forget the previous frame: the next update continues from what is on screen. */
     void Reset() { bValid = false; }
-    void Settle() { Residual = FVector::ZeroVector; RotationResidual = FQuat::Identity; }
+    void Settle() { Residual = ResidualVelocity = Turn = TurnVelocity = FVector::ZeroVector; }
     bool IsSettled() const
     {
-        return Residual.Size() <= 0.05 && FMath::RadiansToDegrees(FQuat::Identity.AngularDistance(RotationResidual)) <= 0.2;
+        return Residual.Size() <= 0.05 && ResidualVelocity.Size() <= 1.0
+            && FMath::RadiansToDegrees(Turn.Size()) <= 0.2 && FMath::RadiansToDegrees(TurnVelocity.Size()) <= 10.0;
     }
 
-    /** Target: controller pose; Desired: pose with contact; Shown: pose on screen last frame. */
+    /**
+     * Target: controller pose; Desired: pose with contact; Shown: pose on screen last frame. The hand follows the
+     * controller's own motion and a contact offset that grows with it exactly; a jump of the offset (a contact, grip,
+     * cup or press switching on or off, a new contact shape) is eased: it starts and ends gently, critically damped,
+     * in about five TimeConstants (0.25 s).
+     */
     FTransform Update(const FTransform& Target, const FTransform& Desired, const FTransform& Shown, float DeltaSeconds,
-        float TimeConstant = 0.035f, double JumpCm = 0.5, double JumpDegrees = 3.0, double LeverCm = 10.0, double MaxResidualCm = 15.0)
+        float TimeConstant = 0.05f, double JumpCm = 0.5, double JumpDegrees = 3.0, double LeverCm = 10.0, double MaxResidualCm = 15.0)
     {
         const FVector Offset = Desired.GetLocation() - Target.GetLocation();
         const FQuat OffsetRotation = Desired.GetRotation() * Target.GetRotation().Inverse();
         if (!bValid)
         {
             Residual = Shown.GetLocation() - Desired.GetLocation();
-            RotationResidual = Shown.GetRotation() * Desired.GetRotation().Inverse();
+            Turn = (Shown.GetRotation() * Desired.GetRotation().Inverse()).GetNormalized().ToRotationVector();
+            ResidualVelocity = TurnVelocity = FVector::ZeroVector;
         }
         else
         {
@@ -122,18 +135,26 @@ struct FGratiaHandOffsetSmoother
             const double Turned = Target.GetRotation().AngularDistance(PrevTarget.GetRotation());
             if ((Offset - PrevOffset).Size() > Moved + LeverCm * Turned + JumpCm) Residual -= Offset - PrevOffset;
             if (FMath::RadiansToDegrees(OffsetRotation.AngularDistance(PrevOffsetRotation)) > FMath::RadiansToDegrees(Turned) + JumpDegrees)
-                RotationResidual = RotationResidual * PrevOffsetRotation * OffsetRotation.Inverse();
+                Turn = (FQuat::MakeFromRotationVector(Turn) * PrevOffsetRotation * OffsetRotation.Inverse()).GetNormalized().ToRotationVector();
         }
         PrevTarget = Target;
         PrevOffset = Offset;
         PrevOffsetRotation = OffsetRotation;
         bValid = true;
         const float Step = FMath::IsFinite(DeltaSeconds) ? FMath::Clamp(DeltaSeconds, 0.0f, 0.1f) : 0.0f;
-        const float Alpha = 1.0f - FMath::Exp(-Step / FMath::Max(0.001f, TimeConstant));
-        Residual = (Residual * (1.0f - Alpha)).GetClampedToMaxSize(MaxResidualCm);
-        RotationResidual = FQuat::Slerp(RotationResidual, FQuat::Identity, Alpha).GetNormalized();
-        if (Residual.ContainsNaN() || RotationResidual.ContainsNaN()) Settle();
-        return FTransform(RotationResidual * Desired.GetRotation(), Desired.GetLocation() + Residual, Desired.GetScale3D());
+        const double Omega = 1.0 / FMath::Max(0.001f, TimeConstant);
+        const int32 Steps = FMath::Max(1, FMath::CeilToInt(Step * 240.0f));
+        const double H = Step / Steps;
+        for (int32 I = 0; I < Steps && Step > 0.0f; ++I)
+        {
+            ResidualVelocity += (-Omega * Omega * Residual - 2.0 * Omega * ResidualVelocity) * H;
+            Residual += ResidualVelocity * H;
+            TurnVelocity += (-Omega * Omega * Turn - 2.0 * Omega * TurnVelocity) * H;
+            Turn += TurnVelocity * H;
+        }
+        Residual = Residual.GetClampedToMaxSize(MaxResidualCm);
+        if (Residual.ContainsNaN() || ResidualVelocity.ContainsNaN() || Turn.ContainsNaN() || TurnVelocity.ContainsNaN()) Settle();
+        return FTransform((FQuat::MakeFromRotationVector(Turn) * Desired.GetRotation()).GetNormalized(), Desired.GetLocation() + Residual, Desired.GetScale3D());
     }
 };
 
@@ -178,6 +199,20 @@ public:
     float ForearmLengthCm = 26.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hands", meta = (ClampMin = "1", ClampMax = "6", Units = "cm"))
     float ForearmRadiusCm = 3.0f;
+    /**
+     * The player's arms: a skinned forearm and hand on the UE5 mannequin skeleton. The hand bones copy the
+     * animated XR hand each frame (finger curl, contact, grip), the forearm runs from the wrist to the solved elbow; the XR
+     * hand itself keeps working (animation, collision proxies) but is not drawn. Without them the forearms are simple
+     * shapes on the XR hands.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hands")
+    TSoftObjectPtr<USkeletalMesh> PlayerArmLeft = TSoftObjectPtr<USkeletalMesh>(FSoftObjectPath(TEXT("/Game/Gratia/PlayerArms/SKM_PlayerArm_L.SKM_PlayerArm_L")));
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hands")
+    TSoftObjectPtr<USkeletalMesh> PlayerArmRight = TSoftObjectPtr<USkeletalMesh>(FSoftObjectPath(TEXT("/Game/Gratia/PlayerArms/SKM_PlayerArm_R.SKM_PlayerArm_R")));
+    /** Skin of the player's arms (empty: the mesh's own material). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hands")
+    TSoftObjectPtr<UMaterialInterface> PlayerSkinMaterial = TSoftObjectPtr<UMaterialInterface>(
+        FSoftObjectPath(TEXT("/Game/Gratia/PlayerArms/MI_PlayerSkin.MI_PlayerSkin")));
     /** Shows the primitive in front of the player (spawned on demand) or removes it. */
     UFUNCTION(BlueprintCallable, Category = "Primitive")
     bool SetPrimitiveShown(bool bShown);
@@ -364,7 +399,21 @@ private:
         /** The forearm continuing the hand toward an estimated elbow, and the ball rounding the wrist. */
         TWeakObjectPtr<UStaticMeshComponent> Forearm;
         TWeakObjectPtr<UStaticMeshComponent> WristJoint;
+        /** The skinned player arm posed from the XR hand (PlayerArmLeft/Right); tried once. */
+        TWeakObjectPtr<UPoseableMeshComponent> Arm;
+        bool bArmTried = false;
+        /** Bones the arm copies from the XR hand (same names on both skeletons), parents first. */
+        TArray<FName> ArmHandBones;
+        FName ArmForearm, ArmHand;
+        /** Forearm-to-hand reference direction and length, and both reference rotations (arm component space). */
+        FVector ArmForearmRefDir = FVector::ForwardVector;
+        double ArmForearmRefLength = 25.0;
+        FQuat ArmForearmRef = FQuat::Identity, ArmHandRef = FQuat::Identity;
     };
+    /** Creates the skinned arm of a hand from PlayerArmLeft/Right; false when it is not available. */
+    bool CreateArm(FHandProxy& Hand, bool bLeft);
+    /** Poses the skinned arm: hand and fingers as the XR hand, forearm from the wrist toward the elbow. */
+    void PoseArm(FHandProxy& Hand, const FVector& TowardElbow);
     /** Places the forearm of a visible hand: from the wrist to an elbow solved off the head; straight on in a channel. */
     void UpdateForearm(FHandProxy& Hand, bool bLeft);
     /** Grip near the primitive's handle picks it up, release lets go; the held primitive follows the controller. */

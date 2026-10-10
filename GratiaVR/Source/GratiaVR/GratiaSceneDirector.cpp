@@ -168,6 +168,9 @@ void UGratiaSceneDirector::BeginPlay()
     // -GratiaQuality=<0..2>: quality profile for measurement runs (not saved: such runs use fresh settings).
     int32 ForcedQuality = INDEX_NONE;
     if (!PinnedScene.IsNone() && FParse::Value(*Command, TEXT("GratiaQuality="), ForcedQuality)) Settings->Quality = FMath::Clamp(ForcedQuality, 0, 2);
+    // Desktop checks of the wet look (the setting is not saved in test runs).
+    float ForcedWetness = 0.0f;
+    if (FParse::Value(*Command, TEXT("GratiaWetness="), ForcedWetness)) SetWetness(ForcedWetness);
     if (!Library || Library->Scenes.IsEmpty() || bTestMode)
     {
         UE_LOG(LogGratiaScenes, Display, TEXT("SCENES off (%s)"), bTestMode ? TEXT("test run") : TEXT("no scene library"));
@@ -259,6 +262,27 @@ void UGratiaSceneDirector::SetMusicVolume(float Volume)
     if (Music) Music->SetMasterVolume(Settings->MusicVolume);
     if (AGratiaPreviewCharacter* Character = GetCharacter())
         if (Character->PerformanceStage && bPlaylistOverride) Character->PerformanceStage->SetMusicVolumeScale(0.0f);
+}
+
+void UGratiaSceneDirector::SetWetness(float Wetness)
+{
+    if (!Settings) return;
+    Settings->Wetness = FMath::Clamp(FMath::IsFinite(Wetness) ? Wetness : 0.0f, 0.0f, 1.0f);
+}
+
+void UGratiaSceneDirector::UpdateWetness(float Delta)
+{
+    AGratiaPreviewCharacter* Character = GetCharacter();
+    if (!Character || !Character->CharacterMesh) return;
+    const FGratiaSceneEntry* Entry = State == EGratiaFlowState::Playing ? GetCurrentEntry() : nullptr;
+    const float Target = FMath::Max(Settings ? Settings->Wetness : 0.0f, Entry ? Entry->CharacterWetness : 0.0f);
+    // Exponential approach: getting wet is quick, drying slow.
+    const float Time = Target > ShownWetness ? WetSeconds : DrySeconds;
+    ShownWetness = FMath::Lerp(ShownWetness, Target, 1.0f - FMath::Exp(-FMath::Min(Delta, 0.1f) / FMath::Max(0.1f, Time)));
+    if (FMath::Abs(Target - ShownWetness) < 0.002f) ShownWetness = Target;
+    if (FMath::Abs(ShownWetness - AppliedWetness) < 0.002f) return;
+    AppliedWetness = ShownWetness;
+    Character->CharacterMesh->SetScalarParameterValueOnMaterials(TEXT("Wetness"), ShownWetness);
 }
 
 void UGratiaSceneDirector::SetHapticsScale(float Scale)
@@ -729,6 +753,7 @@ void UGratiaSceneDirector::TickComponent(float Delta, ELevelTick Type, FActorCom
     if (!FMath::IsFinite(Delta) || Delta < 0.0f) return;
     AGratiaStage1Runtime* Runtime = GetRuntime();
     AGratiaPreviewCharacter* Character = GetCharacter();
+    UpdateWetness(Delta);
     if (bPendingStart && Runtime && Runtime->bPawnReady && Runtime->GetPlayerCamera() && Character)
     {
         bPendingStart = false;

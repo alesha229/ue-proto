@@ -33,6 +33,11 @@ protected:
 private:
     bool bSmokeTest = false;
     bool bSoftBodyQA = false;
+    /** -GratiaArmView: desktop shots of both skinned player arms in front of the camera (open, half, fist, turned). */
+    bool bArmView = false;
+    float ArmViewSeconds = 0.0f;
+    int32 ArmViewShots = 0;
+    void RunArmView(float DeltaSeconds);
     bool bSelfTest = false;
     bool bTestChecksDone = false;
     bool bTestFailed = false;

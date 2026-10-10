@@ -97,6 +97,9 @@ struct GRATIAVR_API FGratiaSceneEntry
     /** Start in the partner's eyes (first-person view), as soon as the scene loads. */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Scene")
     bool bStartInPartnerView = false;
+    /** How wet the character is in this scene at least (rain: 0.6-1); the player's menu setting can raise it further. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Scene", meta = (ClampMin = "0", ClampMax = "1"))
+    float CharacterWetness = 0.0f;
     /** Places from the markers tagged GratiaCharacterSpot_<SpotVariant> / GratiaPlayerSpot_<SpotVariant> in Environment
      *  (a performance that needs more room than free play); None or missing markers: the default ones. */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Scene")
@@ -201,6 +204,8 @@ public:
     UPROPERTY() bool bHandPenetration = true;
     /** Forearms continue the hands toward the elbows. */
     UPROPERTY() bool bForearms = true;
+    /** The character's wetness, 0 dry .. 1 soaked (menu "Влажность"). */
+    UPROPERTY() float Wetness = 0.0f;
     UPROPERTY() FName LastScene;
     /** Playlist entry (analysis asset name) playing when the game was closed. */
     UPROPERTY() FName LastTrack;

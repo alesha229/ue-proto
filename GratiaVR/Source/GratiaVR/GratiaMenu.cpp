@@ -477,6 +477,7 @@ bool UGratiaMenu::IsActionAvailable(EGratiaMenuAction Action, int32 Param) const
     case EGratiaMenuAction::PartnerView: { FTransform Eye; return Character.IsValid() && Character->PerformanceStage && Character->PerformanceStage->GetViewpoint(Eye); }
     case EGratiaMenuAction::MusicDown: case EGratiaMenuAction::MusicUp: case EGratiaMenuAction::HapticsDown: case EGratiaMenuAction::HapticsUp:
     case EGratiaMenuAction::VoiceDown: case EGratiaMenuAction::VoiceUp: case EGratiaMenuAction::Captions: case EGratiaMenuAction::ResetSettings:
+    case EGratiaMenuAction::WetnessDown: case EGratiaMenuAction::WetnessUp:
         return Director && Director->GetUserSettings();
     case EGratiaMenuAction::TurnMode: case EGratiaMenuAction::WalkSpeed:
     {
@@ -559,6 +560,8 @@ void UGratiaMenu::Execute(EGratiaMenuAction Action, int32 Param)
     case EGratiaMenuAction::TurnMode: Director->SetComfort(Param, Director->GetUserSettings()->WalkSpeed); break;
     case EGratiaMenuAction::WalkSpeed: Director->SetComfort(Director->GetUserSettings()->TurnMode, Param); break;
     case EGratiaMenuAction::ResetSettings: Director->ResetUserSettings(); break;
+    case EGratiaMenuAction::WetnessDown: case EGratiaMenuAction::WetnessUp:
+        Director->SetWetness(Director->GetUserSettings()->Wetness + (Action == EGratiaMenuAction::WetnessUp ? 0.25f : -0.25f)); break;
     case EGratiaMenuAction::HandPenetration:
         if (Runtime) Runtime->bHandPenetration = !Runtime->bHandPenetration;
         if (Director) Director->SaveUserSettings();
@@ -619,6 +622,7 @@ FString UGratiaMenu::ValueFor(EGratiaMenuAction Action) const
     {
     case EGratiaMenuAction::MusicUp: return Settings ? Percent(Settings->MusicVolume) : TEXT("—");
     case EGratiaMenuAction::VoiceUp: return Settings ? Percent(Settings->VoiceVolume) : TEXT("—");
+    case EGratiaMenuAction::WetnessUp: return Settings ? Percent(Settings->Wetness) : TEXT("—");
     case EGratiaMenuAction::HapticsUp: return Settings ? Percent(Settings->HapticsScale) : TEXT("—");
     case EGratiaMenuAction::HeightUp: return Runtime ? FString::Printf(TEXT("%+.0f см"), Runtime->HeightOffsetCm) : TEXT("—");
     case EGratiaMenuAction::SpeedUp: return Character.IsValid() && Director && Director->IsPerformanceScene()

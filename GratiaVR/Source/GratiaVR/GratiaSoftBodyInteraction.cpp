@@ -329,25 +329,43 @@ void UGratiaSoftBodyInteraction::PushToAnimation(bool bReset)
     const FTransform Component = Character->CharacterMesh->GetComponentTransform();
     const double Scale = Component.GetScale3D().GetAbsMax();
     const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
-    for (const FHand& Hand : Hands)
+    // Each hand keeps its own collision slots (a hand that drops out never moves the other's spheres to new slots),
+    // and its spheres grow in and shrink away over a few frames: a sphere that appeared at full size inside hair or a
+    // soft part threw it out in one frame (the largest pops of the motion probe).
+    const float Step = GetWorld() ? FMath::Clamp(GetWorld()->GetDeltaSeconds(), 0.0f, 0.1f) : 0.0f;
+    const FVector4 Parked(0.0, 0.0, -1.0e6, 0.0);
+    Anim->SoftBodyInput.HandSpheres.Init(Parked, 2 * SoftSlotsPerHand);
+    Anim->SoftBodyInput.SpringHandSpheres.Init(Parked, 2);
+    for (int32 Side = 0; Side < 2; ++Side)
     {
-        if (!Hand.bReady || Now - Hand.SubmitTime > 0.1) continue;
-        auto Add = [&](const FVector& World, float RadiusCm)
-        {
-            const FVector Local = Component.InverseTransformPosition(World);
-            Anim->SoftBodyInput.HandSpheres.Emplace(Local.X, Local.Y, Local.Z, RadiusCm);
-        };
+        const FHand& Hand = Hands[Side];
         // Soft parts collide with reduced spheres (the surface yields first, then the whole part
         // swings); spring chains with the full hand. A hand that holds or squeezes a part does not
         // also push it: the grab pulled the part in while the spheres threw it out (shaking).
-        if (Hand.GrabBone.IsNone() && Hand.SqueezeBone.IsNone())
+        const bool bPushing = Hand.bReady && Now - Hand.SubmitTime <= 0.1 && Hand.GrabBone.IsNone() && Hand.SqueezeBone.IsNone();
+        FHandSpheres& Shown = ShownSpheres[Side];
+        if (bPushing)
         {
-            Add(Hand.Press, Settings.PalmRadiusCm);
-            for (const FVector& Finger : Hand.Fingers) Add(Finger, Settings.FingerRadiusCm);
-            const FVector Center = Component.InverseTransformPosition(SpringHandCenter(Hand.Press, Hand.Fingers));
-            Anim->SoftBodyInput.SpringHandSpheres.Emplace(Center.X, Center.Y, Center.Z, Character->CharacterProfile->SpringHandRadiusCm);
+            Shown.Soft.Reset();
+            Shown.Soft.Emplace(Hand.Press.X, Hand.Press.Y, Hand.Press.Z, Settings.PalmRadiusCm);
+            for (const FVector& Finger : Hand.Fingers)
+                if (Shown.Soft.Num() < SoftSlotsPerHand) Shown.Soft.Emplace(Finger.X, Finger.Y, Finger.Z, Settings.FingerRadiusCm);
+            const FVector Center = SpringHandCenter(Hand.Press, Hand.Fingers);
+            Shown.Spring = FVector4(Center.X, Center.Y, Center.Z, Character->CharacterProfile->SpringHandRadiusCm);
         }
-        if (Hand.GrabBone.IsNone()) continue;
+        Shown.Presence = bPushing ? FMath::Min(1.0f, Shown.Presence + Step / SphereGrowSeconds) : FMath::Max(0.0f, Shown.Presence - Step / SphereShrinkSeconds);
+        if (Shown.Presence > 0.0f)
+        {
+            const float Size = FMath::SmoothStep(0.0f, 1.0f, Shown.Presence);
+            auto Local = [&](const FVector4& Sphere)
+            {
+                const FVector Point = Component.InverseTransformPosition(FVector(Sphere.X, Sphere.Y, Sphere.Z));
+                return FVector4(Point.X, Point.Y, Point.Z, Sphere.W * Size);
+            };
+            for (int32 Index = 0; Index < Shown.Soft.Num(); ++Index) Anim->SoftBodyInput.HandSpheres[Side * SoftSlotsPerHand + Index] = Local(Shown.Soft[Index]);
+            Anim->SoftBodyInput.SpringHandSpheres[Side] = Local(Shown.Spring);
+        }
+        if (!Hand.bReady || Now - Hand.SubmitTime > 0.1 || Hand.GrabBone.IsNone()) continue;
         if (Hand.GrabSpringChain != INDEX_NONE)
         {
             if (!Character->CharacterProfile->SpringChains.IsValidIndex(Hand.GrabSpringChain)) continue;

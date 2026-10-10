@@ -42,7 +42,7 @@ public:
     /** Nearest surface within MaxGapCm of Point (gap measured to the surface). Grip queries
      *  skip parts that are not grip targets (head, neck, soft parts). */
     bool FindNearest(const FVector& Point, float MaxGapCm, FGratiaSurfaceHit& Out, bool bIncludeSoftZones = true, bool bGripTargetsOnly = false) const;
-    /** Capsule hit for a named bone (QA and diagnostics). */
+    /** Surface hit on a named bone (its capsules, or its soft zone sphere): a held cup and QA. */
     bool FindOnBone(FName Bone, const FVector& Point, FGratiaSurfaceHit& Out) const;
     /** World segment and radius of a bone's capsule. */
     bool GetBoneCapsule(FName Bone, FVector& A, FVector& B, float& Radius) const;

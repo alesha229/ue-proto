@@ -50,6 +50,7 @@ void UGratiaUserSettings::Sanitize()
     VoiceVolume = FMath::Clamp(FMath::IsFinite(VoiceVolume) ? VoiceVolume : 1.0f, 0.0f, 1.0f);
     TurnMode = FMath::Clamp(TurnMode, 0, 2);
     WalkSpeed = FMath::Clamp(WalkSpeed, 0, 2);
+    Wetness = FMath::Clamp(FMath::IsFinite(Wetness) ? Wetness : 0.0f, 0.0f, 1.0f);
 }
 
 bool UGratiaUserSettings::Save()

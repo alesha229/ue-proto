@@ -16,6 +16,7 @@
 #include "GratiaContactSolver.h"
 #include "GratiaAnimInstance.h"
 #include "GratiaHandInput.h"
+#include "GratiaHandAnimInstance.h"
 #include "Animation/AnimSequence.h"
 #include "Animation/AnimSingleNodeInstance.h"
 #include "Animation/MorphTarget.h"
@@ -75,6 +76,7 @@ void UGratiaRuntimeVerification::ConfigureFromCommandLine()
 {
     bSmokeTest = FParse::Param(FCommandLine::Get(), TEXT("GratiaSmokeTest"));
     bSoftBodyQA = FParse::Param(FCommandLine::Get(), TEXT("GratiaSoftBodyQA"));
+    bArmView = FParse::Param(FCommandLine::Get(), TEXT("GratiaArmView"));
     bSelfTest = FParse::Param(FCommandLine::Get(), TEXT("GratiaSelfTest"));
     bReactionQAEnabled = FParse::Value(FCommandLine::Get(), TEXT("GratiaReactionZone="), ReactionQAZone);
     FParse::Value(FCommandLine::Get(), TEXT("GratiaExpectedReactionClip="), ReactionQAExpectedClip);
@@ -105,6 +107,7 @@ void UGratiaRuntimeVerification::ConfigureCaptureView()
     if (View == TEXT("Left")) Eye = FVector(0, -250, 125);
     if (View == TEXT("Right")) Eye = FVector(0, 250, 125);
     if (View == TEXT("Face")) { Eye = FVector(-100, 0, 170); Target = FVector(0, 0, 169); }
+    if (View == TEXT("Chest")) { Eye = FVector(-95, -25, 128); Target = FVector(0, 0, 118); }
     // Scene: elevated three-quarter view in the character's frame (its performance partner lies in front).
     if (View == TEXT("Scene"))
     {
@@ -114,7 +117,7 @@ void UGratiaRuntimeVerification::ConfigureCaptureView()
     ACameraActor* CaptureView = GetWorld()->SpawnActor<ACameraActor>(Eye, (Target - Eye).Rotation());
     if (CaptureView)
     {
-        CaptureView->GetCameraComponent()->FieldOfView = View == TEXT("Face") ? 35.0f : 80.0f;
+        CaptureView->GetCameraComponent()->FieldOfView = View == TEXT("Face") || View == TEXT("Chest") ? 35.0f : 80.0f;
         Runtime.PlayerController->SetViewTarget(CaptureView);
     }
 }
@@ -970,9 +973,53 @@ void UGratiaRuntimeVerification::FinishReactionResourceQA()
     FPlatformMisc::RequestExitWithStatus(false, bTestFailed ? 1 : 0, TEXT("GratiaReactionResourceQA"));
 }
 
+void UGratiaRuntimeVerification::RunArmView(float DeltaSeconds)
+{
+    AGratiaStage1Runtime& Runtime = GetRuntime();
+    if (!Runtime.Camera.IsValid() || !FMath::IsFinite(DeltaSeconds)) return;
+    ArmViewSeconds += DeltaSeconds;
+    // Four poses, 2.5 s each after a 6 s settle: open, half curl, fist, palm turned up.
+    const int32 Stage = FMath::FloorToInt(FMath::Max(0.0f, ArmViewSeconds - 6.0f) / 2.5f);
+    if (Stage >= 4)
+    {
+        FPlatformMisc::RequestExitWithStatus(false, 0, TEXT("GratiaArmView"));
+        return;
+    }
+    const FTransform Eye = Runtime.Camera->GetComponentTransform();
+    const FVector Ahead = Eye.GetRotation().GetForwardVector(), Right = Eye.GetRotation().GetRightVector(), Up = Eye.GetRotation().GetUpVector();
+    const float Curl = Stage == 1 ? 0.5f : Stage == 2 ? 1.0f : 0.0f;
+    for (int32 Side = 0; Side < 2; ++Side)
+    {
+        const bool bLeft = Side == 0;
+        AGratiaStage1Runtime::FHandProxy& Hand = bLeft ? Runtime.LeftHand : Runtime.RightHand;
+        auto* XRHand = Cast<USkeletalMeshComponent>(Hand.Visual.Get());
+        if (!XRHand || !Hand.HandAnim.IsValid()) continue;
+        if (!Hand.bArmTried) Runtime.CreateArm(Hand, bLeft);
+        if (!Hand.Arm.IsValid()) continue;
+        // A controller held forward and a little inward, below the eyes; turned palm up in the last pose.
+        const FVector Grip = Eye.GetLocation() + Ahead * 38.0 + Right * (bLeft ? -14.0 : 14.0) - Up * 16.0;
+        FQuat Controller = FRotationMatrix::MakeFromXZ(Ahead, Up).ToQuat();
+        if (Stage == 3) Controller = FQuat(Ahead, FMath::DegreesToRadians(bLeft ? 90.0 : -90.0)) * Controller;
+        XRHand->SetWorldTransform(Hand.OriginalRelative * FTransform(Controller, Grip), false, nullptr, ETeleportType::TeleportPhysics);
+        for (int32 Finger = 0; Finger < UGratiaHandAnimInstance::NumFingers; ++Finger) Hand.HandAnim->FingerInput[Finger] = Curl;
+        XRHand->SetRenderInMainPass(false);
+        XRHand->SetRenderInDepthPass(false);
+        Hand.Arm->SetVisibility(true);
+        Runtime.PoseArm(Hand, (-Ahead - Up * 0.45 + Right * (bLeft ? -0.3 : 0.3)).GetSafeNormal());
+    }
+    if (ArmViewShots == Stage && ArmViewSeconds - 6.0f - Stage * 2.5f > 1.8f)
+    {
+        static const TCHAR* Names[] = {TEXT("Open"), TEXT("Half"), TEXT("Fist"), TEXT("Turned")};
+        FScreenshotRequest::RequestScreenshot(FPaths::Combine(FPaths::ProjectSavedDir(), FString::Printf(TEXT("Screenshots/ArmView/Arm_%s.png"), Names[Stage])), false, false);
+        UE_LOG(LogGratiaVerification, Display, TEXT("ARM_VIEW shot %s"), Names[Stage]);
+        ++ArmViewShots;
+    }
+}
+
 void UGratiaRuntimeVerification::RunRequestedTests(float DeltaSeconds)
 {
     AGratiaStage1Runtime& Runtime = GetRuntime();
+    if (bArmView) RunArmView(DeltaSeconds);
     if (bReactionQAEnabled)
     {
         RunReactionResourceQA(DeltaSeconds);

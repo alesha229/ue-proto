@@ -68,6 +68,30 @@ public:
      *  listener's head. Empty: BeginPlay creates a spatialized sphere (30 cm inner, 12 m falloff). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction|Presentation")
     TObjectPtr<USoundAttenuation> ReactionAttenuation;
+    /**
+     * Plays a voice sound (a reaction, a breath, a sigh) from the character's mouth, binaural (HRTF), with the same
+     * near-field warmth, distance dryness and occlusion as the reaction lines. Stops the previous voice sound.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Interaction|Presentation")
+    UAudioComponent* PlayMouthSound(USoundBase* Sound, float Volume = 1.0f);
+    /** World position of the mouth (head bone plus the profile's VoiceMouthOffsetCm); the actor location without a head. */
+    FVector GetMouthLocation() const;
+    /** Proximity effect: within NearFieldCm of the listener a low-passed copy of the voice adds up to NearFieldBassGain
+     *  (at NearFieldFullCm and closer): the warmer, fuller sound of a voice right at the ear. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction|Presentation|Voice", meta = (Units = "cm"))
+    float NearFieldCm = 60.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction|Presentation|Voice", meta = (Units = "cm"))
+    float NearFieldFullCm = 12.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction|Presentation|Voice", meta = (ClampMin = "0", ClampMax = "2"))
+    float NearFieldBassGain = 0.9f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction|Presentation|Voice", meta = (ClampMin = "60", ClampMax = "1000", Units = "Hz"))
+    float NearFieldBassHz = 280.0f;
+    /** Something solid between the listener and the mouth (a wall, furniture; not the character or the player's hands)
+     *  darkens and quiets the voice. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction|Presentation|Voice", meta = (ClampMin = "200", Units = "Hz"))
+    float OccludedLowPassHz = 1400.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction|Presentation|Voice", meta = (ClampMin = "0", ClampMax = "1"))
+    float OccludedVolume = 0.55f;
 
 protected:
     virtual void BeginPlay() override;
@@ -79,6 +103,17 @@ private:
     UPROPERTY(Transient) TObjectPtr<UWidgetComponent> Bubble;
     UPROPERTY(Transient) TObjectPtr<UGratiaBubbleWidget> BubbleWidget;
     UPROPERTY(Transient) TObjectPtr<UAudioComponent> ActiveAudio;
+    /** The low-passed copy of the active voice (near field). */
+    UPROPERTY(Transient) TObjectPtr<UAudioComponent> NearAudio;
+    UPROPERTY(Transient) TObjectPtr<USoundAttenuation> NearAttenuation;
+    float ActiveVolume = 1.0f, Occlusion = 0.0f, OcclusionTarget = 0.0f;
+    double NextOcclusionTrace = 0.0;
+    /** The mouth in the head bone's frame (rotation only), computed from the reference pose. */
+    FVector MouthInHead = FVector::ZeroVector;
+    FName MouthHead;
+    TWeakObjectPtr<UGratiaCharacterProfile> MouthProfile;
+    /** Follows the mouth, sets the near-field layer and the occlusion of the playing voice. */
+    void UpdateVoice(float DeltaSeconds);
     TWeakObjectPtr<AGratiaPreviewCharacter> Character;
     TWeakObjectPtr<UGratiaInteraction> Source;
     TWeakObjectPtr<UGratiaCharacterProfile> PresentedProfile;

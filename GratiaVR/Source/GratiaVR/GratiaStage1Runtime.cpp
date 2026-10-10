@@ -20,6 +20,7 @@
 #include "GratiaPenetration.h"
 #include "GratiaPenetrator.h"
 #include "GratiaChannelShots.h"
+#include "GratiaMotionProbe.h"
 
 #include "Camera/CameraComponent.h"
 #include "Components/PrimitiveComponent.h"
@@ -28,6 +29,8 @@
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInterface.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/PoseableMeshComponent.h"
+#include "Engine/SkeletalMesh.h"
 #include "Components/TextRenderComponent.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
@@ -116,6 +119,12 @@ void AGratiaStage1Runtime::BeginPlay()
         UGratiaChannelShots* Shots = NewObject<UGratiaChannelShots>(this, TEXT("GratiaChannelShots"));
         AddInstanceComponent(Shots);
         Shots->RegisterComponent();
+    }
+    if (FParse::Param(FCommandLine::Get(), TEXT("GratiaMotionProbe")))
+    {
+        UGratiaMotionProbe* Probe = NewObject<UGratiaMotionProbe>(this, TEXT("GratiaMotionProbe"));
+        AddInstanceComponent(Probe);
+        Probe->RegisterComponent();
     }
     UE_LOG(LogGratiaStage1, Display, TEXT("BUILD id=%s commit=%s"), TEXT(GRATIA_BUILD_ID), TEXT(GRATIA_BUILD_COMMIT));
     UE_LOG(LogGratiaStage1, Display, TEXT("Stage 1 runtime started. R=recenter, PgUp/PgDn=height, Home=reset height, F1=debug, F6=primitive on/off, F7=primitive size, F5=primitive form, F8/F9=toggle forced left/right tracking loss."));
@@ -370,7 +379,16 @@ void AGratiaStage1Runtime::UpdateForearm(FHandProxy& Hand, bool bLeft)
     FGratiaPalmFrame Palm;
     const bool bShown = bShowForearms && Hand.Visual.IsValid() && Hand.Visual->IsVisible() && Hand.HandAnim.IsValid()
         && Hand.HandAnim->GetPalmFrame(Palm) && Camera.IsValid() && Hand.Gate.State != EGratiaHandState::Unavailable;
-    if (!Hand.Forearm.IsValid() && bShown)
+    if (bShown && !Hand.bArmTried) CreateArm(Hand, bLeft);
+    // The skinned arm replaces the drawn XR hand and the shapes; the XR hand keeps animating and colliding unseen.
+    const bool bArm = bShown && Hand.Arm.IsValid();
+    if (Hand.Arm.IsValid()) Hand.Arm->SetVisibility(bArm);
+    if (auto* HandMesh = Cast<UPrimitiveComponent>(Hand.Visual.Get()); HandMesh && Hand.Arm.IsValid())
+    {
+        HandMesh->SetRenderInMainPass(!bArm);
+        HandMesh->SetRenderInDepthPass(!bArm);
+    }
+    if (!Hand.Forearm.IsValid() && bShown && !bArm)
     {
         UStaticMesh* Cylinder = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
         UStaticMesh* Sphere = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere"));
@@ -393,10 +411,9 @@ void AGratiaStage1Runtime::UpdateForearm(FHandProxy& Hand, bool bLeft)
         Hand.Forearm = Make(Cylinder, bLeft ? TEXT("ForearmLeft") : TEXT("ForearmRight"));
         Hand.WristJoint = Make(Sphere, bLeft ? TEXT("WristLeft") : TEXT("WristRight"));
     }
-    if (!Hand.Forearm.IsValid() || !Hand.WristJoint.IsValid()) return;
-    Hand.Forearm->SetVisibility(bShown);
-    Hand.WristJoint->SetVisibility(bShown);
-    if (!bShown) return;
+    if (Hand.Forearm.IsValid()) Hand.Forearm->SetVisibility(bShown && !bArm);
+    if (Hand.WristJoint.IsValid()) Hand.WristJoint->SetVisibility(bShown && !bArm);
+    if (!bShown || (!bArm && (!Hand.Forearm.IsValid() || !Hand.WristJoint.IsValid()))) return;
     const FTransform Visual = Hand.Visual->GetComponentTransform();
     const double Scale = FMath::Max(0.1, double(Visual.GetScale3D().GetAbsMax()));
     const FVector Back = -Visual.TransformVectorNoScale(Palm.Finger).GetSafeNormal();
@@ -419,10 +436,95 @@ void AGratiaStage1Runtime::UpdateForearm(FHandProxy& Hand, bool bLeft)
     const double Bent = FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(FVector::DotProduct(Direction, Back), -1.0, 1.0)));
     if (Hand.bInChannel || Direction.IsNearlyZero()) Direction = Back;
     else if (Bent > 60.0) Direction = FQuat::Slerp(FQuat::Identity, FQuat::FindBetweenNormals(Back, Direction), 60.0 / Bent).RotateVector(Back);
+    if (bArm) { PoseArm(Hand, Direction); return; }
     const double Radius = ForearmRadiusCm * Scale, Length = Lower * Scale;
     Hand.Forearm->SetWorldTransform(FTransform(FRotationMatrix::MakeFromZ(Direction).ToQuat(), Wrist + Direction * (0.5 * Length),
         FVector(Radius / 50.0, Radius / 50.0, Length / 100.0)));
     Hand.WristJoint->SetWorldTransform(FTransform(FQuat::Identity, Wrist, FVector(Radius * 0.95 / 50.0)));
+}
+
+bool AGratiaStage1Runtime::CreateArm(FHandProxy& Hand, bool bLeft)
+{
+    Hand.bArmTried = true;
+    const USkeletalMeshComponent* XRHand = Cast<USkeletalMeshComponent>(Hand.Visual.Get());
+    const TSoftObjectPtr<USkeletalMesh>& Source = bLeft ? PlayerArmLeft : PlayerArmRight;
+    USkeletalMesh* Mesh = Source.LoadSynchronous();
+    if (!XRHand || !XRHand->GetSkeletalMeshAsset() || !Mesh)
+    {
+        UE_LOG(LogGratiaStage1, Display, TEXT("PLAYER_ARM %s unavailable (mesh %s); shapes on the XR hand"), bLeft ? TEXT("left") : TEXT("right"),
+            *Source.ToString());
+        return false;
+    }
+    const TCHAR* Side = bLeft ? TEXT("_l") : TEXT("_r");
+    const FReferenceSkeleton& ArmRef = Mesh->GetRefSkeleton();
+    const FReferenceSkeleton& HandRef = XRHand->GetSkeletalMeshAsset()->GetRefSkeleton();
+    Hand.ArmForearm = FName(FString(TEXT("lowerarm")) + Side);
+    Hand.ArmHand = FName(FString(TEXT("hand")) + Side);
+    const int32 Forearm = ArmRef.FindBoneIndex(Hand.ArmForearm), Wrist = ArmRef.FindBoneIndex(Hand.ArmHand);
+    if (Forearm == INDEX_NONE || Wrist == INDEX_NONE || HandRef.FindBoneIndex(Hand.ArmHand) == INDEX_NONE)
+    {
+        UE_LOG(LogGratiaStage1, Warning, TEXT("PLAYER_ARM %s: %s or %s missing on %s / %s"), bLeft ? TEXT("left") : TEXT("right"), *Hand.ArmForearm.ToString(),
+            *Hand.ArmHand.ToString(), *Mesh->GetName(), *XRHand->GetSkeletalMeshAsset()->GetName());
+        return false;
+    }
+    auto RefCS = [&ArmRef](int32 Index)
+    {
+        FTransform Result = ArmRef.GetRefBonePose()[Index];
+        for (int32 Parent = ArmRef.GetParentIndex(Index); Parent != INDEX_NONE; Parent = ArmRef.GetParentIndex(Parent)) Result *= ArmRef.GetRefBonePose()[Parent];
+        return Result;
+    };
+    const FTransform ForearmRef = RefCS(Forearm), HandRefCS = RefCS(Wrist);
+    Hand.ArmForearmRefDir = (HandRefCS.GetLocation() - ForearmRef.GetLocation()).GetSafeNormal();
+    Hand.ArmForearmRefLength = FVector::Distance(HandRefCS.GetLocation(), ForearmRef.GetLocation());
+    Hand.ArmForearmRef = ForearmRef.GetRotation();
+    Hand.ArmHandRef = HandRefCS.GetRotation();
+    // Bones below the wrist that both skeletons have (fingers, palm), in the arm's skeleton order (parents first).
+    Hand.ArmHandBones.Reset();
+    for (int32 Index = Wrist + 1; Index < ArmRef.GetNum(); ++Index)
+    {
+        int32 Parent = ArmRef.GetParentIndex(Index);
+        while (Parent != INDEX_NONE && Parent != Wrist) Parent = ArmRef.GetParentIndex(Parent);
+        if (Parent == Wrist && HandRef.FindBoneIndex(ArmRef.GetBoneName(Index)) != INDEX_NONE) Hand.ArmHandBones.Add(ArmRef.GetBoneName(Index));
+    }
+    UPoseableMeshComponent* Arm = NewObject<UPoseableMeshComponent>(this, bLeft ? TEXT("PlayerArmLeft") : TEXT("PlayerArmRight"));
+    AddInstanceComponent(Arm);
+    Arm->SetupAttachment(GetRootComponent());
+    Arm->SetSkinnedAssetAndUpdate(Mesh);
+    if (UMaterialInterface* Skin = PlayerSkinMaterial.LoadSynchronous())
+        for (int32 Slot = 0; Slot < Arm->GetNumMaterials(); ++Slot) Arm->SetMaterial(Slot, Skin);
+    Arm->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    Arm->SetCastShadow(false);
+    Arm->SetAbsolute(true, true, true);
+    // Only LOD 0 is cut out; the template's other LODs still hold the whole body.
+    Arm->SetForcedLOD(1);
+    Arm->RegisterComponent();
+    // The XR hand is no longer drawn; its pose must keep updating for the arm and the finger contacts.
+    if (auto* Animated = Cast<USkeletalMeshComponent>(Hand.Visual.Get())) Animated->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+    Hand.Arm = Arm;
+    UE_LOG(LogGratiaStage1, Display, TEXT("PLAYER_ARM %s mesh=%s hand_bones=%d forearm=%.1fcm"), bLeft ? TEXT("left") : TEXT("right"), *Mesh->GetName(),
+        Hand.ArmHandBones.Num(), Hand.ArmForearmRefLength);
+    return true;
+}
+
+void AGratiaStage1Runtime::PoseArm(FHandProxy& Hand, const FVector& TowardElbow)
+{
+    UPoseableMeshComponent* Arm = Hand.Arm.Get();
+    const USkeletalMeshComponent* XRHand = Cast<USkeletalMeshComponent>(Hand.Visual.Get());
+    if (!Arm || !XRHand) return;
+    const FTransform Wrist = XRHand->GetSocketTransform(Hand.ArmHand, RTS_World);
+    if (Wrist.ContainsNaN()) return;
+    const double Scale = FMath::Max(0.1, double(XRHand->GetComponentTransform().GetScale3D().GetAbsMax()));
+    // The forearm turns with the hand's roll (pronation), then swings to point from the elbow at the wrist.
+    const FQuat HandTurn = Wrist.GetRotation() * Hand.ArmHandRef.Inverse();
+    const FVector Along = -TowardElbow.GetSafeNormal();
+    const FQuat Forearm = (FQuat::FindBetweenNormals(HandTurn.RotateVector(Hand.ArmForearmRefDir), Along) * HandTurn * Hand.ArmForearmRef).GetNormalized();
+    const FVector Elbow = Wrist.GetLocation() - Along * Hand.ArmForearmRefLength * Scale;
+    Arm->SetWorldScale3D(FVector(Scale));
+    Arm->SetBoneTransformByName(Hand.ArmForearm, FTransform(Forearm, Elbow, FVector::OneVector), EBoneSpaces::WorldSpace);
+    Arm->SetBoneTransformByName(Hand.ArmHand, FTransform(Wrist.GetRotation(), Wrist.GetLocation(), FVector::OneVector), EBoneSpaces::WorldSpace);
+    // Same-named UE5 mannequin bones share their local axes: the fingers take the XR hand's rotations as they are.
+    for (const FName Bone : Hand.ArmHandBones)
+        Arm->SetBoneRotationByName(Bone, XRHand->GetSocketQuaternion(Bone).Rotator(), EBoneSpaces::WorldSpace);
 }
 
 void AGratiaStage1Runtime::Tick(float DeltaSeconds)
@@ -1060,8 +1162,12 @@ FTransform AGratiaStage1Runtime::ApplyBodySurface(FHandProxy& Hand, bool bLeft, 
     // fingers sink deeper the harder the trigger is pressed. The hand follows the controller and
     // the soft part follows the hand (soft-body grab), so it is not pinned to the bone.
     const float Squeeze = FMath::Max(Grip, HandInput ? HandInput->GetTrigger(bLeft) : 0.0f);
-    if (Squeeze >= Settings.CupStartInput
-        && Surface->FindNearest(PalmPoint, Settings.GripReachCm + Settings.PalmThicknessCm, Hit, true) && Hit.bSoftZone)
+    // A held cup stays on its part (it never jumps to a neighbouring one) until the squeeze is released or the hand is
+    // pulled well away; a new cup takes the nearest soft part.
+    const bool bCup = !WasCupping.IsNone() && Squeeze >= FMath::Min(Settings.CupReleaseInput, Settings.CupStartInput)
+        ? Surface->FindOnBone(WasCupping, PalmPoint, Hit) && Hit.Gap <= Settings.GripReachCm + Settings.PalmThicknessCm + Settings.CupHoldMarginCm
+        : Squeeze >= Settings.CupStartInput && Surface->FindNearest(PalmPoint, Settings.GripReachCm + Settings.PalmThicknessCm, Hit, true) && Hit.bSoftZone;
+    if (bCup)
     {
         TArray<FVector4> NearSpheres;
         TArray<FGratiaConformCapsule> NearCapsules;

@@ -27,7 +27,8 @@ enum class EGratiaMenuAction : uint8
     TrackPrev, TrackNext,
     Primitive, PrimitiveSize, PrimitiveForm,
     Captions, VoiceDown, VoiceUp, TurnMode, WalkSpeed, ResetSettings,
-    HandPenetration, Forearms
+    HandPenetration, Forearms,
+    WetnessDown, WetnessUp
 };
 
 /** Click/hover target of one button (dynamic delegates need a UFUNCTION). */

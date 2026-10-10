@@ -530,6 +530,13 @@ struct GRATIAVR_API FGratiaHandSurfaceSettings
     /** Trigger/grip at which the hand cups a soft part; squeeze depth follows the input above it. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Surface", meta = (ClampMin = "0.01", ClampMax = "1"))
     float CupStartInput = 0.15f;
+    /** A cupping hand keeps cupping down to this input (below CupStartInput, so it never flickers at the threshold). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Surface", meta = (ClampMin = "0", ClampMax = "1"))
+    float CupReleaseInput = 0.07f;
+    /** While held, a cup stays on the part it started on (never moves on to a neighbouring part) as long as the palm is
+     *  within GripReachCm plus this of it. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Surface", meta = (ClampMin = "0", ClampMax = "30", Units = "cm"))
+    float CupHoldMarginCm = 6.0f;
     /** The wrapped hand lets go when the controller moves this far from it. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Surface", meta = (ClampMin = "2", ClampMax = "60", Units = "cm"))
     float GripBreakDistanceCm = 18.0f;
@@ -929,6 +936,10 @@ public:
     /** Speech bubble and voice per reaction (FGratiaReactionLine). Empty: zone sounds and no bubble. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Presentation|Lines", meta = (TitleProperty = "Text"))
     TArray<FGratiaReactionLine> ReactionLines;
+    /** Where the voice comes from: this far from the Head semantic bone in the character's frame at the reference pose
+     *  (X forward, Y right, Z up, cm); it turns and moves with the head. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Presentation|Sound", meta = (Units = "cm"))
+    FVector VoiceMouthOffsetCm = FVector(9.0, 0.0, 4.0);
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mapping")
     TMap<FName, FName> SemanticBones;

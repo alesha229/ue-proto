@@ -75,6 +75,14 @@ public:
     void SaveUserSettings();
     void SetMusicVolume(float Volume);
     void SetHapticsScale(float Scale);
+    /** The player's wetness setting (0..1); the character gets wet over WetSeconds and dries over DrySeconds. */
+    void SetWetness(float Wetness);
+    /** Wetness on the character's materials now (the setting or the scene's, whichever is higher, eased). */
+    float GetShownWetness() const { return ShownWetness; }
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wetness", meta = (ClampMin = "0.1", Units = "s"))
+    float WetSeconds = 2.5f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wetness", meta = (ClampMin = "0.1", Units = "s"))
+    float DrySeconds = 25.0f;
     /** Reaction voice volume 0..1 (the character's voice lines). */
     void SetVoiceVolume(float Volume);
     /** Reaction lines in a speech bubble by the head. */
@@ -141,6 +149,9 @@ private:
 
     EGratiaFlowState State = EGratiaFlowState::Off;
     int32 Current = INDEX_NONE, Pending = INDEX_NONE;
+    float ShownWetness = 0.0f, AppliedWetness = -1.0f;
+    /** Eases the character's wetness toward the setting/scene and writes the material parameter "Wetness". */
+    void UpdateWetness(float Delta);
     float StateSeconds = 0.0f;
     bool bPendingStart = false, bTestMode = false, bFlowQA = false, bMenuShots = false;
     /** -GratiaScene=<Id>: start straight in this scene (performance and soak runs in a real environment). */

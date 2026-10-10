@@ -119,6 +119,18 @@ private:
     TArray<TPair<int32, FVector>> ColliderOffsets; // bone index, bone-space centre
     TArray<float> ColliderRadii;
     FHand Hands[2];
+    /** Collision spheres a hand last showed the animation (world space), and how far they have grown in (0..1). */
+    struct FHandSpheres
+    {
+        TArray<FVector4> Soft;
+        FVector4 Spring = FVector4(0.0, 0.0, -1.0e6, 0.0);
+        float Presence = 0.0f;
+    };
+    FHandSpheres ShownSpheres[2];
+    /** Palm and finger spheres per hand (the animation has 24 soft slots: half per hand). */
+    static constexpr int32 SoftSlotsPerHand = 12;
+    static constexpr float SphereGrowSeconds = 0.12f;
+    static constexpr float SphereShrinkSeconds = 0.08f;
     bool bWasEnabled = false;
     bool bFault = false;
     FString FaultReason;

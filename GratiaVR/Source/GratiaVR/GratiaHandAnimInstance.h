@@ -48,7 +48,7 @@ public:
      *  wide surface; the thumb goes past its extended pose into the palm plane. */
     static float Extension(int32 Finger) { return Finger == 0 ? 1.0f : 0.4f; }
     /** Curl value of conform sample K (sample 0 is the most extended). */
-    static float CurlAt(int32 Finger, int32 K) { return -Extension(Finger) + (1.0f + Extension(Finger)) * float(K) / NumSamples; }
+    static float CurlAt(int32 Finger, float K) { return -Extension(Finger) + (1.0f + Extension(Finger)) * K / NumSamples; }
 
     UPROPERTY(Transient) TObjectPtr<UAnimSequence> OpenPose;
     UPROPERTY(Transient) TObjectPtr<UAnimSequence> ClosedPose;
@@ -75,6 +75,9 @@ public:
     /** Current (smoothed) curl and the surface cap of every finger (may be negative: straightened). */
     float FingerAlpha[NumFingers] = {0, 0, 0, 0, 0};
     float FingerCap[NumFingers] = {1, 1, 1, 1, 1};
+    /** Curl rate (per second) and the cap as the fingers follow it (it drops within a few frames, rises gently). */
+    float FingerVelocity[NumFingers] = {0, 0, 0, 0, 0};
+    float FingerCapShown[NumFingers] = {1, 1, 1, 1, 1};
 
     /** Loads the XR template hand poses (right-hand authored; left mirrors). Editable
      *  per project by assigning OpenPose/ClosedPose/MirrorTable before play. */

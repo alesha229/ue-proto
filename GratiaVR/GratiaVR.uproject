@@ -77,6 +77,10 @@
 			"TargetAllowList": [
 				"Editor"
 			]
+		},
+		{
+			"Name": "ResonanceAudio",
+			"Enabled": true
 		}
 	],
 	"TargetPlatforms": [
