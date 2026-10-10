@@ -27,9 +27,13 @@ struct GRATIAVR_API FGratiaFaceSettings
     /** Swap LookLeft and LookRight if the model's "left" means the viewer's left. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Face|Eyes")
     bool bMirrorLookMorphs = false;
-    /** Saccades between the viewer's eyes and mouth: seconds between jumps (2-3 per second). */
+    /** Saccades between the viewer's eyes and mouth in eye contact: fixation time (2-3 jumps per second). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Face|Eyes", meta = (ClampMin = "0.1", Units = "s"))
-    FVector2D SaccadeIntervalSeconds = FVector2D(0.33, 0.5);
+    FVector2D SaccadeIntervalSeconds = FVector2D(0.3, 0.6);
+    /** In eye contact a saccade moves the eyes at most this far from the line to the viewer's face: micro-shifts between
+     *  the eyes and mouth (1-3 degrees of eye rotation; the Look morphs move by this / FullEyeYawDegrees). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Face|Eyes", meta = (ClampMin = "0", ClampMax = "15", Units = "deg"))
+    float ContactSaccadeMaxDegrees = 2.5f;
     /** Share of jumps from an eye that go to the mouth. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Face|Eyes", meta = (ClampMin = "0", ClampMax = "1"))
     float MouthFixationShare = 0.25f;
@@ -88,6 +92,27 @@ struct GRATIAVR_API FGratiaFaceSettings
     float ShyReturnSeconds = 1.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Face|Aversion", meta = (Units = "s"))
     float AversionCooldownSeconds = 2.5f;
+    /** Flustered darting: while she is embarrassed (looking away, the shy return, a reserved/tsundere archetype, a fast
+     *  approach) the eyes jump from one extreme to the other instead of resting; it fades as eye contact returns. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Face|Fluster")
+    bool bFlusteredDarting = true;
+    /** Darting jumps: yaw between -X and +X degrees (around the look-away side while averting), pitch around Y. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Face|Fluster")
+    FVector2D FlusterDartDegrees = FVector2D(22.0, -8.0);
+    /** Random pitch spread of each dart, degrees. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Face|Fluster", meta = (ClampMin = "0", Units = "deg"))
+    float FlusterDartPitchSpreadDegrees = 6.0f;
+    /** Time between darts (faster than the contact saccades). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Face|Fluster", meta = (ClampMin = "0.05", Units = "s"))
+    FVector2D FlusterIntervalSeconds = FVector2D(0.12, 0.22);
+    /** Body-motion GazeAversion (archetype) above this keeps her flustered. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Face|Fluster", meta = (ClampMin = "0", ClampMax = "1"))
+    float FlusterArchetypeThreshold = 0.3f;
+    /** Fluster rises to 1 this fast, and fades back to calm contact this slowly once nothing keeps it up. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Face|Fluster", meta = (ClampMin = "0.01", Units = "s"))
+    float FlusterRiseSeconds = 0.15f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Face|Fluster", meta = (ClampMin = "0.01", Units = "s"))
+    float FlusterFadeSeconds = 1.2f;
 
     // ------------------------------------------------------------------ lids
     /** Spontaneous blink interval range. */

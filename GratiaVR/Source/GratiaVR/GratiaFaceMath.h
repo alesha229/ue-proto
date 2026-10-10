@@ -190,6 +190,25 @@ inline float ReflexUrgency(float DistanceCm, float SpeedCmPerSecond, float Radiu
     return FMath::Clamp(0.4f + 0.6f * FMath::Max(Near, Fast), 0.0f, 1.0f);
 }
 
+/** Eye contact saccade: the fixation's direction (yaw/pitch, degrees) kept within MaxDegrees of the direction to the
+ *  viewer's face centre, so a jump between the viewer's eyes and mouth is a micro-shift. */
+inline void LimitSaccade(float CentreYaw, float CentrePitch, float MaxDegrees, float& Yaw, float& Pitch)
+{
+    if (!FMath::IsFinite(Yaw) || !FMath::IsFinite(Pitch)) { Yaw = CentreYaw; Pitch = CentrePitch; return; }
+    const FVector2D Offset(Yaw - CentreYaw, Pitch - CentrePitch);
+    const FVector2D Limited = Offset.GetSafeNormal() * FMath::Min(Offset.Size(), double(FMath::Max(0.0f, MaxDegrees)));
+    Yaw = CentreYaw + float(Limited.X);
+    Pitch = CentrePitch + float(Limited.Y);
+}
+
+/** Fluster level: rises to 1 in RiseSeconds while a cause holds, falls to 0 in FadeSeconds after it. */
+inline float StepFluster(float Fluster, bool bCause, float RiseSeconds, float FadeSeconds, float Dt)
+{
+    const float Step = FMath::IsFinite(Dt) ? FMath::Max(0.0f, Dt) : 0.0f;
+    const float Value = FMath::IsFinite(Fluster) ? Fluster : 0.0f;
+    return bCause ? FMath::Min(1.0f, Value + Step / FMath::Max(0.01f, RiseSeconds)) : FMath::Max(0.0f, Value - Step / FMath::Max(0.01f, FadeSeconds));
+}
+
 /** Gaze aversion trigger: the viewer's face is closer than CloseCm, or approaches faster than the threshold within RangeCm. */
 inline bool ShouldAvert(float DistanceCm, float ApproachCmPerSecond, float CloseCm, float RangeCm, float ApproachThresholdCmPerSecond)
 {

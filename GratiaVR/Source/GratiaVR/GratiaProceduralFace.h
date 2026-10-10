@@ -144,6 +144,8 @@ private:
     GratiaFaceMath::EFixation Fixation = GratiaFaceMath::EFixation::LeftEye;
     float UntilSaccade = 0.4f;
     FVector MicroOffset = FVector::ZeroVector;
+    /** Flustered darting: level 0..1, the side of the current dart and its pitch. */
+    float Fluster = 0.0f, DartSide = 1.0f, DartPitch = 0.0f;
     GratiaFaceMath::FSpring EyeYaw, EyePitch;
     float LastEyeTargetYaw = 0.0f, LastEyeTargetPitch = 0.0f;
     float LastViewDistance = 0.0f;

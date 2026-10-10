@@ -123,6 +123,18 @@ bool FGratiaFaceMathTest::RunTest(const FString& Parameters)
             && PupilScale(0.5f, 1.0f, 1.3f, 0.8f, 0.35f) > PupilScale(0.5f, 0.0f, 1.3f, 0.8f, 0.35f));
     }
     {
+        float Yaw = 5.0f, Pitch = -7.0f;
+        LimitSaccade(1.0f, 0.0f, 2.5f, Yaw, Pitch);
+        TestTrue(TEXT("Contact saccade stays within the cap"), FMath::Sqrt(FMath::Square(Yaw - 1.0f) + FMath::Square(Pitch)) <= 2.5f + 1.0e-3f);
+        TestTrue(TEXT("Contact saccade keeps its direction"), Yaw > 1.0f && Pitch < 0.0f);
+        Yaw = 1.5f; Pitch = 0.5f;
+        LimitSaccade(1.0f, 0.0f, 2.5f, Yaw, Pitch);
+        TestTrue(TEXT("Small saccade is unchanged"), FMath::IsNearlyEqual(Yaw, 1.5f) && FMath::IsNearlyEqual(Pitch, 0.5f));
+        TestTrue(TEXT("Fluster rises fast and fades slowly"),
+            StepFluster(0.0f, true, 0.15f, 1.2f, 0.15f) > 0.99f && StepFluster(1.0f, false, 0.15f, 1.2f, 0.6f) > 0.45f
+            && StepFluster(1.0f, false, 0.15f, 1.2f, 1.3f) == 0.0f);
+    }
+    {
         float Yaw, Pitch;
         DirectionAngles(FVector(100.0, 100.0, 0.0), FVector::ForwardVector, FVector::UpVector, Yaw, Pitch);
         TestTrue(TEXT("Direction yaw is positive to the right"), FMath::IsNearlyEqual(Yaw, 45.0f, 0.01f) && FMath::IsNearlyEqual(Pitch, 0.0f, 0.01f));

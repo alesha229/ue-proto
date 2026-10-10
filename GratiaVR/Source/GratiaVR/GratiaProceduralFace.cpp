@@ -420,9 +420,8 @@ void UGratiaProceduralFace::UpdateEyesAndNeck(float Dt, bool bIdle, const FVecto
     LastViewDistance = Distance; bHasLastView = bHasView;
     AversionCooldown = FMath::Max(0.0f, AversionCooldown - Dt);
     const float ArchetypeAversion = ReadBodyMotion(TEXT("GazeAversion"), 0.0f);
-    if (bGaze && S.bGazeAversion && !bAverting && AversionCooldown <= 0.0f
-        && (ShouldAvert(Distance, Approach, S.AversionCloseCm * ScaleF, S.AversionRangeCm * ScaleF, S.AversionApproachCmPerSecond)
-            || ArchetypeAversion > 0.6f))
+    const bool bCrowded = ShouldAvert(Distance, Approach, S.AversionCloseCm * ScaleF, S.AversionRangeCm * ScaleF, S.AversionApproachCmPerSecond);
+    if (bGaze && S.bGazeAversion && !bAverting && AversionCooldown <= 0.0f && (bCrowded || ArchetypeAversion > 0.6f))
         TriggerGazeAversion();
     if (bAverting)
     {
@@ -430,6 +429,11 @@ void UGratiaProceduralFace::UpdateEyesAndNeck(float Dt, bool bIdle, const FVecto
         if (AversionLeft <= 0.0f) { bAverting = false; ShyLeft = S.ShyReturnSeconds; AversionCooldown = S.AversionCooldownSeconds; }
     }
     ShyLeft = FMath::Max(0.0f, ShyLeft - Dt);
+    // Embarrassment: looking away, the shy return, a reserved/tsundere archetype or a crowding approach; fades back with
+    // eye contact.
+    Fluster = StepFluster(Fluster, S.bFlusteredDarting && bGaze && (bAverting || ShyLeft > 0.0f || bCrowded
+        || ArchetypeAversion > S.FlusterArchetypeThreshold), S.FlusterRiseSeconds, S.FlusterFadeSeconds, Dt);
+    const bool bDarting = Fluster >= 0.5f;
 
     // Fixation target: the viewer's eyes and mouth, or the touching hand while a zone is held.
     UntilSaccade -= Dt;
@@ -438,7 +442,11 @@ void UGratiaProceduralFace::UpdateEyesAndNeck(float Dt, bool bIdle, const FVecto
     {
         Fixation = NextFixation(Fixation, S.MouthFixationShare, Random);
         const float Faster = 1.0f - 0.25f * Excitement;
-        UntilSaccade = Random.FRandRange(float(S.SaccadeIntervalSeconds.X), float(FMath::Max(S.SaccadeIntervalSeconds.X, S.SaccadeIntervalSeconds.Y))) * Faster;
+        const FVector2D Interval = bDarting ? S.FlusterIntervalSeconds : S.SaccadeIntervalSeconds;
+        UntilSaccade = Random.FRandRange(float(Interval.X), float(FMath::Max(Interval.X, Interval.Y))) * Faster;
+        // A dart goes to the other extreme.
+        DartSide = -DartSide;
+        DartPitch = float(S.FlusterDartDegrees.Y) + Random.FRandRange(-1.0f, 1.0f) * S.FlusterDartPitchSpreadDegrees;
         MicroOffset = FVector(0.0, Random.FRandRange(-1.2f, 1.2f), Random.FRandRange(-1.2f, 1.2f));
     }
     const bool bLookAtTouch = Interaction && FVector::DistSquared(Interaction->LookTarget, ViewLocation) > 25.0;
@@ -448,7 +456,21 @@ void UGratiaProceduralFace::UpdateEyesAndNeck(float Dt, bool bIdle, const FVecto
 
     float TargetYaw = 0.0f, TargetPitch = 0.0f;
     if (bGaze) DirectionAngles(FixationPoint - LastEyeCenter, Forward, Up, TargetYaw, TargetPitch);
-    if (bAverting)
+    // In eye contact the jumps between the viewer's eyes and mouth are micro-shifts around the face centre.
+    if (bGaze && !bLookAtTouch)
+    {
+        float CentreYaw = 0.0f, CentrePitch = 0.0f;
+        DirectionAngles(ViewLocation - LastEyeCenter, Forward, Up, CentreYaw, CentrePitch);
+        LimitSaccade(CentreYaw, CentrePitch, S.ContactSaccadeMaxDegrees, TargetYaw, TargetPitch);
+    }
+    if (bDarting)
+    {
+        // Flustered: from one extreme to the other (around the look-away side while averting).
+        const float Centre = bAverting ? AversionSide * 0.5f * float(S.AversionEyeDegrees.X) : 0.0f;
+        TargetYaw = Centre + DartSide * float(S.FlusterDartDegrees.X);
+        TargetPitch = DartPitch;
+    }
+    else if (bAverting)
     {
         TargetYaw = AversionSide * float(S.AversionEyeDegrees.X); TargetPitch = float(S.AversionEyeDegrees.Y);
     }
