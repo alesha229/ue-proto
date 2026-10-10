@@ -147,6 +147,10 @@ PhysicsAsset содержит 176 тел: 30 кинематических тел
 
 Первый перенос v0.3 в `/Game/Gratia/Character/SK_Gratia` и прежние `export_gratia_fbx.py`, `export_gratia_animations.py`, `update_gratia_animation.py` сохранены как история подготовки и источник общих материалов. Его скелет с родителями Rigify заменён активной GameRig pipeline; старые инструкции и проверки v0.3 не подтверждают состояние v0.5. `Mouth O` получает имя `Mouth O wide`, чтобы сохранить его рядом с `Mouth o` при нечувствительных к регистру именах Unreal; пустая форма `Horny` не входит в рабочие морфы.
 
+Руки игрока — `SKM_PlayerArm_L/R` (`Scripts/setup_player_arms.py`), мокрая кожа — `MF_GratiaWetness`
+(`Scripts/setup_wetness_material.py`, оба скрипта — commandlet после сборки C++). Проверки: `-GratiaMotionProbe`
+(рывки, `Saved/MotionProbe/report.txt`), `-GratiaArmView` (снимки рук), `-GratiaWetness=1` с `-GratiaViewTest=Front`.
+
 ## Сборка и проверки
 
 Закрыть игру и редактор и запустить `../Build.cmd` (он вызывает `Scripts/Build-Stage1.ps1`). Движок по умолчанию — `E:\ue\UE_5.8`; другую установку задать через `Build.cmd -EngineRoot <путь>`. Скрипт компилирует редакторный модуль, упаковывает игру и только после успешной проверки заменяет единственный пакет `../Builds/Windows`; промежуточная копия `Saved/StagedBuilds` удаляется. Комната `/Game/Gratia/Maps/L_Stage1` создаётся через `Scripts/create_stage1_room.py`; повторный запуск заменяет заданные скриптом объекты и материалы сцены, сохраняя резервную карту в `../evidence/01`.

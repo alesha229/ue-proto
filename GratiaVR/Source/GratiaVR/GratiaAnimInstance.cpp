@@ -630,7 +630,7 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
         }
     }
 
-    /** Clip switches (a performance part, a stance, idle) and loop wraps start the new pose from the one on screen:
+    /** Clip switches during playback (a performance part, a non-seamless loop wrap) start the new pose from the one on screen:
      *  the previous pose fades out over SwitchBlendSeconds instead of the whole body jumping in one frame. */
     static constexpr float SwitchBlendSeconds = 0.3f;
     const UAnimationAsset* ShownAsset = nullptr;
@@ -647,7 +647,9 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
         const bool bSamePose = Serial == ShownSerial && ShownPose.Num() == Bones;
         // A loop wraps when the time runs backwards by more than a frame or two while the clip plays forward.
         const bool bWrapped = CurrentAsset == ShownAsset && IsPlaying() && GetPlayRate() > 0.0f && GetCurrentTime() + 0.05f < ShownTime;
-        if (bSamePose && CurrentAsset && (CurrentAsset != ShownAsset || bWrapped)) { HeldPose = ShownPose; HeldWeight = 1.0f; }
+        // Only switches during playback blend: an explicit pose change (SetPreviewPose ticks with zero time and refreshes
+        // the bones at once) still snaps, as resets and checks expect.
+        if (bSamePose && CurrentAsset && BlendDelta > 0.0f && (CurrentAsset != ShownAsset || bWrapped)) { HeldPose = ShownPose; HeldWeight = 1.0f; }
         if (HeldWeight > 0.0f && HeldPose.Num() == Bones && bSamePose)
         {
             HeldWeight = FMath::Max(0.0f, HeldWeight - BlendDelta / SwitchBlendSeconds);
