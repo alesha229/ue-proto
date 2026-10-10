@@ -395,6 +395,9 @@ public:
     float ReactionQuietSeconds = 1.4f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voice", meta = (ClampMin = "0", ClampMax = "2"))
     float FoleyVolume = 0.6f;
+    /** Empty bank: synthesised placeholder (shaped noise, hum, clicks) instead of silence. Recordings always win. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voice")
+    bool bSynthFallback = true;
     /** Mesh scalar parameter that marks wet skin (wetness shader); above WetFoleyThreshold slides sound wet. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voice")
     FName WetnessParameter = TEXT("Wetness");

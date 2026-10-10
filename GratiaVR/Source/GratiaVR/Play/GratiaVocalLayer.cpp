@@ -18,6 +18,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Sound/SoundBase.h"
+#include "GratiaSynthSound.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogGratiaVocal, Log, All);
 
@@ -139,13 +140,18 @@ void UGratiaVocalLayer::PlayVocal(EGratiaVocalBank Bank, float VolumeScale)
     if (!Owner || !Settings || !Owner->CharacterMesh || !UGratiaPlaySubsystem::IsLayerEnabled()) return;
     const FGratiaSoundBank* Found = Settings->VocalBanks.Find(Bank);
     USoundBase* Sound = Found ? Pick(*Found, uint8(Bank)) : nullptr;
+    UGratiaSynthSound* Synth = nullptr;
     if (!Sound)
     {
         bool bAlready = false;
         ReportedVocal.Add(uint8(Bank), &bAlready);
-        if (!bAlready) UE_LOG(LogGratiaVocal, Display, TEXT("VOCAL bank %s is empty (PlaySettings.VocalBanks): silent."), *UEnum::GetValueAsString(Bank));
-        return;
+        if (!bAlready) UE_LOG(LogGratiaVocal, Display, TEXT("VOCAL bank %s is empty (PlaySettings.VocalBanks): %s."),
+            *UEnum::GetValueAsString(Bank), Settings->bSynthFallback ? TEXT("synth placeholder") : TEXT("silent"));
+        if (!Settings->bSynthFallback) return;
+        Sound = Synth = UGratiaSynthSound::MakeVocal(this, Bank);
     }
+    const float BankVolume = Found ? Found->Volume : 1.0f;
+    const float BankJitter = Found ? Found->PitchJitter : 0.05f;
     const UGratiaCharacterProfile* Profile = Owner->CharacterProfile;
     const FName Head = Profile ? Profile->ResolveBone(TEXT("Head")) : NAME_None;
     FVector Local = FVector::ZeroVector;
@@ -153,11 +159,13 @@ void UGratiaVocalLayer::PlayVocal(EGratiaVocalBank Bank, float VolumeScale)
     USoundAttenuation* Attenuation = Settings->VoiceAttenuation ? Settings->VoiceAttenuation.Get()
         : Owner->ReactionPresentation ? Owner->ReactionPresentation->ReactionAttenuation.Get() : nullptr;
     const float Voice = Owner->ReactionPresentation ? Owner->ReactionPresentation->VoiceVolume : 1.0f;
-    const float Volume = Found->Volume * Settings->BreathVolume * Voice * FMath::Max(0.0f, VolumeScale);
-    const float Pitch = 1.0f + FMath::FRandRange(-Found->PitchJitter, Found->PitchJitter);
+    const float Volume = BankVolume * Settings->BreathVolume * Voice * FMath::Max(0.0f, VolumeScale);
+    const float Pitch = 1.0f + FMath::FRandRange(-BankJitter, BankJitter);
     // Attached to the head at the mouth: the voice moves with her head (binaural path of the voice thread).
-    UGameplayStatics::SpawnSoundAttached(Sound, Owner->CharacterMesh, Head, Local, EAttachLocation::KeepRelativeOffset, true,
+    UAudioComponent* Audio = UGameplayStatics::SpawnSoundAttached(Sound, Owner->CharacterMesh, Head, Local, EAttachLocation::KeepRelativeOffset, true,
         Volume, Pitch, 0.0f, Attenuation, nullptr, true);
+    // A synthesised one-shot streams forever; stop it when its envelope has ended.
+    if (Audio && Synth) Audio->StopDelayed(Synth->GetLength() / FMath::Max(Pitch, 0.1f) + 0.05f);
     ++Played;
 }
 
@@ -168,17 +176,24 @@ void UGratiaVocalLayer::PlayFoley(EGratiaFoleyBank Bank, FVector Location, float
     if (!Owner || !Settings || !bFoley || !UGratiaPlaySubsystem::IsLayerEnabled() || Location.ContainsNaN()) return;
     const FGratiaSoundBank* Found = Settings->FoleyBanks.Find(Bank);
     USoundBase* Sound = Found ? Pick(*Found, uint8(100 + uint8(Bank))) : nullptr;
+    UGratiaSynthSound* Synth = nullptr;
     if (!Sound)
     {
         bool bAlready = false;
         ReportedFoley.Add(uint8(Bank), &bAlready);
-        if (!bAlready) UE_LOG(LogGratiaVocal, Display, TEXT("FOLEY bank %s is empty (PlaySettings.FoleyBanks): silent."), *UEnum::GetValueAsString(Bank));
-        return;
+        if (!bAlready) UE_LOG(LogGratiaVocal, Display, TEXT("FOLEY bank %s is empty (PlaySettings.FoleyBanks): %s."),
+            *UEnum::GetValueAsString(Bank), Settings->bSynthFallback ? TEXT("synth placeholder") : TEXT("silent"));
+        if (!Settings->bSynthFallback) return;
+        Sound = Synth = UGratiaSynthSound::MakeFoley(this, Bank);
     }
+    const float BankVolume = Found ? Found->Volume : 1.0f;
+    const float BankJitter = Found ? Found->PitchJitter : 0.05f;
     USoundAttenuation* Attenuation = Settings->VoiceAttenuation ? Settings->VoiceAttenuation.Get()
         : Owner->ReactionPresentation ? Owner->ReactionPresentation->ReactionAttenuation.Get() : nullptr;
-    UGameplayStatics::SpawnSoundAtLocation(this, Sound, Location, FRotator::ZeroRotator, Found->Volume * Settings->FoleyVolume * FMath::Max(0.0f, VolumeScale),
-        1.0f + FMath::FRandRange(-Found->PitchJitter, Found->PitchJitter), 0.0f, Attenuation);
+    const float Pitch = 1.0f + FMath::FRandRange(-BankJitter, BankJitter);
+    UAudioComponent* Audio = UGameplayStatics::SpawnSoundAtLocation(this, Sound, Location, FRotator::ZeroRotator,
+        BankVolume * Settings->FoleyVolume * FMath::Max(0.0f, VolumeScale), Pitch, 0.0f, Attenuation);
+    if (Audio && Synth) Audio->StopDelayed(Synth->GetLength() / FMath::Max(Pitch, 0.1f) + 0.05f);
 }
 
 float UGratiaVocalLayer::GetWetness() const
@@ -211,7 +226,8 @@ void UGratiaVocalLayer::UpdateLoops(const UGratiaPlaySettings& Settings, float D
         const EGratiaFoleyBank Bank = Settings.ClothedZones.Contains(Hand.ZoneName) ? EGratiaFoleyBank::ClothRustle
             : Wet >= Settings.WetFoleyThreshold ? EGratiaFoleyBank::WetSlide : EGratiaFoleyBank::SkinSlide;
         const FGratiaSoundBank* Found = Settings.FoleyBanks.Find(Bank);
-        const float Target = bSliding && Found ? Found->Volume * Settings.FoleyVolume * FMath::Clamp(Hand.Speed / 40.0f, 0.0f, 1.0f) : 0.0f;
+        const bool bHasBank = Found || Settings.bSynthFallback;
+        const float Target = bSliding && bHasBank ? (Found ? Found->Volume : 1.0f) * Settings.FoleyVolume * FMath::Clamp(Hand.Speed / 40.0f, 0.0f, 1.0f) : 0.0f;
         LoopVolume[Index] = GratiaPlay::Envelope(LoopVolume[Index], Target, 0.05f, 0.25f, Delta);
         UAudioComponent* Loop = Loops[Index];
         if (Loop && (LoopBank[Index] != Bank && Target > 0.0f))
@@ -219,9 +235,10 @@ void UGratiaVocalLayer::UpdateLoops(const UGratiaPlaySettings& Settings, float D
             Loop->Stop();
             Loops[Index] = Loop = nullptr;
         }
-        if (!Loop && Target > 0.0f && Found)
+        if (!Loop && Target > 0.0f && bHasBank)
         {
-            USoundBase* Sound = Pick(*Found, uint8(200 + uint8(Bank)));
+            USoundBase* Sound = Found ? Pick(*Found, uint8(200 + uint8(Bank))) : nullptr;
+            if (!Sound && Settings.bSynthFallback) Sound = UGratiaSynthSound::MakeFoley(this, Bank);
             const AGratiaPreviewCharacter* Owner = Character.Get();
             USoundAttenuation* Attenuation = Settings.VoiceAttenuation ? Settings.VoiceAttenuation.Get()
                 : Owner && Owner->ReactionPresentation ? Owner->ReactionPresentation->ReactionAttenuation.Get() : nullptr;
@@ -294,7 +311,7 @@ void UGratiaVocalLayer::TickComponent(float Delta, ELevelTick Type, FActorCompon
     if (Event == GratiaPlay::EBreathEvent::Inhale)
     {
         if (!bAudible) return;
-        const bool bWhisper = bEar && Settings->VocalBanks.Contains(EGratiaVocalBank::EarWhisper) && GratiaPlay::Random01(Breath.Seed) < 0.5f;
+        const bool bWhisper = bEar && (Settings->VocalBanks.Contains(EGratiaVocalBank::EarWhisper) || Settings->bSynthFallback) && GratiaPlay::Random01(Breath.Seed) < 0.5f;
         PlayVocal(bWhisper ? EGratiaVocalBank::EarWhisper : Level > 0.6f ? EGratiaVocalBank::InhaleDeep : EGratiaVocalBank::InhaleSoft, Volume);
         return;
     }
@@ -302,7 +319,7 @@ void UGratiaVocalLayer::TickComponent(float Delta, ELevelTick Type, FActorCompon
     bAfterHold = false;
     const bool bVoiced = Choice == GratiaPlay::EVocal::NonVerbalSoft || Choice == GratiaPlay::EVocal::NonVerbalStrong || Choice == GratiaPlay::EVocal::HeldRelease;
     if (!bAudible && !bVoiced) return;
-    PlayVocal(bEar && !bVoiced && Settings->VocalBanks.Contains(EGratiaVocalBank::EarWhisper) ? EGratiaVocalBank::EarWhisper : ToBank(Choice), Volume);
+    PlayVocal(bEar && !bVoiced && (Settings->VocalBanks.Contains(EGratiaVocalBank::EarWhisper) || Settings->bSynthFallback) ? EGratiaVocalBank::EarWhisper : ToBank(Choice), Volume);
 }
 
 FString UGratiaVocalLayer::GetDiagnostics() const

@@ -88,9 +88,9 @@ void AGratiaPlayProp::Grab(int32 HandIndex, const FTransform& HandWorld)
     bDropped = false;
     Hand = HandIndex;
     HoldRelative = GetActorTransform().GetRelativeTransform(HandWorld);
-    if (const AGratiaPreviewCharacter* Owner = Character.Get())
-        if (UGratiaVocalLayer* Vocal = Owner->FindComponentByClass<UGratiaVocalLayer>()) Vocal->PlayFoley(EGratiaFoleyBank::PropPickup, GetActorLocation());
-    if (UGratiaHapticLayers* Layers = PropHaptics(this)) Layers->Pulse(HandIndex == 0, 0.3f, 0.4f, 0.04f);
+    if (const AGratiaPreviewCharacter* Wearer = Character.Get())
+        if (UGratiaVocalLayer* Vocal = Wearer->FindComponentByClass<UGratiaVocalLayer>()) Vocal->PlayFoley(EGratiaFoleyBank::PropPickup, GetActorLocation());
+    if (UGratiaHapticLayers* PropLayers = PropHaptics(this)) PropLayers->Pulse(HandIndex == 0, 0.3f, 0.4f, 0.04f);
     UE_LOG(LogGratiaProp, Display, TEXT("PROP %s taken hand=%s"), *Definition.Name.ToString(), HandIndex == 0 ? TEXT("L") : TEXT("R"));
 }
 
@@ -99,14 +99,14 @@ void AGratiaPlayProp::Release(const FVector& Velocity)
     if (UGratiaPlaySubsystem* Play = UGratiaPlaySubsystem::Get(this)) Play->ReleaseHand(Hand == 0, this);
     Hand = INDEX_NONE;
     TouchedZone = INDEX_NONE;
-    AGratiaPreviewCharacter* Owner = Character.Get();
-    if (Definition.Kind == EGratiaPropKind::Accessory && Owner && Owner->CharacterMesh && Owner->CharacterProfile)
+    AGratiaPreviewCharacter* Wearer = Character.Get();
+    if (Definition.Kind == EGratiaPropKind::Accessory && Wearer && Wearer->CharacterMesh && Wearer->CharacterProfile)
     {
-        const FName Bone = Owner->CharacterProfile->ResolveBone(Definition.AttachSemantic);
-        if (!Bone.IsNone() && Owner->CharacterMesh->GetBoneIndex(Bone) != INDEX_NONE
-            && FVector::Distance(GetActorLocation(), Owner->CharacterMesh->GetSocketTransform(Bone).TransformPosition(Definition.AttachTransform.GetLocation())) <= 15.0)
+        const FName Bone = Wearer->CharacterProfile->ResolveBone(Definition.AttachSemantic);
+        if (!Bone.IsNone() && Wearer->CharacterMesh->GetBoneIndex(Bone) != INDEX_NONE
+            && FVector::Distance(GetActorLocation(), Wearer->CharacterMesh->GetSocketTransform(Bone).TransformPosition(Definition.AttachTransform.GetLocation())) <= 15.0)
         {
-            AttachToComponent(Owner->CharacterMesh, FAttachmentTransformRules::SnapToTargetNotIncludingScale, Bone);
+            AttachToComponent(Wearer->CharacterMesh, FAttachmentTransformRules::SnapToTargetNotIncludingScale, Bone);
             SetActorRelativeTransform(Definition.AttachTransform);
             bAttached = true;
             UE_LOG(LogGratiaProp, Display, TEXT("PROP %s attached to %s"), *Definition.Name.ToString(), *Bone.ToString());
@@ -118,8 +118,8 @@ void AGratiaPlayProp::Release(const FVector& Velocity)
     Mesh->SetSimulatePhysics(true);
     Mesh->SetPhysicsLinearVelocity(Velocity.GetClampedToMaxSize(400.0));
     bDropped = true;
-    if (Owner)
-        if (UGratiaVocalLayer* Vocal = Owner->FindComponentByClass<UGratiaVocalLayer>()) Vocal->PlayFoley(EGratiaFoleyBank::PropDrop, GetActorLocation());
+    if (Wearer)
+        if (UGratiaVocalLayer* Vocal = Wearer->FindComponentByClass<UGratiaVocalLayer>()) Vocal->PlayFoley(EGratiaFoleyBank::PropDrop, GetActorLocation());
 }
 
 void AGratiaPlayProp::Tick(float DeltaSeconds)
@@ -150,7 +150,7 @@ void AGratiaPlayProp::Tick(float DeltaSeconds)
         if (Arousal && !Arousal->IsUnlocked(Definition.RequiredUnlock))
         {
             // Not yet: a short double tick in the hand instead of the pickup.
-            if (UGratiaHapticLayers* Layers = PropHaptics(this)) Layers->Pulse(bLeft, 0.35f, 0.2f, 0.06f);
+            if (UGratiaHapticLayers* PropLayers = PropHaptics(this)) PropLayers->Pulse(bLeft, 0.35f, 0.2f, 0.06f);
             continue;
         }
         if (Play->ClaimHand(bLeft, EGratiaHandUse::Prop, this)) { Grab(Index, Candidate.World); return; }
@@ -160,15 +160,15 @@ void AGratiaPlayProp::Tick(float DeltaSeconds)
 
 void AGratiaPlayProp::UseOnBody(float Delta)
 {
-    AGratiaPreviewCharacter* Owner = Character.Get();
+    AGratiaPreviewCharacter* Wearer = Character.Get();
     UGratiaPlaySubsystem* Play = UGratiaPlaySubsystem::Get(this);
-    const UGratiaPlaySettings* Settings = UGratiaPlaySubsystem::GetSettings(Owner);
-    if (!Owner || !Play || !Settings || !Owner->Interaction || Delta <= 0.0f) return;
+    const UGratiaPlaySettings* Settings = UGratiaPlaySubsystem::GetSettings(Wearer);
+    if (!Wearer || !Play || !Settings || !Wearer->Interaction || Delta <= 0.0f) return;
     const FVector Tip = GetActorTransform().TransformPosition(Definition.Tip);
     const float Speed = float(FVector::Distance(Tip, LastTip) / FMath::Max(Delta, 1.0e-3f));
     LastTip = Tip;
-    const UGratiaInteraction* Interaction = Owner->Interaction;
-    const double Scale = FMath::Max(0.01, double(Owner->GetActorScale3D().GetAbs().GetMax()));
+    const UGratiaInteraction* Interaction = Wearer->Interaction;
+    const double Scale = FMath::Max(0.01, double(Wearer->GetActorScale3D().GetAbs().GetMax()));
     int32 Zone = INDEX_NONE;
     double Gap = 1.0e6;
     for (int32 I = 0; I < Interaction->Zones.Num(); ++I)
@@ -180,8 +180,8 @@ void AGratiaPlayProp::UseOnBody(float Delta)
     }
     const bool bTouch = Zone != INDEX_NONE && Gap <= 1.5;
     const FName ZoneName = bTouch ? Interaction->Zones[Zone].Name : NAME_None;
-    UGratiaArousal* Arousal = Owner->FindComponentByClass<UGratiaArousal>();
-    UGratiaHapticLayers* Layers = PropHaptics(this);
+    UGratiaArousal* Arousal = Wearer->FindComponentByClass<UGratiaArousal>();
+    UGratiaHapticLayers* PropLayers = PropHaptics(this);
     const bool bLeft = Hand == 0;
 
     float Buzz = 0.0f, BuzzFrequency = 0.6f;
@@ -192,7 +192,7 @@ void AGratiaPlayProp::UseOnBody(float Delta)
         if (bTouch && Buzz > 0.0f) Buzz = FMath::Min(1.0f, Buzz + 0.2f);
     }
     else if (Definition.Kind == EGratiaPropKind::Feather && bTouch && Speed > 2.0f) { Buzz = 0.06f; BuzzFrequency = 0.95f; }
-    if (Layers && Buzz > 0.0f) Layers->SetSustain(bLeft, Definition.Name, Buzz, BuzzFrequency);
+    if (PropLayers && Buzz > 0.0f) PropLayers->SetSustain(bLeft, Definition.Name, Buzz, BuzzFrequency);
 
     if (bTouch && Arousal && Definition.Kind != EGratiaPropKind::Oil && Definition.Kind != EGratiaPropKind::Accessory)
     {
@@ -201,7 +201,7 @@ void AGratiaPlayProp::UseOnBody(float Delta)
         const float Effective = Definition.Kind == EGratiaPropKind::Toy && Mode > 0 ? FMath::Max(Speed, 12.0f) : Speed;
         Arousal->AddStimulus(ZoneName, Effective, Definition.Stimulus * Factor);
     }
-    if (bTouch && TouchedZone != Zone && Owner->Interaction) Owner->Interaction->ExternalReaction(ZoneName, Hand, Speed);
+    if (bTouch && TouchedZone != Zone && Wearer->Interaction) Wearer->Interaction->ExternalReaction(ZoneName, Hand, Speed);
     TouchedZone = bTouch ? Zone : INDEX_NONE;
 
     if (Definition.Kind == EGratiaPropKind::Oil)
@@ -209,12 +209,12 @@ void AGratiaPlayProp::UseOnBody(float Delta)
         const UGratiaPlaySubsystem::FHand& Holder = Play->GetHand(bLeft);
         const bool bPouring = Holder.Trigger >= 0.5f && Zone != INDEX_NONE && Gap <= 30.0;
         if (bPouring && PrevTrigger < 0.5f)
-            if (UGratiaVocalLayer* Vocal = Owner->FindComponentByClass<UGratiaVocalLayer>()) Vocal->PlayFoley(EGratiaFoleyBank::OilPour, Tip);
-        if (bPouring && !Settings->OilParameter.IsNone() && Owner->CharacterMesh)
+            if (UGratiaVocalLayer* Vocal = Wearer->FindComponentByClass<UGratiaVocalLayer>()) Vocal->PlayFoley(EGratiaFoleyBank::OilPour, Tip);
+        if (bPouring && !Settings->OilParameter.IsNone() && Wearer->CharacterMesh)
         {
             Oil = FMath::Min(1.0f, Oil + Settings->OilPerSecond * Delta);
-            Owner->CharacterMesh->SetScalarParameterValueOnMaterials(Settings->OilParameter, Oil);
-            if (Layers) Layers->SetSustain(bLeft, Definition.Name, 0.08f, 0.3f);
+            Wearer->CharacterMesh->SetScalarParameterValueOnMaterials(Settings->OilParameter, Oil);
+            if (PropLayers) PropLayers->SetSustain(bLeft, Definition.Name, 0.08f, 0.3f);
         }
     }
 }

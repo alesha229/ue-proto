@@ -1223,7 +1223,7 @@ void AGratiaStage1Runtime::UpdateHaptics(FHandProxy& Hand, bool bLeft, float Amp
     APlayerController* PC = PlayerController.Get();
     if (!PC) return;
     // Interaction layer: skin slide, elastic press, heartbeat, toys, garment clicks.
-    if (const UGratiaHapticLayers* Layers = FindComponentByClass<UGratiaHapticLayers>()) Layers->Blend(bLeft, Amplitude, Frequency);
+    if (const UGratiaHapticLayers* HapticLayers = FindComponentByClass<UGratiaHapticLayers>()) HapticLayers->Blend(bLeft, Amplitude, Frequency);
     if (!bXRActive || !Hand.Gate.CanInteract() || !IsSceneInteractionAllowed()) Amplitude = 0.0f;
     const auto* Settings = SceneDirector ? SceneDirector->GetUserSettings() : nullptr;
     Amplitude *= Settings ? Settings->HapticsScale : 1.0f;

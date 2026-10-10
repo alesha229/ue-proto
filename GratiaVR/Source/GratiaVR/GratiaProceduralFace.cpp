@@ -112,7 +112,7 @@ void UGratiaProceduralFace::Bind()
         Resolved.Add(Semantic, Name);
     };
     for (const FName Semantic : { LookLeft, LookRight, LookUp, LookDown, BlinkLeft, BlinkRight }) Resolve(Semantic);
-    for (const FChannelDefinition& Definition : ChannelDefinitions)
+    for (const GratiaFaceLocal::FChannelDefinition& Definition : GratiaFaceLocal::ChannelDefinitions)
     {
         Resolve(Definition.Semantic);
         if (Morph(Definition.Semantic).IsNone()) continue;
@@ -510,7 +510,7 @@ void UGratiaProceduralFace::UpdateEyesAndNeck(float Dt, bool bIdle, const FVecto
     }
 }
 
-float UGratiaProceduralFace::UpdateLids(float Dt, float EyePitch)
+float UGratiaProceduralFace::UpdateLids(float Dt, float LookPitch)
 {
     const UGratiaCharacterProfile* Profile = Character->CharacterProfile.Get();
     const FGratiaFaceSettings& S = Profile->Face;
@@ -545,7 +545,7 @@ float UGratiaProceduralFace::UpdateLids(float Dt, float EyePitch)
     const float Squint = Saturate(Squeeze.Step(SqueezeTarget, S.SnapSeconds, S.LidOvershoot, S.SettleHz * 1.5f, 0.35f, Dt));
     // Half-lidded at the peak; lids follow the gaze down; they tremble with high excitement.
     const float Base = (Emotion == EGratiaFaceEmotion::Bliss ? 0.35f * EmotionStrength : 0.0f)
-        + S.LidFollowDown * Saturate(-EyePitch / FMath::Max(1.0f, S.FullEyePitchDegrees))
+        + S.LidFollowDown * Saturate(-LookPitch / FMath::Max(1.0f, S.FullEyePitchDegrees))
         + S.TremorAmplitude * 0.5f * FMath::Square(Excitement) * FMath::Abs(Noise1D(Time * S.TremorHz, 17));
     const float Lid = Saturate(1.0f - (1.0f - Blink) * (1.0f - Squint) * (1.0f - Saturate(Base)));
     if (Profile->Capabilities.bBlink) { SetMorph(BlinkLeft, Lid); SetMorph(BlinkRight, Lid); }

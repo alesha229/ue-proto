@@ -186,7 +186,7 @@ private:
     void UpdateLightLevel(float DeltaSeconds);
     void UpdateEyesAndNeck(float Dt, bool bIdle, const FVector& ViewLocation, const FQuat& ViewRotation, bool bHasView,
         float& OutEyeYaw, float& OutEyePitch, float& OutViewYawAroundHead);
-    float UpdateLids(float Dt, float EyePitch);
+    float UpdateLids(float Dt, float LookPitch);
     void UpdateExpression(float Dt, bool bExpressive, float ViewYawAroundHead, float Squint);
     void UpdateShaders(float Dt, float ViewYawAroundHead);
     void PushBoneDeltas(bool bIdle, bool bEnabled);
