@@ -15,6 +15,7 @@ class UGratiaSoftBodyVerification;
 class UGratiaBodySurface;
 class UGratiaPenetration;
 class UGratiaPerformanceStage;
+class UGratiaProceduralFace;
 struct FGratiaPerformanceClip;
 
 UENUM(BlueprintType)
@@ -78,6 +79,9 @@ public:
     /** Music, partner body and partner viewpoint of the current performance. */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Performance")
     TObjectPtr<UGratiaPerformanceStage> PerformanceStage;
+    /** Procedural eyes, lids, neck follow, elastic expressions and skin/eye shader parameters (profile Face). */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Face")
+    TObjectPtr<UGratiaProceduralFace> ProceduralFace;
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Gratia|Preview")
     EGratiaPreviewPose PreviewPose = EGratiaPreviewPose::Idle;

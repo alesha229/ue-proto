@@ -593,9 +593,9 @@ UPanelWidget* UGratiaMenuWidget::BuildCharacterPage()
     ControlsSlot->SetVerticalAlignment(VAlign_Fill);
     UVerticalBox* Left = nullptr; UVerticalBox* Right = nullptr;
     MakeColumns(Controls, Left, Right);
-    UVerticalBox* Mood = AddSection(Left, TEXT("НАСТРОЕНИЕ"));
-    AddSegments(Mood, {TEXT("Спокойная"), TEXT("Радостная"), TEXT("Сдержанная")}, EGratiaMenuAction::Mood, Character, -1.0f);
-    UTextBlock* MoodHint = MakeText(TEXT("Меняет реплики и реакции; выбор запоминается"), 17, MenuSoft, TEXT("Regular"));
+    UVerticalBox* Mood = AddSection(Left, TEXT("ХАРАКТЕР"));
+    AddSegments(Mood, {TEXT("Кудере"), TEXT("Дередере"), TEXT("Цундере")}, EGratiaMenuAction::Mood, Character, -1.0f);
+    UTextBlock* MoodHint = MakeText(TEXT("Поведение тела, реплики и реакции; выбор запоминается"), 17, MenuSoft, TEXT("Regular"));
     MoodHint->SetAutoWrapText(true);
     Mood->AddChildToVerticalBox(MoodHint)->SetPadding(FMargin(2, 0, 0, 0));
     UVerticalBox* Behaviour = AddSection(Left, TEXT("ПОВЕДЕНИЕ"));

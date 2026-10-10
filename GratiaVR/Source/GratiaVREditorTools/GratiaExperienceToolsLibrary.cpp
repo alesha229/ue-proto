@@ -40,6 +40,68 @@ bool GratiaCommitMesh(USkeletalMesh* Mesh, bool bForce = false)
 }
 }
 
+namespace
+{
+/** Registers MorphName with normal deltas of its own (a morph made earlier without them is registered again). */
+bool GratiaRegisterMorph(FSkeletalMeshAttributes& Attributes, FName MorphName)
+{
+    if (Attributes.GetMorphTargetNames().Contains(MorphName))
+    {
+        if (Attributes.HasMorphTargetNormalsAttribute(MorphName)) return true;
+        Attributes.UnregisterMorphTargetAttribute(MorphName);
+    }
+    return Attributes.RegisterMorphTargetAttribute(MorphName, true);
+}
+
+/**
+ * The morph's normal deltas: every vertex's own normal turns as the surface around it turns (the smooth, area-weighted
+ * normals of the rest and the morphed surface, one per vertex across UV seams). Without them the build recomputes the
+ * moved area's normals from its triangles, which replaces the mesh's smooth normals there with faceted ones.
+ */
+void GratiaWriteMorphNormals(const FMeshDescription& Description, FSkeletalMeshAttributes& Attributes, FName MorphName)
+{
+    TVertexInstanceAttributesRef<FVector3f> NormalDeltas = Attributes.GetVertexInstanceMorphNormalDelta(MorphName);
+    if (!NormalDeltas.IsValid()) return;
+    const TVertexAttributesConstRef<FVector3f> Positions = Attributes.GetVertexPositions();
+    const TVertexAttributesRef<FVector3f> Deltas = Attributes.GetVertexMorphPositionDelta(MorphName);
+    const TVertexInstanceAttributesConstRef<FVector3f> Normals = Attributes.GetVertexInstanceNormals();
+    const int32 Size = Description.Vertices().GetArraySize();
+    TArray<FVector3f> Rest, Moved;
+    Rest.SetNumZeroed(Size);
+    Moved.SetNumZeroed(Size);
+    TBitArray<> Turned(false, Size);
+    for (const FTriangleID Triangle : Description.Triangles().GetElementIDs())
+    {
+        const TArrayView<const FVertexID> Corners = Description.GetTriangleVertices(Triangle);
+        if (Deltas[Corners[0]].IsNearlyZero(1.0e-5f) && Deltas[Corners[1]].IsNearlyZero(1.0e-5f) && Deltas[Corners[2]].IsNearlyZero(1.0e-5f)) continue;
+        const FVector3f A = Positions[Corners[0]], B = Positions[Corners[1]], C = Positions[Corners[2]];
+        const FVector3f MA = A + Deltas[Corners[0]], MB = B + Deltas[Corners[1]], MC = C + Deltas[Corners[2]];
+        const FVector3f RestNormal = FVector3f::CrossProduct(B - A, C - A), MovedNormal = FVector3f::CrossProduct(MB - MA, MC - MA);
+        for (const FVertexID Corner : Corners)
+        {
+            Rest[Corner.GetValue()] += RestNormal;
+            Moved[Corner.GetValue()] += MovedNormal;
+            Turned[Corner.GetValue()] = true;
+        }
+    }
+    for (const FVertexInstanceID Instance : Description.VertexInstances().GetElementIDs())
+    {
+        const int32 Vertex = Description.GetVertexInstanceVertex(Instance).GetValue();
+        FVector3f Delta = FVector3f::ZeroVector;
+        if (Turned[Vertex])
+        {
+            const FVector3f From = Rest[Vertex].GetSafeNormal(), To = Moved[Vertex].GetSafeNormal();
+            if (!From.IsZero() && !To.IsZero())
+            {
+                const FVector3f Base = Normals[Instance];
+                Delta = FQuat4f::FindBetweenNormals(From, To).RotateVector(Base) - Base;
+            }
+        }
+        NormalDeltas[Instance] = Delta;
+    }
+}
+}
+
 bool UGratiaExperienceToolsLibrary::BeginMeshEdit(USkeletalMesh* Mesh)
 {
     if (!Mesh || !Mesh->HasMeshDescription(0)) return false;
@@ -239,7 +301,7 @@ int32 UGratiaExperienceToolsLibrary::CreateChannelOpeningMorph(USkeletalMesh* Me
     FMeshDescription* Description = Mesh->GetMeshDescription(0);
     if (!Description) return -1;
     FSkeletalMeshAttributes Attributes(*Description);
-    if (!Attributes.GetMorphTargetNames().Contains(MorphName) && !Attributes.RegisterMorphTargetAttribute(MorphName, false)) return -1;
+    if (!GratiaRegisterMorph(Attributes, MorphName)) return -1;
     TVertexAttributesRef<FVector3f> Deltas = Attributes.GetVertexMorphPositionDelta(MorphName);
     const TVertexAttributesConstRef<FVector3f> Positions = Attributes.GetVertexPositions();
     int32 Moved = 0;
@@ -268,6 +330,7 @@ int32 UGratiaExperienceToolsLibrary::CreateChannelOpeningMorph(USkeletalMesh* Me
         Deltas[Vertex] = FVector3f(Delta);
         if (Delta.SizeSquared() > 1.0e-6) ++Moved;
     }
+    GratiaWriteMorphNormals(*Description, Attributes, MorphName);
     if (!GratiaCommitMesh(Mesh)) return -1;
     UE_LOG(LogTemp, Display, TEXT("GRATIA_CHANNEL_MORPH %s moved=%d opening=%.1fcm falloff=%.1fcm slit=%s part=%s"), *MorphName.ToString(), Moved, Opening,
         Falloff, Lateral.IsZero() ? TEXT("no") : TEXT("yes"), SplitCm <= 0.0f ? TEXT("whole") : bInnerPart ? TEXT("inner") : TEXT("outer"));
@@ -312,7 +375,7 @@ int32 UGratiaExperienceToolsLibrary::CreateChannelBulgeMorph(USkeletalMesh* Mesh
     FMeshDescription* Description = Mesh->GetMeshDescription(0);
     if (!Description) return -1;
     FSkeletalMeshAttributes Attributes(*Description);
-    if (!Attributes.GetMorphTargetNames().Contains(MorphName) && !Attributes.RegisterMorphTargetAttribute(MorphName, false)) return -1;
+    if (!GratiaRegisterMorph(Attributes, MorphName)) return -1;
     TVertexAttributesRef<FVector3f> Deltas = Attributes.GetVertexMorphPositionDelta(MorphName);
     const TVertexAttributesConstRef<FVector3f> Positions = Attributes.GetVertexPositions();
     int32 Moved = 0;
@@ -338,6 +401,7 @@ int32 UGratiaExperienceToolsLibrary::CreateChannelBulgeMorph(USkeletalMesh* Mesh
         Deltas[Vertex] = FVector3f(Delta);
         if (Delta.SizeSquared() > 1.0e-6) ++Moved;
     }
+    GratiaWriteMorphNormals(*Description, Attributes, MorphName);
     if (!GratiaCommitMesh(Mesh)) return -1;
     UE_LOG(LogTemp, Display, TEXT("GRATIA_BULGE_MORPH %s depth=%.1fcm moved=%d amount=%.1fcm radius=%.1fcm floor=%.1fcm"), *MorphName.ToString(), DepthCm,
         Moved, Amount, Radius, FloorCm);
@@ -450,6 +514,12 @@ int32 UGratiaExperienceToolsLibrary::SubdivideMeshAroundBones(USkeletalMesh* Mes
         if (Tangents.IsValid()) Tangents[Instance] = (Tangents[A] + Tangents[B]).GetSafeNormal();
         if (Signs.IsValid()) Signs[Instance] = Signs[A];
         if (Colors.IsValid()) Colors[Instance] = (Colors[A] + Colors[B]) * 0.5f;
+        for (const FName Morph : Morphs)
+            if (Attributes.HasMorphTargetNormalsAttribute(Morph))
+            {
+                TVertexInstanceAttributesRef<FVector3f> NormalDeltas = Attributes.GetVertexInstanceMorphNormalDelta(Morph);
+                NormalDeltas[Instance] = (NormalDeltas[A] + NormalDeltas[B]) * 0.5f;
+            }
         MiddleInstance.Add(Key, Instance);
         return Instance;
     };

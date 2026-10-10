@@ -7,6 +7,7 @@
 #include "GratiaCharacterProfile.h"
 #include "GratiaPenetration.h"
 #include "GratiaPerformanceStage.h"
+#include "GratiaProceduralFace.h"
 #include "GratiaSoftBodyInteraction.h"
 #include "GratiaSoftBodyVerification.h"
 
@@ -40,6 +41,7 @@ AGratiaPreviewCharacter::AGratiaPreviewCharacter()
     BodySurface = CreateDefaultSubobject<UGratiaBodySurface>(TEXT("BodySurface"));
     Penetration = CreateDefaultSubobject<UGratiaPenetration>(TEXT("Penetration"));
     PerformanceStage = CreateDefaultSubobject<UGratiaPerformanceStage>(TEXT("PerformanceStage"));
+    ProceduralFace = CreateDefaultSubobject<UGratiaProceduralFace>(TEXT("ProceduralFace"));
     CharacterMesh->SetCollisionEnabled(ECollisionEnabled::PhysicsOnly);
     CharacterMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
     CharacterMesh->SetGenerateOverlapEvents(false);

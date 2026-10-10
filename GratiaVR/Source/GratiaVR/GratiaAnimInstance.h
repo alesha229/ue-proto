@@ -2,6 +2,8 @@
 #include "CoreMinimal.h"
 #include "Animation/AnimSingleNodeInstance.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
+#include "GratiaBodyMotionTypes.h"
+#include "Play/GratiaPlayPose.h"
 #include "GratiaAnimInstance.generated.h"
 
 class AGratiaPreviewCharacter;
@@ -117,6 +119,15 @@ public:
     /** Wall bones moved last evaluation (diagnostics/QA). */
     int32 GetAppliedPenetrationBones() const { return AppliedPenetrationBones; }
     int32 AppliedPenetrationBones = 0;
+    /** Procedural face (UGratiaProceduralFace): bone -> local rotation/scale multiplied onto the evaluated pose
+     *  (head/neck/chest gaze follow, head squash and stretch). Written on the game thread before the update. */
+    TArray<TPair<FName, FTransform>> FaceBoneDeltas;
+    /** The face drives the head/neck/chest follow; the built-in head gaze rotation is skipped. */
+    bool bFaceDrivesHead = false;
+    /** Procedural body (UGratiaBodyMotion): fragments over the idle and additive breathing/sway/tension/lean. */
+    FGratiaBodyMotionFrame BodyMotionFrame;
+    /** Interaction layer (UGratiaPlayBody): limb IK, body pull, ground lift, fabric offsets, anime soft tuning. */
+    FGratiaPlayPoseInput PlayPose;
 protected:
     virtual FAnimInstanceProxy* CreateAnimInstanceProxy() override;
 };

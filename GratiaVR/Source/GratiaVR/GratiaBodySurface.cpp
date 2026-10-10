@@ -160,6 +160,15 @@ bool UGratiaBodySurface::FindOnBone(FName Bone, const FVector& Point, FGratiaSur
         Out.bSlice = !Capsule.Wrap.IsNearlyZero();
         bFound = true;
     }
+    // Soft parts may be zone spheres instead (as in FindNearest).
+    if (Character.IsValid() && UseZoneSpheres())
+        for (const auto& Zone : Character->SoftBodyInteraction->GetZones())
+        {
+            if (Zone.Bone != Bone) continue;
+            Evaluate(Point, Zone.Center, Zone.Center, Zone.Radius, Hit);
+            if (bFound && Hit.Gap >= Out.Gap) continue;
+            Out = Hit; Out.Bone = Bone; Out.bSoftZone = true; bFound = true;
+        }
     return bFound;
 }
 

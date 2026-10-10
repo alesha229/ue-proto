@@ -2,6 +2,9 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
+#include "GratiaFaceSettings.h"
+#include "GratiaBodyMotionTypes.h"
+#include "GratiaCustomizationTypes.h"
 #include "GratiaCharacterProfile.generated.h"
 
 class USkeletalMesh;
@@ -10,6 +13,7 @@ class UAnimInstance;
 class UPhysicsAsset;
 class USoundBase;
 class UMaterialParameterCollection;
+class UGratiaPlaySettings;
 
 UENUM(BlueprintType)
 enum class EGratiaCollisionProxyShape : uint8
@@ -530,6 +534,13 @@ struct GRATIAVR_API FGratiaHandSurfaceSettings
     /** Trigger/grip at which the hand cups a soft part; squeeze depth follows the input above it. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Surface", meta = (ClampMin = "0.01", ClampMax = "1"))
     float CupStartInput = 0.15f;
+    /** A cupping hand keeps cupping down to this input (below CupStartInput, so it never flickers at the threshold). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Surface", meta = (ClampMin = "0", ClampMax = "1"))
+    float CupReleaseInput = 0.07f;
+    /** While held, a cup stays on the part it started on (never moves on to a neighbouring part) as long as the palm is
+     *  within GripReachCm plus this of it. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Surface", meta = (ClampMin = "0", ClampMax = "30", Units = "cm"))
+    float CupHoldMarginCm = 6.0f;
     /** The wrapped hand lets go when the controller moves this far from it. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Surface", meta = (ClampMin = "2", ClampMax = "60", Units = "cm"))
     float GripBreakDistanceCm = 18.0f;
@@ -945,6 +956,15 @@ public:
     float MaxHeadPitchDegrees = 12.0f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gaze", meta = (ClampMin = "0.0"))
     float GazeInterpSpeed = 4.0f;
+    /** Procedural face: eyes, lids, neck follow, elastic expressions, squash/stretch, skin and eye shaders. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Face")
+    FGratiaFaceSettings Face;
+    /** Procedural body: breathing, sway, playhead modulation, tension, dodge/lean, mocap fragments, archetypes (UGratiaBodyMotion). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Body Motion")
+    FGratiaBodyMotionSettings BodyMotion;
+    /** In-scene changes: outfit layers, hairstyles, accessories (UGratiaCustomization). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Customization", meta = (TitleProperty = "Label"))
+    TArray<FGratiaCustomizationSlot> Customization;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Contact")
     TArray<FGratiaContactZoneDefinition> ContactZones;
@@ -990,6 +1010,10 @@ public:
     TArray<FGratiaQualityProfile> QualityProfiles;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Capabilities")
     FGratiaCharacterCapabilities Capabilities;
+    /** Interaction layer (limb grabs, ground IK, garments, arousal stages, haptic layers, breath/foley banks, props).
+     *  Empty: UGratiaPlaySettings defaults. See docs/PLAY_LAYER.md. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Play")
+    TObjectPtr<UGratiaPlaySettings> PlaySettings;
 
     /** Zero disables a model-specific regression assertion. These are never universal model requirements. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Validation", meta = (ClampMin = "0"))

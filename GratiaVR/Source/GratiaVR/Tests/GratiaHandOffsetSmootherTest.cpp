@@ -64,10 +64,18 @@ bool FGratiaHandOffsetSmootherTest::RunTest(const FString& Parameters)
         Shown = Smoother.Update(Target, Popped, Shown, Delta);
         const double FirstMove = Shown.GetLocation().X;
         const double FirstTurn = FMath::RadiansToDegrees(Shown.GetRotation().AngularDistance(Target.GetRotation()));
-        TestTrue(FString::Printf(TEXT("A 4 cm pop moves the hand only partly in one frame (%.2f cm)"), FirstMove), FirstMove > 0.3 && FirstMove < 1.5);
-        TestTrue(FString::Printf(TEXT("A 30 deg pop turns the hand only partly in one frame (%.1f deg)"), FirstTurn), FirstTurn > 2.0 && FirstTurn < 12.0);
-        for (int32 Frame = 0; Frame < 18; ++Frame) Shown = Smoother.Update(Target, Popped, Shown, Delta);
-        TestTrue(TEXT("After 0.2 s the hand has reached the new contact pose"),
+        TestTrue(FString::Printf(TEXT("A 4 cm pop eases in: the first frame moves the hand a little (%.2f cm)"), FirstMove), FirstMove > 0.0 && FirstMove < 0.5);
+        TestTrue(FString::Printf(TEXT("A 30 deg pop eases in: the first frame turns the hand a little (%.1f deg)"), FirstTurn), FirstTurn > 0.0 && FirstTurn < 4.0);
+        // No frame moves the hand by more than a fifth of the jump (no visible snap anywhere along the way).
+        double Largest = FirstMove, Previous = FirstMove;
+        for (int32 Frame = 0; Frame < 35; ++Frame)
+        {
+            Shown = Smoother.Update(Target, Popped, Shown, Delta);
+            Largest = FMath::Max(Largest, Shown.GetLocation().X - Previous);
+            Previous = Shown.GetLocation().X;
+        }
+        TestTrue(FString::Printf(TEXT("The largest step of the eased pop is small (%.2f cm of 4)"), Largest), Largest < 0.8);
+        TestTrue(TEXT("After 0.4 s the hand has reached the new contact pose"),
             FVector::Distance(Shown.GetLocation(), Popped.GetLocation()) < 0.1
             && FMath::RadiansToDegrees(Shown.GetRotation().AngularDistance(Popped.GetRotation())) < 0.5);
         TestTrue(TEXT("Residual has settled"), Smoother.IsSettled());

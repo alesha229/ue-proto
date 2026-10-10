@@ -1,4 +1,5 @@
 #include "GratiaChannelShots.h"
+#include "GratiaMotionProbe.h"
 #include "GratiaCharacterProfile.h"
 #include "GratiaPenetration.h"
 #include "GratiaPenetrator.h"
@@ -12,6 +13,9 @@
 #include "HAL/FileManager.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetSystemLibrary.h"
+#include "Rendering/SkeletalMeshRenderData.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Engine/SkeletalMesh.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
@@ -119,7 +123,9 @@ void UGratiaChannelShots::BuildPlan(int32 Channels)
             default:
                 Add(Case, TEXT("Axis"), EAction::Arrange, ECamera::Axis);
                 Add(Case, TEXT("Side"), EAction::Hold, ECamera::Side);
-                if (Case == CaseFist || Case == CaseXXL) Add(Case, TEXT("Behind"), EAction::Hold, ECamera::Behind);
+                if (Case == CaseEmpty || Case == CaseFist || Case == CaseXXL) Add(Case, TEXT("Behind"), EAction::Hold, ECamera::Behind);
+                // Hands go on with the forearm deep inside: the belly then.
+                if (Case == CaseFist || Case == CaseTwoHands) Add(Case, TEXT("BellyDeep"), EAction::Push, ECamera::Belly);
                 break;
             }
         }
@@ -175,6 +181,7 @@ bool UGratiaChannelShots::Arrange(int32 Channel, int32 Case, bool bSmall)
 double UGratiaChannelShots::TargetDepth(int32 Case, double ChannelDepth) const
 {
     if (bSwapped) return 6.0;
+    if (Plan.IsValidIndex(Step) && Plan[Step].Camera == ECamera::Belly && (Case == CaseFist || Case == CaseTwoHands)) return ChannelDepth * 0.6;
     switch (Case)
     {
     case CaseFist: return 4.0;
@@ -218,6 +225,21 @@ bool UGratiaChannelShots::PollGym()
     CaseFilter = Strings(TEXT("cases"));
     ChannelFilter = Strings(TEXT("channels"));
     TArray<FString> Applied;
+    // Material slots to hide for a look under a layer ("hide": ["Default cloth 2"]); the others show again.
+    if (USkeletalMeshComponent* Mesh = Character ? Character->CharacterMesh.Get() : nullptr)
+    {
+        Mesh->ShowAllMaterialSections(0);
+        const FSkeletalMeshRenderData* Render = Mesh->GetSkeletalMeshAsset() ? Mesh->GetSkeletalMeshAsset()->GetResourceForRendering() : nullptr;
+        for (const FString& Slot : Strings(TEXT("hide")))
+        {
+            const int32 Material = Mesh->GetMaterialIndex(FName(*Slot));
+            if (!Render || Material == INDEX_NONE || Render->LODRenderData.IsEmpty()) { Applied.Add(TEXT("hide ") + Slot + TEXT("?")); continue; }
+            const TArray<FSkelMeshRenderSection>& Sections = Render->LODRenderData[0].RenderSections;
+            for (int32 Section = 0; Section < Sections.Num(); ++Section)
+                if (Sections[Section].MaterialIndex == Material) Mesh->ShowMaterialSection(Material, Section, false, 0);
+            Applied.Add(TEXT("hide ") + Slot);
+        }
+    }
     if (Profile)
     {
         FGratiaPenetrationSettings& Settings = Profile->Penetration;
@@ -337,6 +359,12 @@ void UGratiaChannelShots::TickComponent(float Delta, ELevelTick Type, FActorComp
     // First frame of a shot: its action.
     if (Seconds <= Delta + UE_SMALL_NUMBER)
     {
+        if (UGratiaMotionProbe* Probe = GetOwner()->FindComponentByClass<UGratiaMotionProbe>())
+        {
+            Probe->SetContext(FString::Printf(TEXT("%s_%s_%s"), *Name.ToString(), *CaseName(Shot.Case), *Shot.Label));
+            // A new case starts from a closed channel and new shafts: an intended jump.
+            if (Shot.Action == EAction::Arrange || Shot.Action == EAction::ArrangeHeld || Shot.Action == EAction::Swap) Probe->Skip();
+        }
         switch (Shot.Action)
         {
         case EAction::Arrange: case EAction::ArrangeHeld:

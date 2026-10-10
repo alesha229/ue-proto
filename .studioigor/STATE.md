@@ -1,7 +1,7 @@
 # GratiaVR
 
 PROJECT: GratiaVR
-PHASE: 9 — Polish and release candidate
+PHASE: 9 — Polish
 UPDATED: 2026-10-06
 
 ## Now

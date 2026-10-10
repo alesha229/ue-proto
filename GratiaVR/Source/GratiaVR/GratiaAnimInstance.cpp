@@ -177,6 +177,11 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
     int32* ActiveSpringsOut = nullptr;
     TArray<TPair<FName, FVector>> PenetrationOffsets;
     int32* AppliedPenetrationOut = nullptr;
+    TArray<TPair<FName, FTransform>> FaceBoneDeltas;
+    bool bFaceDrivesHead = false;
+    FGratiaBodyMotionFrame BodyMotion;
+    FGratiaPlayPoseInput PlayPose;
+    GratiaPlayPose::FSoftTuner PlayTuner;
 
     FGratiaKawaiiChain& AddKawaiiChain(const FReferenceSkeleton& Ref, const TArray<FName>& Roots, EGratiaBoneAxis Axis, float DummyCm,
         float Damping, float Stiffness, float WorldLocation, float WorldRotation, float Radius, float LimitAngle, float GravityScale)
@@ -194,8 +199,14 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
         }
         Node.DummyBoneLength = DummyCm;
         Node.BoneForwardAxis = ToKawaiiAxis(Axis);
-        Node.PhysicsSettings.Damping = Damping;
-        Node.PhysicsSettings.Stiffness = Stiffness;
+        // Kawaii steps at a fixed 1/TargetFramerate without interpolating its output, so at 90 FPS a frame got 0 or 2
+        // steps (stutter). Four steps per 90 Hz frame with the per-step damping/stiffness converted keep the authored
+        // (90 Hz) feel and quarter the step-aliasing.
+        constexpr int32 StepsPer90Hz = 4;
+        Node.PhysicsSettings.Damping = 1.0f - FMath::Pow(1.0f - FMath::Clamp(Damping, 0.0f, 1.0f), 1.0f / StepsPer90Hz);
+        Node.PhysicsSettings.Stiffness = 1.0f - FMath::Pow(1.0f - FMath::Clamp(Stiffness, 0.0f, 1.0f), 1.0f / StepsPer90Hz);
+        // Placing the character in a scene moved it 30-140 cm in one frame and swung the hair up to 60 cm.
+        Node.TeleportDistanceThreshold = 15.0f;
         Node.PhysicsSettings.WorldDampingLocation = WorldLocation;
         Node.PhysicsSettings.WorldDampingRotation = WorldRotation;
         Node.PhysicsSettings.Radius = Radius;
@@ -208,7 +219,7 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
         Chain.GravityCmPerSecond2 = 980.0f * GravityScale;
         Chain.GravityParent = Ref.GetParentIndex(Ref.FindBoneIndex(Roots[0]));
         if (Chain.GravityParent != INDEX_NONE) Chain.GravityParentRef = GratiaKawaiiRefTransform(Ref, Chain.GravityParent).GetRotation();
-        Node.TargetFramerate = 90;
+        Node.TargetFramerate = 90 * StepsPer90Hz;
         Node.bUpdatePhysicsSettingsInGame = true;
         return Chain;
     }
@@ -483,6 +494,24 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
         }
     }
 
+    /** Procedural face: local rotation and scale per bone on top of the evaluated pose (any pose mode). */
+    void EvaluateFace(FPoseContext& Output)
+    {
+        if (FaceBoneDeltas.IsEmpty()) return;
+        const FBoneContainer& Bones = Output.Pose.GetBoneContainer();
+        for (const TPair<FName, FTransform>& Delta : FaceBoneDeltas)
+        {
+            if (Delta.Value.ContainsNaN()) continue;
+            const int32 MeshIndex = Bones.GetPoseBoneIndexForBoneName(Delta.Key);
+            if (MeshIndex == INDEX_NONE) continue;
+            const FCompactPoseBoneIndex Index = Bones.MakeCompactPoseIndex(FMeshPoseBoneIndex(MeshIndex));
+            if (Index.GetInt() == INDEX_NONE) continue;
+            FTransform& Transform = Output.Pose[Index];
+            Transform.SetRotation((Transform.GetRotation() * Delta.Value.GetRotation()).GetNormalized());
+            Transform.SetScale3D(Transform.GetScale3D() * Delta.Value.GetScale3D());
+        }
+    }
+
     /** Channel walls: each listed bone moves by its component-space offset from the evaluated pose;
      *  children that are not listed follow their parent. */
     void EvaluatePenetration(FPoseContext& Output)
@@ -519,6 +548,11 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
         ActiveSpringsOut = Instance->ActiveSpringChains;
         AppliedPenetrationOut = &Instance->AppliedPenetrationBones;
         PenetrationOffsets = Instance->PenetrationOffsets;
+        FaceBoneDeltas = Instance->FaceBoneDeltas; bFaceDrivesHead = Instance->bFaceDrivesHead;
+        BodyMotion = Instance->BodyMotionFrame;
+        PlayPose = Instance->PlayPose;
+        for (FGratiaKawaiiChain& Chain : Kawaii)
+            if (Chain.Node) PlayTuner.Apply(*Chain.Node, Chain.bSpring ? Chain.Group : 0, PlayPose.Soft);
         const AGratiaPreviewCharacter* Character = Cast<AGratiaPreviewCharacter>(Instance->GetOwningActor());
         UGratiaCharacterProfile* Profile = Character ? Character->CharacterProfile.Get() : nullptr;
         USkeletalMesh* Mesh = GetSkelMeshComponent() ? GetSkelMeshComponent()->GetSkeletalMeshAsset() : nullptr;
@@ -622,7 +656,11 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
     virtual bool Evaluate(FPoseContext& Output) override
     {
         const bool Result = EvaluateProcedural(Output);
+        if (Result) GratiaBodyMotionPose::ApplyBones(Output, BodyMotion);
+        if (Result) EvaluateFace(Output);
+        if (Result) GratiaPlayPose::ApplyBody(Output, PlayPose);
         if (Result) EvaluateSoftBody(Output);
+        if (Result) GratiaPlayPose::ApplyLate(Output, PlayPose);
         if (Result) EvaluatePenetration(Output);
         return Result;
     }
@@ -631,6 +669,7 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
     {
         const bool Result = FAnimSingleNodeInstanceProxy::Evaluate(Output);
         if (!Result || !bEnabled) return Result;
+        GratiaBodyMotionPose::BlendFragments(Output, BodyMotion);
         if (Cue && CueTime < Cue->GetPlayLength())
         {
             FPoseContext CuePose(Output);
@@ -654,7 +693,7 @@ struct FGratiaAnimProxy : public FAnimSingleNodeInstanceProxy
             Transform.SetRotation((Transform.GetRotation() * Rotation).GetNormalized());
         };
         // Derive local axes from the imported rest frame: FBX bone Z is not world up.
-        if (!HeadBone.IsNone()) Rotate(HeadBone, FQuat(HeadYawAxis, FMath::DegreesToRadians(Yaw)) * FQuat(HeadNodAxis, FMath::DegreesToRadians(Pitch)));
+        if (!HeadBone.IsNone() && !bFaceDrivesHead) Rotate(HeadBone, FQuat(HeadYawAxis, FMath::DegreesToRadians(Yaw)) * FQuat(HeadNodAxis, FMath::DegreesToRadians(Pitch)));
         for (const FGratiaSpringBone& Bone : Springs) Rotate(Bone.Name, FQuat(Bone.Settings.SpringLocalAxis.GetSafeNormal(), FMath::DegreesToRadians(Bone.Angle)));
         return Result;
     }

@@ -187,15 +187,18 @@ float UGratiaHandAnimInstance::CapFinger(int32 Finger, const FTransform& Compone
 {
     if (!bConform || (ConformSpheres.IsEmpty() && ConformCapsules.IsEmpty()) || !bSamplesReady.load()) return 1.0f;
     const float Clearance = FingerRadiusCm + ConformMarginCm;
-    // Deepest overlap of the moving joints and tip with any contact shape at curl sample K.
+    // Deepest overlap of the moving joints and tip with any contact shape at curl S (between the samples: the joints
+    // move linearly from one to the next, as GetFingerPoints shows them).
     // The knuckle (P = 0) does not move with the curl; a palm resting on the body must not
     // block the fingers from wrapping, so it is not tested.
-    auto Overlap = [&](int32 K)
+    auto Overlap = [&](float S)
     {
+        const int32 K = FMath::Clamp(FMath::FloorToInt(S), 0, NumSamples - 1);
+        const float T = FMath::Clamp(S - K, 0.0f, 1.0f);
         double Deepest = -1.0e9;
         for (int32 P = 1; P < PointsPerFinger; ++P)
         {
-            const FVector Point = Component.TransformPosition(Samples[Finger][K][P]);
+            const FVector Point = Component.TransformPosition(FMath::Lerp(Samples[Finger][K][P], Samples[Finger][K + 1][P], T));
             for (const FVector4& Sphere : ConformSpheres)
                 Deepest = FMath::Max(Deepest, Sphere.W + Clearance - FVector::Distance(Point, FVector(Sphere.X, Sphere.Y, Sphere.Z)));
             for (const FGratiaConformCapsule& Capsule : ConformCapsules)
@@ -203,21 +206,31 @@ float UGratiaHandAnimInstance::CapFinger(int32 Finger, const FTransform& Compone
         }
         return Deepest;
     };
-    auto Touches = [&](int32 K) { return Overlap(K) > 0.0; };
-    if (Touches(0))
+    if (Overlap(0.0f) > 0.0)
     {
         // Already in contact when open (tight spot): take the least overlapping curl.
         int32 Best = 0;
-        double Least = Overlap(0);
+        double Least = Overlap(0.0f);
         for (int32 K = 1; K <= NumSamples; ++K)
         {
-            const double Value = Overlap(K);
+            const double Value = Overlap(float(K));
             if (Value < Least) { Least = Value; Best = K; }
         }
-        return CurlAt(Finger, Best);
+        return CurlAt(Finger, float(Best));
     }
+    // The first sample that touches, then the exact curl between it and the one before (no steps as the hand slides
+    // over a surface).
     for (int32 K = 1; K <= NumSamples; ++K)
-        if (Touches(K)) return CurlAt(Finger, K - 1);
+    {
+        if (Overlap(float(K)) <= 0.0) continue;
+        float Free = float(K - 1), Touch = float(K);
+        for (int32 Iteration = 0; Iteration < 6; ++Iteration)
+        {
+            const float Middle = 0.5f * (Free + Touch);
+            (Overlap(Middle) > 0.0 ? Touch : Free) = Middle;
+        }
+        return CurlAt(Finger, Free);
+    }
     return 1.0f;
 }
 
@@ -226,15 +239,26 @@ void UGratiaHandAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
     Super::NativeUpdateAnimation(DeltaSeconds);
     const USkeletalMeshComponent* Mesh = GetSkelMeshComponent();
     const float Dt = FMath::IsFinite(DeltaSeconds) ? FMath::Clamp(DeltaSeconds, 0.0f, 0.1f) : 0.0f;
+    const int32 Steps = FMath::Max(1, FMath::CeilToInt(Dt * 240.0f));
+    const float H = Dt / Steps;
     for (int32 F = 0; F < NumFingers; ++F)
     {
         FingerCap[F] = Mesh ? CapFinger(F, Mesh->GetComponentTransform()) : 1.0f;
+        // The cap drops within a couple of frames (a surface came close) and rises gently (it went away).
+        const float CapTime = FingerCap[F] < FingerCapShown[F] ? 0.02f : 0.08f;
+        FingerCapShown[F] = FMath::Lerp(FingerCapShown[F], FingerCap[F], 1.0f - FMath::Exp(-Dt / CapTime));
         const float Input = FMath::IsFinite(FingerInput[F]) ? FMath::Clamp(FingerInput[F], 0.0f, 1.0f) : 0.0f;
-        const float Target = FMath::Min(Input, FingerCap[F]);
-        // Close quickly but never through a surface; open a little slower for a soft release.
-        const float Speed = Target > FingerAlpha[F] ? 14.0f : 9.0f;
-        FingerAlpha[F] = FMath::FInterpTo(FingerAlpha[F], Target, Dt, Speed);
-        if (FingerAlpha[F] > FingerCap[F]) FingerAlpha[F] = FingerCap[F];
+        const float Target = FMath::Min(Input, FingerCapShown[F]);
+        // A critically damped spring: every change of grip, trigger or contact starts and ends softly (about 0.15 s to
+        // close, 0.2 s to open) instead of jumping; never through a surface.
+        const float Omega = Target > FingerAlpha[F] ? 30.0f : 22.0f;
+        for (int32 I = 0; I < Steps && Dt > 0.0f; ++I)
+        {
+            FingerVelocity[F] += (Omega * Omega * (Target - FingerAlpha[F]) - 2.0f * Omega * FingerVelocity[F]) * H;
+            FingerAlpha[F] += FingerVelocity[F] * H;
+        }
+        if (FingerAlpha[F] > FingerCapShown[F]) { FingerAlpha[F] = FingerCapShown[F]; FingerVelocity[F] = FMath::Min(FingerVelocity[F], 0.0f); }
+        if (!FMath::IsFinite(FingerAlpha[F]) || !FMath::IsFinite(FingerVelocity[F])) { FingerAlpha[F] = Target; FingerVelocity[F] = 0.0f; }
     }
 }
 

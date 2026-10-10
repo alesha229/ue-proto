@@ -20,6 +20,8 @@
 #include "GratiaPenetration.h"
 #include "GratiaPenetrator.h"
 #include "GratiaChannelShots.h"
+#include "GratiaMotionProbe.h"
+#include "Play/GratiaHapticLayers.h"
 
 #include "Camera/CameraComponent.h"
 #include "Components/PrimitiveComponent.h"
@@ -116,6 +118,12 @@ void AGratiaStage1Runtime::BeginPlay()
         UGratiaChannelShots* Shots = NewObject<UGratiaChannelShots>(this, TEXT("GratiaChannelShots"));
         AddInstanceComponent(Shots);
         Shots->RegisterComponent();
+    }
+    if (FParse::Param(FCommandLine::Get(), TEXT("GratiaMotionProbe")))
+    {
+        UGratiaMotionProbe* Probe = NewObject<UGratiaMotionProbe>(this, TEXT("GratiaMotionProbe"));
+        AddInstanceComponent(Probe);
+        Probe->RegisterComponent();
     }
     UE_LOG(LogGratiaStage1, Display, TEXT("BUILD id=%s commit=%s"), TEXT(GRATIA_BUILD_ID), TEXT(GRATIA_BUILD_COMMIT));
     UE_LOG(LogGratiaStage1, Display, TEXT("Stage 1 runtime started. R=recenter, PgUp/PgDn=height, Home=reset height, F1=debug, F6=primitive on/off, F7=primitive size, F5=primitive form, F8/F9=toggle forced left/right tracking loss."));
@@ -1060,8 +1068,12 @@ FTransform AGratiaStage1Runtime::ApplyBodySurface(FHandProxy& Hand, bool bLeft, 
     // fingers sink deeper the harder the trigger is pressed. The hand follows the controller and
     // the soft part follows the hand (soft-body grab), so it is not pinned to the bone.
     const float Squeeze = FMath::Max(Grip, HandInput ? HandInput->GetTrigger(bLeft) : 0.0f);
-    if (Squeeze >= Settings.CupStartInput
-        && Surface->FindNearest(PalmPoint, Settings.GripReachCm + Settings.PalmThicknessCm, Hit, true) && Hit.bSoftZone)
+    // A held cup stays on its part (it never jumps to a neighbouring one) until the squeeze is released or the hand is
+    // pulled well away; a new cup takes the nearest soft part.
+    const bool bCup = !WasCupping.IsNone() && Squeeze >= FMath::Min(Settings.CupReleaseInput, Settings.CupStartInput)
+        ? Surface->FindOnBone(WasCupping, PalmPoint, Hit) && Hit.Gap <= Settings.GripReachCm + Settings.PalmThicknessCm + Settings.CupHoldMarginCm
+        : Squeeze >= Settings.CupStartInput && Surface->FindNearest(PalmPoint, Settings.GripReachCm + Settings.PalmThicknessCm, Hit, true) && Hit.bSoftZone;
+    if (bCup)
     {
         TArray<FVector4> NearSpheres;
         TArray<FGratiaConformCapsule> NearCapsules;
@@ -1115,6 +1127,8 @@ void AGratiaStage1Runtime::UpdateHaptics(FHandProxy& Hand, bool bLeft, float Amp
 {
     APlayerController* PC = PlayerController.Get();
     if (!PC) return;
+    // Interaction layer: skin slide, elastic press, heartbeat, toys, garment clicks.
+    if (const UGratiaHapticLayers* Layers = FindComponentByClass<UGratiaHapticLayers>()) Layers->Blend(bLeft, Amplitude, Frequency);
     if (!bXRActive || !Hand.Gate.CanInteract() || !IsSceneInteractionAllowed()) Amplitude = 0.0f;
     const auto* Settings = SceneDirector ? SceneDirector->GetUserSettings() : nullptr;
     Amplitude *= Settings ? Settings->HapticsScale : 1.0f;
