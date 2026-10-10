@@ -17,6 +17,8 @@
 #include "Sound/SoundAttenuation.h"
 #include "Sound/SoundWaveProcedural.h"
 #include "CollisionQueryParams.h"
+#include "DrawDebugHelpers.h"
+#include "Misc/CommandLine.h"
 #include "Engine/SkeletalMesh.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -298,19 +300,21 @@ FVector UGratiaReactionPresentation::GetMouthLocation() const
     {
         Self->MouthProfile = const_cast<UGratiaCharacterProfile*>(Profile);
         Self->MouthHead = Profile->ResolveBone(TEXT("Head"));
-        const FReferenceSkeleton& Ref = Mesh->GetSkeletalMeshAsset()->GetRefSkeleton();
-        const int32 Head = Ref.FindBoneIndex(Self->MouthHead);
-        FQuat HeadRef = FQuat::Identity;
-        for (int32 Bone = Head; Bone != INDEX_NONE; Bone = Ref.GetParentIndex(Bone)) HeadRef = Ref.GetRefBonePose()[Bone].GetRotation() * HeadRef;
-        // Character frame (actor-local forward/up) -> component -> head bone (rotation only: imported bones carry a scale).
+        // The offset is given in the character's frame (actor-local forward/up). The animated head is not at the
+        // skeleton's reference rotation (imported bones), so it is taken into the head's frame from the live head once,
+        // in the pose the profile starts in (idle, head ahead); from then on it turns and moves with the head.
         const FVector Forward = Profile->ForwardAxis.GetSafeNormal(), Up = Profile->UpAxis.GetSafeNormal();
         const FVector Right = FVector::CrossProduct(Up, Forward).GetSafeNormal();
         const FVector InActor = Forward * Profile->VoiceMouthOffsetCm.X + Right * Profile->VoiceMouthOffsetCm.Y + Up * Profile->VoiceMouthOffsetCm.Z;
-        const FVector InComponent = Mesh->GetRelativeRotation().Quaternion().UnrotateVector(InActor);
-        Self->MouthInHead = Head == INDEX_NONE ? InComponent : HeadRef.UnrotateVector(InComponent);
-        if (Head == INDEX_NONE) Self->MouthHead = NAME_None;
+        const FVector InWorld = Owner->GetActorQuat().RotateVector(InActor);
+        if (Mesh->GetBoneIndex(Self->MouthHead) == INDEX_NONE)
+        {
+            Self->MouthHead = NAME_None;
+            Self->MouthInHead = Mesh->GetComponentQuat().UnrotateVector(InWorld) / Mesh->GetComponentScale().GetAbsMax();
+        }
+        else Self->MouthInHead = Mesh->GetSocketQuaternion(Self->MouthHead).UnrotateVector(InWorld) / Mesh->GetComponentScale().GetAbsMax();
     }
-    if (MouthHead.IsNone()) return Mesh->GetComponentTransform().TransformPosition(MouthInHead);
+    if (MouthHead.IsNone()) return Mesh->GetComponentLocation() + Mesh->GetComponentQuat().RotateVector(MouthInHead) * Mesh->GetComponentScale().GetAbsMax();
     const FTransform Head = Mesh->GetSocketTransform(MouthHead, RTS_World);
     return Head.GetLocation() + Head.GetRotation().RotateVector(MouthInHead) * Mesh->GetComponentScale().GetAbsMax();
 }
@@ -387,6 +391,9 @@ void UGratiaReactionPresentation::TickComponent(float DeltaSeconds, ELevelTick T
     if (!bPresentSound || !Source->bSound || !Profile->Capabilities.bSound) StopSound();
     if (!FMath::IsFinite(DeltaSeconds) || DeltaSeconds <= 0.0f) return;
     UpdateVoice(DeltaSeconds);
+    // Desktop check of where the voice comes from (-GratiaMouthMarker): a small red ball at the mouth.
+    static const bool bMouthMarker = FParse::Param(FCommandLine::Get(), TEXT("GratiaMouthMarker"));
+    if (bMouthMarker) DrawDebugSphere(GetWorld(), GetMouthLocation(), 0.6f, 8, FColor::Red, false, -1.0f, SDPG_Foreground);
     CaptionSeconds = FMath::Max(0.0f, CaptionSeconds - FMath::Min(DeltaSeconds, 0.05f));
     CaptionAge += FMath::Min(DeltaSeconds, 0.05f);
     if (CaptionSeconds <= 0.0f) CaptionText = FText::GetEmpty();

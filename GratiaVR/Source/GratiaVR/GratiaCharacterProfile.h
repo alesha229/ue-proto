@@ -943,7 +943,7 @@ public:
     /** Where the voice comes from: this far from the Head semantic bone in the character's frame at the reference pose
      *  (X forward, Y right, Z up, cm); it turns and moves with the head. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Presentation|Sound", meta = (Units = "cm"))
-    FVector VoiceMouthOffsetCm = FVector(9.0, 0.0, 4.0);
+    FVector VoiceMouthOffsetCm = FVector(9.0, 0.0, 1.3);
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mapping")
     TMap<FName, FName> SemanticBones;
